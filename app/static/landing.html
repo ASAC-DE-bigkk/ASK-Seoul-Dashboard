@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ASK SEOUL — Seoul Open-Data Lakehouse</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<style>
+  :root {
+    --bg: #0b1220; --bg-2: #0e1729; --panel: #111c31; --panel-line: #1e2c4a;
+    --ink: #eef2f9; --ink-2: #9fadc6; --ink-3: #5d6b84;
+    --accent: #4a90e2; --accent-deep: #2a78d6; --good: #35c06a;
+    --mono: "Cascadia Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { font-size: 15px; scroll-behavior: smooth; }
+  body { font-family: "Pretendard Variable", Pretendard, "Segoe UI", "Malgun Gothic", system-ui, sans-serif;
+         background: var(--bg); color: var(--ink); line-height: 1.6;
+         -webkit-font-smoothing: antialiased; font-feature-settings: "tnum"; }
+  .num { font-variant-numeric: tabular-nums; }
+  a { color: inherit; }
+
+  .nav { max-width: 1080px; margin: 0 auto; padding: 22px 28px; display: flex; align-items: center; gap: 12px; }
+  .nav .mark { width: 28px; height: 28px; border-radius: 8px;
+               background: linear-gradient(135deg, #2a78d6, #143b78);
+               display: grid; place-items: center; color: #fff; font-weight: 800; font-size: 11.5px; }
+  .nav b { font-size: 14px; letter-spacing: .02em; }
+  .nav .links { margin-left: auto; display: flex; gap: 22px; font-size: 13px; color: var(--ink-2); }
+  .nav .links a { text-decoration: none; }
+  .nav .links a:hover { color: var(--ink); }
+
+  .hero { max-width: 1080px; margin: 0 auto; padding: 72px 28px 56px; position: relative; }
+  .hero::before { content: ''; position: absolute; top: -140px; left: 50%; transform: translateX(-50%);
+                  width: 780px; height: 480px; pointer-events: none;
+                  background: radial-gradient(ellipse at center, rgba(42,120,214,.16), transparent 65%); }
+  .eyebrow { font-size: 11.5px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase;
+             color: var(--accent); margin-bottom: 18px; }
+  h1 { font-size: clamp(30px, 4.6vw, 46px); font-weight: 800; letter-spacing: -0.025em;
+       line-height: 1.22; text-wrap: balance; max-width: 640px; }
+  h1 .dim { color: var(--ink-3); }
+  .sub { font-size: 15.5px; color: var(--ink-2); max-width: 560px; margin-top: 18px; text-wrap: pretty; }
+  .cta-row { display: flex; gap: 12px; margin-top: 32px; flex-wrap: wrap; }
+  .cta { display: inline-flex; align-items: center; gap: 8px; text-decoration: none;
+         font-size: 14px; font-weight: 700; border-radius: 10px; padding: 12px 22px;
+         transition: transform .13s ease, box-shadow .13s ease; }
+  .cta.primary { background: var(--accent-deep); color: #fff;
+                 box-shadow: 0 4px 18px rgba(42,120,214,.35); }
+  .cta.primary:hover { transform: translateY(-2px); box-shadow: 0 8px 26px rgba(42,120,214,.45); }
+  .cta.ghost { border: 1px solid var(--panel-line); color: var(--ink-2); background: rgba(255,255,255,.02); }
+  .cta.ghost:hover { color: var(--ink); border-color: #2c3e63; }
+
+  .live { max-width: 1080px; margin: 0 auto; padding: 0 28px; }
+  .live .band { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px;
+                background: var(--panel-line); border: 1px solid var(--panel-line);
+                border-radius: 14px; overflow: hidden; }
+  .live .cell { background: var(--panel); padding: 18px 22px 16px; }
+  .live .label { font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); }
+  .live .value { font-size: 26px; font-weight: 750; letter-spacing: -0.01em; margin-top: 4px; }
+  .live .value .unit { font-size: 13px; color: var(--ink-3); font-weight: 600; margin-left: 3px; }
+  .live .sub { font-size: 11.5px; color: var(--ink-3); margin-top: 2px; }
+  .live .note { text-align: center; font-size: 11px; color: var(--ink-3); margin-top: 10px; }
+  .live .note .pulse { display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+                       background: var(--good); margin-right: 6px; vertical-align: 1px; }
+  @media (max-width: 860px) { .live .band { grid-template-columns: repeat(2, 1fr) } }
+
+  .features { max-width: 1080px; margin: 0 auto; padding: 64px 28px 8px; }
+  .features h2, .apis h2 { font-size: 12px; font-weight: 700; letter-spacing: .14em;
+                           text-transform: uppercase; color: var(--ink-3); margin-bottom: 22px; }
+  .fgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+  .fcard { background: var(--panel); border: 1px solid var(--panel-line); border-radius: 13px; padding: 22px; }
+  .fcard .ic { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center;
+               background: rgba(74,144,226,.12); color: var(--accent); margin-bottom: 14px; }
+  .fcard .ic svg { width: 17px; height: 17px; }
+  .fcard b { font-size: 14.5px; font-weight: 700; display: block; margin-bottom: 6px; letter-spacing: -0.01em; }
+  .fcard p { font-size: 12.5px; color: var(--ink-2); line-height: 1.65; }
+  .fcard code { font-family: var(--mono); font-size: 11px; color: var(--accent); }
+
+  .apis { max-width: 1080px; margin: 0 auto; padding: 56px 28px 24px; }
+  .apis .split { display: grid; grid-template-columns: 1fr 1.2fr; gap: 28px; align-items: center; }
+  @media (max-width: 860px) { .apis .split { grid-template-columns: 1fr } }
+  .apis h3 { font-size: 22px; font-weight: 750; letter-spacing: -0.02em; line-height: 1.3; }
+  .apis .d { font-size: 13.5px; color: var(--ink-2); margin-top: 12px; }
+  .apis .d code { font-family: var(--mono); font-size: 12px; color: var(--ink); background: var(--panel);
+                  border: 1px solid var(--panel-line); border-radius: 5px; padding: 1px 7px; }
+  .term { background: #0a101d; border: 1px solid var(--panel-line); border-radius: 13px; overflow: hidden;
+          box-shadow: 0 20px 60px rgba(0,0,0,.4); }
+  .term .bar { display: flex; align-items: center; gap: 6px; padding: 10px 14px;
+               border-bottom: 1px solid var(--panel-line); }
+  .term .bar i { width: 10px; height: 10px; border-radius: 50%; }
+  .term .bar i:nth-child(1) { background: #3a4a6b; } .term .bar i:nth-child(2) { background: #2c3e63; }
+  .term .bar i:nth-child(3) { background: #22314f; }
+  .term .bar span { margin-left: 8px; font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); }
+  .term pre { padding: 16px 18px; font-family: var(--mono); font-size: 11.8px; line-height: 1.75;
+              color: #c6d3ea; overflow-x: auto; }
+  .term .c-cmd { color: #eef2f9; } .term .c-dim { color: #5d6b84; }
+  .term .c-key { color: #7fb3ec; } .term .c-str { color: #8fd9a8; } .term .c-num { color: #ecc07f; }
+
+  .foot { max-width: 1080px; margin: 0 auto; padding: 48px 28px 40px; border-top: 1px solid var(--panel-line);
+          margin-top: 48px; display: flex; align-items: center; gap: 16px;
+          font-size: 12px; color: var(--ink-3); flex-wrap: wrap; }
+  .foot .r { margin-left: auto; display: flex; gap: 18px; }
+  .foot a { text-decoration: none; }
+  .foot a:hover { color: var(--ink-2); }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .rise { opacity: 0; transform: translateY(14px); animation: rise .6s ease forwards; }
+    .rise.d1 { animation-delay: .08s } .rise.d2 { animation-delay: .16s } .rise.d3 { animation-delay: .24s }
+    @keyframes rise { to { opacity: 1; transform: none } }
+  }
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="mark">AS</div><b>ASK SEOUL</b>
+  <div class="links">
+    <a href="/catalog">Marketplace</a>
+    <a href="/docs" target="_blank">API Docs</a>
+    <a href="/health" target="_blank">Status</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="eyebrow rise">Seoul Open-Data Lakehouse · Data Marketplace</div>
+  <h1 class="rise d1">서울 오픈데이터를<br>신뢰할 수 있는 <span class="dim">데이터 상품</span>으로</h1>
+  <p class="sub rise d2">흩어진 공공 API를 수집·정제해 스키마 계약, 행 단위 품질 지표,
+     원천까지의 계보를 붙인 gold 데이터셋으로 제공합니다.
+     탐색은 마켓플레이스에서, 소비는 조회 전용 REST API로.</p>
+  <div class="cta-row rise d3">
+    <a class="cta primary" href="/catalog">마켓플레이스 열기
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12h14m-6-6l6 6-6 6"/></svg></a>
+    <a class="cta ghost" href="/docs" target="_blank">API 문서 보기</a>
+  </div>
+</header>
+
+<section class="live rise d3">
+  <div class="band" id="band">
+    <div class="cell"><div class="label">Published Datasets</div><div class="value num" id="v-ds">—</div><div class="sub">culture gold layer</div></div>
+    <div class="cell"><div class="label">Total Rows</div><div class="value num" id="v-rows">—</div><div class="sub">Trino 실측</div></div>
+    <div class="cell"><div class="label">Contract Coverage</div><div class="value num" id="v-ct">—</div><div class="sub">dbt contract enforced</div></div>
+    <div class="cell"><div class="label">Spatial Precision</div><div class="value num" id="v-q">—</div><div class="sub">행정동 정밀 매칭</div></div>
+  </div>
+  <div class="note"><span class="pulse"></span><span id="live-note">카탈로그 API에서 방금 조회한 값</span></div>
+</section>
+
+<section class="features">
+  <h2>Why it's different</h2>
+  <div class="fgrid">
+    <div class="fcard">
+      <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l7 3v6c0 4.4-3 7.4-7 9-4-1.6-7-4.6-7-9V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg></div>
+      <b>Contract enforced</b>
+      <p>모든 published 테이블은 컬럼·타입 계약을 선언하고, dbt가 빌드 단계에서 강제합니다. 상류가 바뀌어도 조용히 깨지지 않습니다.</p>
+    </div>
+    <div class="fcard">
+      <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg></div>
+      <b>Quality by row</b>
+      <p>행 단위 <code>quality_status</code>로 공간 매칭 정밀도를 투명하게 공개합니다. 쓸지 말지는 지표를 보고 소비자가 판단합니다.</p>
+    </div>
+    <div class="fcard">
+      <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="6" r="2.2"/><circle cx="19" cy="6" r="2.2"/><circle cx="12" cy="18" r="2.2"/><path d="M6.5 7.5L11 16m6.5-8.5L13 16"/></svg></div>
+      <b>Full lineage</b>
+      <p>원천 API 응답(raw)부터 bronze·silver를 거쳐 gold까지, 모든 데이터셋의 상류 계보를 카탈로그에서 바로 추적합니다.</p>
+    </div>
+    <div class="fcard">
+      <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 9l-4 3 4 3m8-6l4 3-4 3m-3-9l-2 12"/></svg></div>
+      <b>API-first</b>
+      <p>탐색 화면이 쓰는 것과 동일한 조회 전용 REST API를 그대로 제공합니다. OpenAPI 문서와 스키마 계약 포함.</p>
+    </div>
+  </div>
+</section>
+
+<section class="apis">
+  <div class="split">
+    <div>
+      <h3>화면이 아니라<br>API가 제품입니다</h3>
+      <p class="d">마켓플레이스의 모든 정보 — 목록·스키마·품질·계보·샘플 — 는
+         <code>GET /api/v1/catalog/…</code> 엔드포인트의 응답을 그대로 그린 것입니다.
+         대시보드, Q&amp;A 봇, 노트북 어디서든 같은 API를 소비하면 됩니다.</p>
+    </div>
+    <div class="term">
+      <div class="bar"><i></i><i></i><i></i><span>terminal</span></div>
+      <pre><span class="c-dim">$</span> <span class="c-cmd">curl -s localhost:8765/api/v1/catalog/tables/gold_culture_sports_schedule/quality</span>
+{
+  <span class="c-key">"name"</span>: <span class="c-str">"gold_culture_sports_schedule"</span>,
+  <span class="c-key">"quality"</span>: [{
+    <span class="c-key">"table"</span>: <span class="c-str">"silver_culture_sports_event"</span>,
+    <span class="c-key">"distribution"</span>: { <span class="c-key">"dong_precise"</span>: <span class="c-num">67</span> }
+  }]
+}</pre>
+    </div>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>ASK SEOUL · ASAC-DE 2기 — 서울 오픈데이터 레이크하우스</span>
+  <span>dbt · Trino · Iceberg · Airflow · R2</span>
+  <div class="r">
+    <a href="/catalog">Marketplace</a>
+    <a href="/docs" target="_blank">API Docs</a>
+  </div>
+</footer>
+
+<script>
+const fmt = n => n.toLocaleString('ko-KR');
+(async () => {
+  try {
+    const cat = await (await fetch('/api/v1/catalog/tables')).json();
+    const ts = cat.tables;
+    document.getElementById('v-ds').textContent = ts.length;
+    document.getElementById('v-rows').textContent = fmt(ts.reduce((a, t) => a + t.row_count, 0));
+    document.getElementById('v-ct').innerHTML =
+      `${Math.round(ts.filter(t => t.contract_enforced).length / ts.length * 100)}<span class="unit">%</span>`;
+    const all = await Promise.all(ts.map(t => fetch(`/api/v1/catalog/tables/${t.name}`).then(r => r.json())));
+    let tot = 0, prec = 0; const seen = new Set();
+    all.forEach(d => d.quality.forEach(q => {
+      if (seen.has(q.table)) return; seen.add(q.table);
+      Object.entries(q.distribution).forEach(([k, v]) => { tot += v; if (k === 'dong_precise') prec += v; });
+    }));
+    document.getElementById('v-q').innerHTML =
+      `${(prec / tot * 100).toFixed(1)}<span class="unit">%</span>`;
+    const m = Math.round((Date.now() - new Date(cat.generated_at)) / 60000);
+    document.getElementById('live-note').textContent =
+      `카탈로그 API 라이브 응답 · 스냅샷 ${m < 60 ? m + '분' : Math.round(m/60) + '시간'} 전 생성`;
+  } catch (e) {
+    document.getElementById('live-note').textContent = 'API 연결 실패 — 서버 상태를 확인하세요';
+  }
+})();
+</script>
+</body>
+</html>

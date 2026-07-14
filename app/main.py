@@ -114,7 +114,12 @@ def table_sample(name: str):
 
 
 @app.get("/", include_in_schema=False)
-def index() -> FileResponse:
+def landing() -> FileResponse:
+    return FileResponse(HERE / "static" / "landing.html")
+
+
+@app.get("/catalog", include_in_schema=False)
+def catalog_page() -> FileResponse:
     return FileResponse(HERE / "static" / "index.html")
 
 
