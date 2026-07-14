@@ -1,0 +1,1051 @@
+{
+  "generated_at": "2026-07-14T08:05:45.614628+00:00",
+  "domain": "culture",
+  "dbt_project": "culture",
+  "table_count": 6,
+  "tables": [
+    {
+      "name": "gold_culture_activity_by_dong",
+      "relation": "iceberg_dev.culture.gold_culture_activity_by_dong",
+      "description": "행정동(admin_dong_code) × 일자 문화활동 집계(#48). dim_admin_dong 426동 scaffold라 활동 0건 동도 0으로 존재. sports 제외.",
+      "tags": [],
+      "contract_enforced": true,
+      "materialized": "table",
+      "on_table_exists": "replace",
+      "row_count": 175512,
+      "date_range": {
+        "column": "event_date",
+        "min": "2026-04-15",
+        "max": "2027-05-31"
+      },
+      "columns": [
+        {
+          "name": "admin_dong_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "admin_dong",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "stat_region_cd",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "event_date",
+          "type": "date",
+          "description": ""
+        },
+        {
+          "name": "activities_count",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "performances_count",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "events_count",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "festivals_count",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "exhibitions_count",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "sejong_count",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "kcisa_count",
+          "type": "bigint",
+          "description": ""
+        }
+      ],
+      "quality": [
+        {
+          "table": "silver_culture_performance",
+          "distribution": {
+            "dong_precise": 1689,
+            "gu_only": 3
+          }
+        },
+        {
+          "table": "silver_culture_event",
+          "distribution": {
+            "dong_precise": 18639,
+            "gu_only": 740,
+            "unmatched": 114
+          }
+        },
+        {
+          "table": "silver_culture_festival",
+          "distribution": {
+            "dong_precise": 235
+          }
+        },
+        {
+          "table": "silver_culture_exhibition",
+          "distribution": {
+            "dong_precise": 718,
+            "unmatched": 112,
+            "gu_only": 40
+          }
+        },
+        {
+          "table": "silver_culture_sejong",
+          "distribution": {
+            "dong_precise": 16876
+          }
+        },
+        {
+          "table": "silver_culture_kcisa_event",
+          "distribution": {
+            "dong_precise": 381,
+            "gu_only": 17,
+            "unmatched": 12
+          }
+        }
+      ],
+      "lineage": {
+        "silver": [
+          "silver_culture_event",
+          "silver_culture_exhibition",
+          "silver_culture_facility",
+          "silver_culture_festival",
+          "silver_culture_kcisa_event",
+          "silver_culture_performance",
+          "silver_culture_sejong"
+        ],
+        "intermediate": [
+          "int_culture_activity_days"
+        ],
+        "dim_seed": [
+          "dim_admin_dong",
+          "sejong_location",
+          "sema_branch_location",
+          "seoul_admin_dong_boundary",
+          "seoul_admin_dong_crosswalk"
+        ],
+        "bronze_source": [
+          "admin_dong_master",
+          "bronze_kcisa_seoul_event",
+          "bronze_kopis_facility",
+          "bronze_kopis_facility_detail",
+          "bronze_kopis_festival",
+          "bronze_kopis_performance",
+          "bronze_kopis_performance_detail",
+          "bronze_seoul_cultural_event",
+          "bronze_seoul_sejong",
+          "bronze_seoul_sema_exhibition"
+        ]
+      },
+      "sample": [
+        {
+          "admin_dong_code": "1174058000",
+          "admin_dong": "암사2동",
+          "gu_code": "11740",
+          "gu": "강동구",
+          "stat_region_cd": "11250580",
+          "event_date": "2026-08-23",
+          "activities_count": 0,
+          "performances_count": 0,
+          "events_count": 0,
+          "festivals_count": 0,
+          "exhibitions_count": 0,
+          "sejong_count": 0,
+          "kcisa_count": 0
+        },
+        {
+          "admin_dong_code": "1129076000",
+          "admin_dong": "장위1동",
+          "gu_code": "11290",
+          "gu": "성북구",
+          "stat_region_cd": "11080760",
+          "event_date": "2026-08-23",
+          "activities_count": 1,
+          "performances_count": 0,
+          "events_count": 0,
+          "festivals_count": 0,
+          "exhibitions_count": 0,
+          "sejong_count": 0,
+          "kcisa_count": 1
+        },
+        {
+          "admin_dong_code": "1120057000",
+          "admin_dong": "행당2동",
+          "gu_code": "11200",
+          "gu": "성동구",
+          "stat_region_cd": "11040570",
+          "event_date": "2026-08-23",
+          "activities_count": 0,
+          "performances_count": 0,
+          "events_count": 0,
+          "festivals_count": 0,
+          "exhibitions_count": 0,
+          "sejong_count": 0,
+          "kcisa_count": 0
+        },
+        {
+          "admin_dong_code": "1123071000",
+          "admin_dong": "회기동",
+          "gu_code": "11230",
+          "gu": "동대문구",
+          "stat_region_cd": "11060710",
+          "event_date": "2026-08-23",
+          "activities_count": 0,
+          "performances_count": 0,
+          "events_count": 0,
+          "festivals_count": 0,
+          "exhibitions_count": 0,
+          "sejong_count": 0,
+          "kcisa_count": 0
+        },
+        {
+          "admin_dong_code": "1114057000",
+          "admin_dong": "필동",
+          "gu_code": "11140",
+          "gu": "중구",
+          "stat_region_cd": "11020570",
+          "event_date": "2026-08-23",
+          "activities_count": 3,
+          "performances_count": 0,
+          "events_count": 3,
+          "festivals_count": 0,
+          "exhibitions_count": 0,
+          "sejong_count": 0,
+          "kcisa_count": 0
+        }
+      ]
+    },
+    {
+      "name": "gold_culture_boxoffice_daily",
+      "relation": "iceberg_dev.culture.gold_culture_boxoffice_daily",
+      "description": "랭킹 스냅샷 (snapshot_date × rank_no)",
+      "tags": [],
+      "contract_enforced": true,
+      "materialized": "table",
+      "on_table_exists": "replace",
+      "row_count": 700,
+      "date_range": {
+        "column": "event_start_date",
+        "min": "2026-03-21",
+        "max": "2027-01-09"
+      },
+      "columns": [
+        {
+          "name": "snapshot_date",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "rank_no",
+          "type": "integer",
+          "description": ""
+        },
+        {
+          "name": "performance_id",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "performance_name",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "genre",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "venue_name",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "event_start_date",
+          "type": "date",
+          "description": ""
+        },
+        {
+          "name": "event_end_date",
+          "type": "date",
+          "description": ""
+        },
+        {
+          "name": "perf_count",
+          "type": "integer",
+          "description": ""
+        },
+        {
+          "name": "seat_count",
+          "type": "integer",
+          "description": ""
+        },
+        {
+          "name": "gu_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu",
+          "type": "varchar",
+          "description": ""
+        }
+      ],
+      "quality": [
+        {
+          "table": "silver_culture_performance",
+          "distribution": {
+            "dong_precise": 1689,
+            "gu_only": 3
+          }
+        }
+      ],
+      "lineage": {
+        "silver": [
+          "silver_culture_boxoffice",
+          "silver_culture_facility",
+          "silver_culture_performance"
+        ],
+        "dim_seed": [
+          "dim_admin_dong",
+          "seoul_admin_dong_boundary",
+          "seoul_admin_dong_crosswalk"
+        ],
+        "bronze_source": [
+          "admin_dong_master",
+          "bronze_kopis_boxoffice",
+          "bronze_kopis_facility",
+          "bronze_kopis_facility_detail",
+          "bronze_kopis_performance",
+          "bronze_kopis_performance_detail"
+        ]
+      },
+      "sample": [
+        {
+          "snapshot_date": "2026-07-07",
+          "rank_no": 21,
+          "performance_id": "PF287874",
+          "performance_name": "브라더스 까라마조프 [대학로]",
+          "genre": "뮤지컬",
+          "venue_name": "NOL 씨어터 대학로 (구. 대학로뮤지컬센터) 우리투자증권홀(구.중극장)",
+          "event_start_date": "2026-05-12",
+          "event_end_date": "2026-09-06",
+          "perf_count": 51,
+          "seat_count": 528,
+          "gu_code": "11110",
+          "gu": "종로구"
+        },
+        {
+          "snapshot_date": "2026-07-04",
+          "rank_no": 9,
+          "performance_id": "PF292796",
+          "performance_name": "BOYNEXTDOOR TOUR: KNOCK ON Vol.2 [서울]",
+          "genre": "대중음악",
+          "venue_name": "올림픽공원 KSPO DOME(체조경기장)",
+          "event_start_date": "2026-07-17",
+          "event_end_date": "2026-07-19",
+          "perf_count": 3,
+          "seat_count": 15000,
+          "gu_code": null,
+          "gu": null
+        },
+        {
+          "snapshot_date": "2026-07-04",
+          "rank_no": 17,
+          "performance_id": "PF283935",
+          "performance_name": "스윙 데이즈_암호명 A",
+          "genre": "뮤지컬",
+          "venue_name": "충무아트센터 대극장",
+          "event_start_date": "2026-04-16",
+          "event_end_date": "2026-07-05",
+          "perf_count": 3,
+          "seat_count": 1250,
+          "gu_code": "11140",
+          "gu": "중구"
+        },
+        {
+          "snapshot_date": "2026-07-04",
+          "rank_no": 21,
+          "performance_id": "PF294179",
+          "performance_name": "쏜애플 콘서트: 나의 세기 [서울]",
+          "genre": "대중음악",
+          "venue_name": "올림픽공원 올림픽홀",
+          "event_start_date": "2026-08-15",
+          "event_end_date": "2026-08-16",
+          "perf_count": 2,
+          "seat_count": 2452,
+          "gu_code": null,
+          "gu": null
+        },
+        {
+          "snapshot_date": "2026-07-04",
+          "rank_no": 22,
+          "performance_id": "PF283525",
+          "performance_name": "렘피카",
+          "genre": "뮤지컬",
+          "venue_name": "코엑스아티움(Coex Artium) 코엑스아티움(Coex Artium)",
+          "event_start_date": "2026-03-21",
+          "event_end_date": "2026-06-21",
+          "perf_count": 0,
+          "seat_count": 1004,
+          "gu_code": "11680",
+          "gu": "강남구"
+        }
+      ]
+    },
+    {
+      "name": "gold_culture_location_daily",
+      "relation": "iceberg_dev.culture.gold_culture_location_daily",
+      "description": "gu_code × 일자 문화활동 집계 (기간 겹침 전개)",
+      "tags": [],
+      "contract_enforced": true,
+      "materialized": "table",
+      "on_table_exists": "replace",
+      "row_count": 67593,
+      "date_range": {
+        "column": "event_date",
+        "min": "2000-06-16",
+        "max": "2027-05-31"
+      },
+      "columns": [
+        {
+          "name": "gu_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "event_date",
+          "type": "date",
+          "description": ""
+        },
+        {
+          "name": "activities_count",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "performances_count",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "events_count",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "festivals_count",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "exhibitions_count",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "sejong_count",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "dong_precise_count",
+          "type": "bigint",
+          "description": "좌표로 행정동까지 정밀한 활동 수(#111 quality_status='dong_precise')"
+        }
+      ],
+      "quality": [
+        {
+          "table": "silver_culture_performance",
+          "distribution": {
+            "dong_precise": 1689,
+            "gu_only": 3
+          }
+        },
+        {
+          "table": "silver_culture_event",
+          "distribution": {
+            "dong_precise": 18639,
+            "gu_only": 740,
+            "unmatched": 114
+          }
+        },
+        {
+          "table": "silver_culture_festival",
+          "distribution": {
+            "dong_precise": 235
+          }
+        },
+        {
+          "table": "silver_culture_exhibition",
+          "distribution": {
+            "dong_precise": 718,
+            "unmatched": 112,
+            "gu_only": 40
+          }
+        },
+        {
+          "table": "silver_culture_sejong",
+          "distribution": {
+            "dong_precise": 16876
+          }
+        },
+        {
+          "table": "silver_culture_kcisa_event",
+          "distribution": {
+            "dong_precise": 381,
+            "gu_only": 17,
+            "unmatched": 12
+          }
+        }
+      ],
+      "lineage": {
+        "silver": [
+          "silver_culture_event",
+          "silver_culture_exhibition",
+          "silver_culture_facility",
+          "silver_culture_festival",
+          "silver_culture_kcisa_event",
+          "silver_culture_performance",
+          "silver_culture_sejong"
+        ],
+        "intermediate": [
+          "int_culture_activity_days"
+        ],
+        "dim_seed": [
+          "dim_admin_dong",
+          "sejong_location",
+          "sema_branch_location",
+          "seoul_admin_dong_boundary",
+          "seoul_admin_dong_crosswalk"
+        ],
+        "bronze_source": [
+          "admin_dong_master",
+          "bronze_kcisa_seoul_event",
+          "bronze_kopis_facility",
+          "bronze_kopis_facility_detail",
+          "bronze_kopis_festival",
+          "bronze_kopis_performance",
+          "bronze_kopis_performance_detail",
+          "bronze_seoul_cultural_event",
+          "bronze_seoul_sejong",
+          "bronze_seoul_sema_exhibition"
+        ]
+      },
+      "sample": [
+        {
+          "gu_code": "11545",
+          "gu": "금천구",
+          "event_date": "2026-06-11",
+          "activities_count": 14,
+          "performances_count": 2,
+          "events_count": 9,
+          "festivals_count": 0,
+          "exhibitions_count": 3,
+          "sejong_count": 0,
+          "dong_precise_count": 14
+        },
+        {
+          "gu_code": "11545",
+          "gu": "금천구",
+          "event_date": "2026-06-12",
+          "activities_count": 16,
+          "performances_count": 3,
+          "events_count": 10,
+          "festivals_count": 0,
+          "exhibitions_count": 3,
+          "sejong_count": 0,
+          "dong_precise_count": 16
+        },
+        {
+          "gu_code": "11545",
+          "gu": "금천구",
+          "event_date": "2026-06-13",
+          "activities_count": 14,
+          "performances_count": 2,
+          "events_count": 9,
+          "festivals_count": 0,
+          "exhibitions_count": 3,
+          "sejong_count": 0,
+          "dong_precise_count": 14
+        },
+        {
+          "gu_code": "11545",
+          "gu": "금천구",
+          "event_date": "2026-06-14",
+          "activities_count": 13,
+          "performances_count": 2,
+          "events_count": 8,
+          "festivals_count": 0,
+          "exhibitions_count": 3,
+          "sejong_count": 0,
+          "dong_precise_count": 13
+        },
+        {
+          "gu_code": "11545",
+          "gu": "금천구",
+          "event_date": "2026-06-15",
+          "activities_count": 13,
+          "performances_count": 2,
+          "events_count": 8,
+          "festivals_count": 0,
+          "exhibitions_count": 3,
+          "sejong_count": 0,
+          "dong_precise_count": 13
+        }
+      ]
+    },
+    {
+      "name": "gold_culture_movie_boxoffice_daily",
+      "relation": "iceberg_dev.culture.gold_culture_movie_boxoffice_daily",
+      "description": "일별 서울/전국 영화 관객 비중(서울 쏠림). 그레인 boxoffice_date. 시도 그레인이라 자치구 gold 미편입.",
+      "tags": [],
+      "contract_enforced": true,
+      "materialized": "table",
+      "on_table_exists": "replace",
+      "row_count": 6,
+      "date_range": {
+        "column": "boxoffice_date",
+        "min": "2026-07-08",
+        "max": "2026-07-13"
+      },
+      "columns": [
+        {
+          "name": "boxoffice_date",
+          "type": "date",
+          "description": "관객일(날짜 1행)"
+        },
+        {
+          "name": "nation_top_audience",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "seoul_top_audience",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "seoul_audience_share",
+          "type": "decimal(38,18)",
+          "description": "서울 top10 관객합 / 전국 top10 관객합 (서울 쏠림 신호)"
+        },
+        {
+          "name": "nation_top_movie",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "seoul_top_movie",
+          "type": "varchar",
+          "description": ""
+        }
+      ],
+      "quality": [],
+      "lineage": {
+        "silver": [
+          "silver_culture_movie_boxoffice"
+        ],
+        "bronze_source": [
+          "bronze_kobis_boxoffice_nation",
+          "bronze_kobis_boxoffice_seoul"
+        ]
+      },
+      "sample": [
+        {
+          "boxoffice_date": "2026-07-13",
+          "nation_top_audience": 97070,
+          "seoul_top_audience": 31552,
+          "seoul_audience_share": "0.325000000000000000",
+          "nation_top_movie": "모아나",
+          "seoul_top_movie": "모아나"
+        },
+        {
+          "boxoffice_date": "2026-07-08",
+          "nation_top_audience": 176422,
+          "seoul_top_audience": 51096,
+          "seoul_audience_share": "0.290000000000000000",
+          "nation_top_movie": "모아나",
+          "seoul_top_movie": "모아나"
+        },
+        {
+          "boxoffice_date": "2026-07-11",
+          "nation_top_audience": 458738,
+          "seoul_top_audience": 110276,
+          "seoul_audience_share": "0.240000000000000000",
+          "nation_top_movie": "모아나",
+          "seoul_top_movie": "모아나"
+        },
+        {
+          "boxoffice_date": "2026-07-12",
+          "nation_top_audience": 420714,
+          "seoul_top_audience": 97823,
+          "seoul_audience_share": "0.233000000000000000",
+          "nation_top_movie": "모아나",
+          "seoul_top_movie": "모아나"
+        },
+        {
+          "boxoffice_date": "2026-07-09",
+          "nation_top_audience": 124186,
+          "seoul_top_audience": 35396,
+          "seoul_audience_share": "0.285000000000000000",
+          "nation_top_movie": "모아나",
+          "seoul_top_movie": "모아나"
+        }
+      ]
+    },
+    {
+      "name": "gold_culture_reservation_daily",
+      "relation": "iceberg_dev.culture.gold_culture_reservation_daily",
+      "description": "gu_code × 스냅샷일 예약 가용 현황",
+      "tags": [],
+      "contract_enforced": true,
+      "materialized": "table",
+      "on_table_exists": "replace",
+      "row_count": 350,
+      "date_range": null,
+      "columns": [
+        {
+          "name": "gu_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "snapshot_date",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "total_services",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "culture_services",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "sport_services",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "open_services",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "availability_rate",
+          "type": "decimal(38,18)",
+          "description": ""
+        },
+        {
+          "name": "dong_precise_count",
+          "type": "bigint",
+          "description": "좌표로 행정동까지 정밀한 예약 수(#111 quality_status='dong_precise')"
+        }
+      ],
+      "quality": [
+        {
+          "table": "silver_culture_reservation",
+          "distribution": {
+            "dong_precise": 18972,
+            "gu_only": 1411,
+            "unmatched": 373
+          }
+        }
+      ],
+      "lineage": {
+        "silver": [
+          "silver_culture_reservation"
+        ],
+        "dim_seed": [
+          "dim_admin_dong",
+          "seoul_admin_dong_boundary",
+          "seoul_admin_dong_crosswalk"
+        ],
+        "bronze_source": [
+          "admin_dong_master",
+          "bronze_seoul_culture_reservation",
+          "bronze_seoul_sports_reservation"
+        ]
+      },
+      "sample": [
+        {
+          "gu_code": "11440",
+          "gu": "용산구",
+          "snapshot_date": "2026-07-03",
+          "total_services": 117,
+          "culture_services": 55,
+          "sport_services": 62,
+          "open_services": 64,
+          "availability_rate": "0.547000000000000000",
+          "dong_precise_count": 107
+        },
+        {
+          "gu_code": "11170",
+          "gu": "중구",
+          "snapshot_date": "2026-07-03",
+          "total_services": 78,
+          "culture_services": 27,
+          "sport_services": 51,
+          "open_services": 49,
+          "availability_rate": "0.628000000000000000",
+          "dong_precise_count": 78
+        },
+        {
+          "gu_code": "11530",
+          "gu": "금천구",
+          "snapshot_date": "2026-07-01",
+          "total_services": 78,
+          "culture_services": 67,
+          "sport_services": 11,
+          "open_services": 56,
+          "availability_rate": "0.718000000000000000",
+          "dong_precise_count": 64
+        },
+        {
+          "gu_code": "11530",
+          "gu": "금천구",
+          "snapshot_date": "2026-07-04",
+          "total_services": 67,
+          "culture_services": 56,
+          "sport_services": 11,
+          "open_services": 44,
+          "availability_rate": "0.657000000000000000",
+          "dong_precise_count": 59
+        },
+        {
+          "gu_code": "11215",
+          "gu": "광진구",
+          "snapshot_date": "2026-07-14",
+          "total_services": 63,
+          "culture_services": 17,
+          "sport_services": 46,
+          "open_services": 40,
+          "availability_rate": "0.635000000000000000",
+          "dong_precise_count": 63
+        }
+      ]
+    },
+    {
+      "name": "gold_culture_sports_schedule",
+      "relation": "iceberg_dev.culture.gold_culture_sports_schedule",
+      "description": "서울 야구 경기 일정 질의 표면 (경기 1행). 최근접 미래 경기 = game_date>=current_date order by event_at.",
+      "tags": [],
+      "contract_enforced": true,
+      "materialized": "table",
+      "on_table_exists": "replace",
+      "row_count": 67,
+      "date_range": {
+        "column": "game_date",
+        "min": "2026-07-16",
+        "max": "2026-09-06"
+      },
+      "columns": [
+        {
+          "name": "game_date",
+          "type": "date",
+          "description": ""
+        },
+        {
+          "name": "event_at",
+          "type": "timestamp(6)",
+          "description": ""
+        },
+        {
+          "name": "game_time",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "stadium",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "home_team",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "away_team",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "latitude",
+          "type": "double",
+          "description": ""
+        },
+        {
+          "name": "longitude",
+          "type": "double",
+          "description": ""
+        },
+        {
+          "name": "admin_dong",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "admin_dong_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "quality_status",
+          "type": "varchar",
+          "description": ""
+        }
+      ],
+      "quality": [
+        {
+          "table": "silver_culture_sports_event",
+          "distribution": {
+            "dong_precise": 67
+          }
+        }
+      ],
+      "lineage": {
+        "silver": [
+          "silver_culture_sports_event"
+        ],
+        "dim_seed": [
+          "dim_admin_dong",
+          "kbo_seoul_schedule",
+          "kbo_stadium_location",
+          "seoul_admin_dong_boundary",
+          "seoul_admin_dong_crosswalk"
+        ],
+        "bronze_source": [
+          "admin_dong_master"
+        ]
+      },
+      "sample": [
+        {
+          "game_date": "2026-09-06",
+          "event_at": "2026-09-06 17:00:00.000000",
+          "game_time": "17:00",
+          "stadium": "고척스카이돔",
+          "home_team": "키움",
+          "away_team": "NC",
+          "gu": "구로구",
+          "gu_code": "11530",
+          "latitude": 37.49683,
+          "longitude": 126.8669,
+          "admin_dong": "고척1동",
+          "admin_dong_code": "1153072000",
+          "quality_status": "dong_precise"
+        },
+        {
+          "game_date": "2026-09-05",
+          "event_at": "2026-09-05 17:00:00.000000",
+          "game_time": "17:00",
+          "stadium": "고척스카이돔",
+          "home_team": "키움",
+          "away_team": "NC",
+          "gu": "구로구",
+          "gu_code": "11530",
+          "latitude": 37.49683,
+          "longitude": 126.8669,
+          "admin_dong": "고척1동",
+          "admin_dong_code": "1153072000",
+          "quality_status": "dong_precise"
+        },
+        {
+          "game_date": "2026-09-04",
+          "event_at": "2026-09-04 18:30:00.000000",
+          "game_time": "18:30",
+          "stadium": "고척스카이돔",
+          "home_team": "키움",
+          "away_team": "NC",
+          "gu": "구로구",
+          "gu_code": "11530",
+          "latitude": 37.49683,
+          "longitude": 126.8669,
+          "admin_dong": "고척1동",
+          "admin_dong_code": "1153072000",
+          "quality_status": "dong_precise"
+        },
+        {
+          "game_date": "2026-09-03",
+          "event_at": "2026-09-03 18:30:00.000000",
+          "game_time": "18:30",
+          "stadium": "고척스카이돔",
+          "home_team": "키움",
+          "away_team": "SSG",
+          "gu": "구로구",
+          "gu_code": "11530",
+          "latitude": 37.49683,
+          "longitude": 126.8669,
+          "admin_dong": "고척1동",
+          "admin_dong_code": "1153072000",
+          "quality_status": "dong_precise"
+        },
+        {
+          "game_date": "2026-09-02",
+          "event_at": "2026-09-02 18:30:00.000000",
+          "game_time": "18:30",
+          "stadium": "고척스카이돔",
+          "home_team": "키움",
+          "away_team": "SSG",
+          "gu": "구로구",
+          "gu_code": "11530",
+          "latitude": 37.49683,
+          "longitude": 126.8669,
+          "admin_dong": "고척1동",
+          "admin_dong_code": "1153072000",
+          "quality_status": "dong_precise"
+        }
+      ]
+    }
+  ]
+}
