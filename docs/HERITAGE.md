@@ -54,7 +54,7 @@ app/charts/                    ← 백엔드 번들 (격리)
   layouts.py     레이아웃 페이지 JSON 영속 (락 + 원자 교체, 시드→런타임 복사)
   router.py      /api/v1/charts/* (meta·sources·query·layouts CRUD) — RFC7807 에러
   models.py      요청/응답 Pydantic 계약
-  data/layouts.seed.json  기본 3페이지 (커밋 대상. layouts.json·cache/ 는 런타임)
+  data/layouts.seed.json  기본 4페이지 (커밋 대상. layouts.json·cache/ 는 런타임)
 app/static/charts/             ← 프론트 번들 (격리)
   index.html     스튜디오 셸 (CDN: Pretendard·echarts@5.5·gridstack@10.3)
   charts.css     디자인 토큰 = 마켓플레이스 index.html 과 동일 헤리티지
