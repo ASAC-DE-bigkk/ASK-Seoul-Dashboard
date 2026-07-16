@@ -5,19 +5,7 @@ const API = (() => {
   const BASE = '/api/v1/charts';
 
   async function call(path, opts = {}) {
-    const res = await fetch(BASE + path, {
-      headers: { 'content-type': 'application/json' },
-      ...opts,
-    });
-    if (res.status === 204) return null;
-    const body = await res.json().catch(() => null);
-    if (!res.ok) {
-      const detail = body && (body.detail || body.title) || `HTTP ${res.status}`;
-      const err = new Error(detail);
-      err.status = res.status;
-      throw err;
-    }
-    return body;
+    return AuthUI.api(BASE + path, opts);
   }
 
   return {

@@ -1,4 +1,4 @@
-"""culture 데이터 카탈로그 API — 스냅샷을 서빙만 하는 얇은 조회 창구.
+"""ASK SEOUL 카탈로그·Charts Studio·독립 인증 시스템.
 
 실행:  .venv/Scripts/uvicorn app.main:app --port 8765
 문서:  http://127.0.0.1:8765/docs (Swagger, 자동 생성)
@@ -7,12 +7,20 @@
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from .auth import router as auth_router
+from .auth.config import load_settings
+from .auth.database import Database
+from .auth.middleware import AuthSecurityMiddleware
+from .auth.service import DomainError, initialize_database
 from .charts import router as charts_router
 from .models import (
     CatalogResponse, QualityResponse, SampleResponse, SchemaResponse,
@@ -22,16 +30,34 @@ from .models import (
 HERE = Path(__file__).parent
 SNAPSHOT_PATH = HERE.parent / "snapshot" / "catalog_snapshot.json"
 
-app = FastAPI(
-    title="ASK SEOUL — Data Catalog API (demo)",
-    description="dbt manifest/catalog + Trino 실측 스냅샷을 서빙하는 조회 전용 카탈로그 API. "
-                "W3 '품질·카탈로그 API화'의 축소판 — culture는 rich(계약·계보·품질), "
-                "그 외 도메인은 Trino 실측 basic 메타.",
-    version="0.2.0",
-)
-
 _snapshot = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
 _by_name = {t["name"]: t for t in _snapshot["tables"]}
+_auth_settings = load_settings()
+_database = Database(_auth_settings.database_url)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    initialize_database(_database, _auth_settings)
+    yield
+
+
+app = FastAPI(
+    title="ASK SEOUL — Data Platform API",
+    description="인증·인가가 적용된 데이터 카탈로그와 Charts Studio API.",
+    version="0.3.0",
+    lifespan=lifespan,
+)
+app.state.auth_settings = _auth_settings
+app.state.database = _database
+
+# 마지막에 추가된 middleware가 바깥쪽에서 실행된다. Host 검증을 가장 먼저 적용한다.
+app.add_middleware(AuthSecurityMiddleware, settings=_auth_settings)
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=list(_auth_settings.allowed_hosts),
+    www_redirect=False,
+)
 
 
 def _summary(t: dict) -> dict:
@@ -53,6 +79,23 @@ def _problem(status: int, title: str, detail: str) -> JSONResponse:
     )
 
 
+@app.exception_handler(DomainError)
+async def domain_error_handler(_request: Request, exc: DomainError) -> JSONResponse:
+    return _problem(exc.status, exc.title, exc.detail)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
+    fields = [
+        ".".join(str(part) for part in item["loc"] if part not in {"body", "query"})
+        for item in exc.errors()
+    ]
+    detail = "요청 형식이 올바르지 않습니다."
+    if fields:
+        detail += " 확인할 항목: " + ", ".join(sorted(set(fields)))
+    return _problem(422, "validation failed", detail)
+
+
 def _get_or_404(name: str) -> dict | JSONResponse:
     t = _by_name.get(name)
     if t is None:
@@ -63,8 +106,24 @@ def _get_or_404(name: str) -> dict | JSONResponse:
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "generated_at": _snapshot["generated_at"],
-            "table_count": _snapshot["table_count"]}
+    return {
+        "status": "ok",
+        "generated_at": _snapshot["generated_at"],
+        "table_count": _snapshot["table_count"],
+        "auth": "enabled",
+    }
+
+
+@app.get("/api/v1/public/summary", summary="랜딩 페이지용 공개 집계")
+def public_summary() -> dict:
+    tables = [_summary(t) for t in _snapshot["tables"]]
+    return {
+        "generated_at": _snapshot["generated_at"],
+        "dataset_count": len(tables),
+        "domain_count": len({t["domain"] for t in tables}),
+        "total_rows": sum(t["row_count"] for t in tables),
+        "contract_count": sum(1 for t in tables if t["contract_enforced"]),
+    }
 
 
 @app.get("/api/v1/catalog/tables", response_model=CatalogResponse,
@@ -132,6 +191,37 @@ def charts_page() -> FileResponse:
     return FileResponse(HERE / "static" / "charts" / "index.html")
 
 
+@app.get("/auth/login", include_in_schema=False)
+def login_page() -> FileResponse:
+    return FileResponse(HERE / "static" / "auth" / "login.html")
+
+
+@app.get("/auth/register", include_in_schema=False)
+def register_page() -> FileResponse:
+    return FileResponse(HERE / "static" / "auth" / "register.html")
+
+
+@app.get("/auth/forgot-password", include_in_schema=False)
+def forgot_password_page() -> FileResponse:
+    return FileResponse(HERE / "static" / "auth" / "forgot-password.html")
+
+
+@app.get("/auth/reset-password", include_in_schema=False)
+def reset_password_page() -> FileResponse:
+    return FileResponse(HERE / "static" / "auth" / "reset-password.html")
+
+
+@app.get("/profile", include_in_schema=False)
+def profile_page() -> FileResponse:
+    return FileResponse(HERE / "static" / "auth" / "profile.html")
+
+
+@app.get("/admin", include_in_schema=False)
+def admin_page() -> FileResponse:
+    return FileResponse(HERE / "static" / "auth" / "admin.html")
+
+
+app.include_router(auth_router)
 app.include_router(charts_router)
 
 

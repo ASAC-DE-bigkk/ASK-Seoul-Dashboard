@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -343,16 +344,34 @@ class Registry:
         self._fresh()
         return self._sources.get(name)
 
-    def meta(self) -> dict:
+    def meta(self, overrides: dict | None = None) -> dict:
         self._fresh()
+        overrides = overrides or {}
+        hidden = set(overrides.get("hidden_chart_types", []))
+        chart_types = deepcopy(CHART_TYPES)
+        for key in hidden:
+            chart_types.pop(key, None)
+        for key, label in overrides.get("chart_label_overrides", {}).items():
+            if key in chart_types and isinstance(label, str):
+                chart_types[key]["label"] = label[:80]
+        value_labels = deepcopy(VALUE_LABELS)
+        for field, mapping in overrides.get("value_label_overrides", {}).items():
+            if isinstance(mapping, dict):
+                value_labels.setdefault(field, {}).update(
+                    {str(key): str(value)[:80] for key, value in mapping.items()}
+                )
         domains: dict[str, int] = {}
         for s in self._sources.values():
             domains[s["domain"]] = domains.get(s["domain"], 0) + 1
+        default_domain = str(overrides.get("default_domain", "all"))
+        if default_domain != "all" and default_domain not in domains:
+            default_domain = "all"
         return {
             "generated_at": self._generated_at,
-            "chart_types": CHART_TYPES,
-            "value_labels": VALUE_LABELS,
+            "chart_types": chart_types,
+            "value_labels": value_labels,
             "domains": domains,
+            "default_domain": default_domain,
         }
 
 

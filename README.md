@@ -27,12 +27,27 @@ app/main.py(FastAPI) ──▶ /api/v1/catalog/... + / (마켓플레이스 화�
 # 1) 스냅샷 갱신 (전제: sample/ 스택 기동 + dbt target/ 에 manifest·catalog.json)
 .venv/Scripts/python extract.py
 
-# 2) 서버
-.venv/Scripts/uvicorn app.main:app --port 8765
+# 2) 설치·인증 DB 초기화·최초 관리자
+python3 -m pip install -r requirements.txt
+cp .env.example .env  # 값을 편집한 뒤 shell에 로드. 운영 시크릿은 secret manager에서 주입
+set -a; source .env; set +a
+python3 scripts/init_auth_db.py
+python3 scripts/create_admin.py --email admin@example.com
+
+# 3) 서버
+python3 -m uvicorn app.main:app --port 8765
 # → http://127.0.0.1:8765  (화면) · /docs (Swagger) · /health
 ```
 
-## API (전부 GET, 조회 전용)
+## 인증·회원·권한
+
+- 익명은 랜딩·로그인·가입·비밀번호 재설정만 접근한다.
+- 게스트/일반회원/운영자/최고관리자 역할, 역할 기본 페이지 권한, 사용자 allow/deny override를 지원한다.
+- 이메일 인증 또는 관리자 승인, Argon2id 비밀번호, DB 세션·CSRF, 계정 잠금, 요청 제한을 적용한다.
+- 사용자별 온톨로지/Charts 레이아웃, 일·주·월·연 모의결제와 운영 승인, Discord/Slack/Telegram 알림을 지원한다.
+- 운영 문서: [docs/additional_doc/README.md](docs/additional_doc/README.md)
+
+## 카탈로그 API (인증 후 조회 전용)
 
 | 엔드포인트 | 내용 |
 |---|---|
@@ -59,7 +74,7 @@ app/main.py(FastAPI) ──▶ /api/v1/catalog/... + / (마켓플레이스 화�
   + 지도 6종(서울 자치구·행정동·법정동, 대한민국 시도, 세계, 좌표 밀도). GeoJSON 동봉.
 - **레이아웃 페이지** — 왼쪽 사이드탭에서 추가/전환, 우클릭으로 순서변경(위/아래)·이름변경·복제·삭제.
   오른쪽 위 **레이아웃 변경 → 드래그·리사이즈 → 레이아웃 저장**(저장 전에는 일반 화면에서 고정).
-  저장소는 `app/charts/data/layouts.json`(시드: `layouts.seed.json`, commerce gold 4페이지 기본 제공).
+  저장소는 사용자별 RDB `auth_dashboard_layouts`이며, 첫 접근 때 `layouts.seed.json`의 기본 4페이지를 복제한다.
 - **데이터 경로** — `/api/v1/charts/query` 가 온톨로지 스펙을 화이트리스트 검증 후 SQL 로 조립해
   Trino gold 를 직접 집계한다(식별자=레지스트리 실재 필드만, 값=이스케이프). 결과는 디스크 캐시
   (TTL 10분)로 박제되고, Trino 다운 시 stale 캐시로 응답해 화면이 죽지 않는다(mode 표기: live/cache/stale).

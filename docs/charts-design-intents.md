@@ -15,7 +15,8 @@ Charts Studio 를 만들며 실제로 코드에 반영한 결정들을 계층으
 
 ### A-2. 데이터 접점
 - **A-2-1. 스냅샷 재사용**: 소스 목록·스키마는 본체가 이미 서빙하는 `snapshot/catalog_snapshot.json` 에서 파생 — 카탈로그와 차트가 같은 진실을 본다.
-- **A-2-2. 런타임 상태 격리**: 사용자 레이아웃(`layouts.json`)·질의 캐시(`cache/`)는 `app/charts/data/` 아래 gitignore 런타임 파일. 커밋되는 것은 시드뿐.
+- **A-2-2. 런타임 상태 격리**: 사용자 레이아웃은 RDB `auth_dashboard_layouts`에 사용자별로 저장하고,
+  질의 캐시(`cache/`)는 `app/charts/data/` 아래 gitignore 런타임 파일로 둔다. 커밋되는 기본 레이아웃은 시드뿐.
 
 ---
 

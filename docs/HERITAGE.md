@@ -9,12 +9,14 @@
 ## 1. 이 프로젝트가 무엇인가
 
 **ASK SEOUL** — 서울 오픈데이터 레이크하우스(dbt·Trino·Iceberg·Airflow·R2) 위의 데모 대시보드.
-상위 저장소 `sample/` 의 서브모듈이며(github.com/ASAC-DE-bigkk/ASK-Seoul-Dashboard), 두 화면을 서빙한다:
+상위 저장소 `sample/` 의 서브모듈이며(github.com/ASAC-DE-bigkk/ASK-Seoul-Dashboard), 아래 화면을 서빙한다:
 
 | 화면 | 경로 | 사상 |
 |---|---|---|
 | 데이터 마켓플레이스(카탈로그) | `/catalog` | **"계산은 파이프라인이 미리, API 는 얇게"** — extract.py 가 박제한 스냅샷 JSON 만 서빙 |
 | **Charts Studio** | `/charts` | 예외적으로 **gold 라이브 집계** — 단, 화이트리스트 SQL + 디스크 캐시 + stale 폴백으로 얇음을 유지 |
+| 인증·프로필 | `/auth/*`, `/profile` | 승인형 가입, DB 세션, 개인 온톨로지·이용권 |
+| 운영 콘솔 | `/admin` | 회원·페이지 권한·정책·IP·모의결제 승인 |
 
 Charts Studio 가 라이브 질의를 갖는 이유: 사용자가 소스·차원·집계를 조합해 만드는 질의는
 미리 계산해둘 수 없기 때문. 대신 캐시(TTL 600s)와 stale 폴백으로 "요청마다 Trino 를 두드리는
@@ -42,7 +44,9 @@ Charts Studio 가 라이브 질의를 갖는 이유: 사용자가 소스·차원
 | 지역 코드 | gold 데이터는 전부 **MOIS(행안부)** 체계(종로=11110). GeoJSON 자산 중 seoul_gu/seoul_dong 의 code 는 **KOSTAT(통계청)** 체계(종로=11010) — **혼용 금지**. 매칭 규칙은 `geo.js` 상단 주석과 [design-intents D-3](charts-design-intents.md) |
 | 코드값 | `major`: health/culture/industry/environment · `event_type`: opened/closed · `age_band`: `0_lt1y`~`5_ge20y` (라벨 사전은 `ontology.VALUE_LABELS`) |
 | 결측 표기 | 지역 코드 결측은 문자열 `'UNK'` — 지도 매칭에서 제외된다 |
-| 파이썬/실행 | `.venv`(python3.12, fastapi+uvicorn 만). 포트 관례 8765(문서)·8799(개발) |
+| 파이썬/실행 | Python 3.9+ 호환. FastAPI·SQLAlchemy·Argon2. 포트 관례 8765(문서)·8799(개발) |
+| 인증 DB | `DATABASE_URL`, 기본 `sqlite:///./data/ask_seoul.db`. PostgreSQL/MySQL dialect DDL도 테스트 |
+| 세션 | DB에는 HMAC 해시만 저장. 운영은 `AUTH_SESSION_PEPPER`, HTTPS Secure cookie 필수 |
 
 ## 4. 파일 지도 — 무엇을 고치려면 어디를 보나
 
@@ -51,10 +55,12 @@ app/charts/                    ← 백엔드 번들 (격리)
   ontology.py    role 추론·CHART_TYPES 슬롯 계약·VALUE_LABELS·CURATED  ← 온톨로지의 정본
   querybuilder.py 화이트리스트 SQL 조립 (식별자=레지스트리 실재 필드만, cast/try_cast 필터)
   trino.py       REST 실행기 (503 재시도·취소·120s 데드라인) + 디스크 캐시(TTL·stale·force)
-  layouts.py     레이아웃 페이지 JSON 영속 (락 + 원자 교체, 시드→런타임 복사)
+  layouts.py     사용자별 RDB 레이아웃 영속 (첫 접근 시 시드 복제)
   router.py      /api/v1/charts/* (meta·sources·query·layouts CRUD) — RFC7807 에러
   models.py      요청/응답 Pydantic 계약
-  data/layouts.seed.json  기본 4페이지 (커밋 대상. layouts.json·cache/ 는 런타임)
+  data/layouts.seed.json  기본 4페이지 (커밋 대상. cache/ 는 런타임)
+app/auth/                      ← 인증·회원·RBAC·정책·결제 모델/서비스/API/미들웨어
+app/notifications/             ← Discord·Slack·Telegram 운영 알림 인터페이스
 app/static/charts/             ← 프론트 번들 (격리)
   index.html     스튜디오 셸 (CDN: Pretendard·echarts@5.5·gridstack@10.3)
   charts.css     디자인 토큰 = 마켓플레이스 index.html 과 동일 헤리티지
@@ -63,8 +69,9 @@ app/static/charts/             ← 프론트 번들 (격리)
   js/geo.js      지도 자산 로딩·등록·지역 매칭 (MOIS_GU 사전, 동명 유일화·모호 제외)
   js/render.js   도표 렌더러 — 슬롯만 보고 그린다. 팔레트·피벗·정렬·null 규칙 여기
   js/app.js      상태·그리드(gridstack)·편집모드·드로어·사이드탭·자동갱신·셀프테스트
-app/main.py      본체 접점 (include_router + /charts 라우트 — 이 이상 늘리지 말 것)
-docs/            본 문서들
+app/static/auth/               ← 로그인·가입·재설정·프로필·운영 콘솔
+app/main.py      본체 접점 (카탈로그 + auth/charts router + 정적 화면)
+docs/additional_doc/           ← 인증/RDB/알림/클라우드 WAF 운영 문서
 ```
 
 ## 5. 설계 의도 요약 (정본: [charts-design-intents.md](charts-design-intents.md))
@@ -124,7 +131,9 @@ open "http://127.0.0.1:8765/charts?selftest=1"
 | 이름 기반 동 단위 그룹핑은 동명이동을 서버에서 합칠 수 있음 | dims 가 단일 필드라서. 지도는 모호 제외로 방어하지만 테이블/막대는 합산된다. 근본 해결은 코드+이름 복합 dim 지원 |
 | 행정동 지도 코드 매칭 미지원 | 자산 코드가 KOSTAT 이라 MOIS 10자리와 호환 불가 — 이름 매칭만. MOIS 경계 GeoJSON 확보 시 교체 |
 | 가중 평균 미지원 | 집계가 단일 필드 함수뿐. 비율의 정확한 재집계(ratio-of-sums)가 필요하면 파생 measure 지원을 설계할 것. 그때까지 시드는 "단순평균" 명시·표본 필터로 정직하게 |
-| 인증 없음·로컬 데모 | 공개 배포 전에는 인증/CORS/rate-limit 필요 |
+| MFA 미구현 | 공개 운영 전 최고관리자·운영자 MFA를 필수 보강 |
+| 앱 rate limit은 프로세스 로컬 | 운영의 정본은 AWS WAF/GCP Cloud Armor/Cloudflare, 필요 시 Redis 공용 limiter |
+| CSP에 `unsafe-inline` 잔존 | 기존 단일 HTML 헤리티지. 공개 운영 전 script/style 분리와 nonce/hash 적용 |
 | 스냅샷 신선도 수동 | `extract.py` 수동 실행. W3 본작업에서 Airflow 태스크로 승격 예정(상위 README 참조) |
 
 ## 9. 이력 요약
@@ -136,3 +145,5 @@ open "http://127.0.0.1:8765/charts?selftest=1"
   셀프테스트 17항목으로 확장.
 - 2026-07-17: 타임랩스 경주(race) 도표 — 시간 프레임 자동 재생·클릭 일시정지·누적/구간 모드,
   시드 4페이지(타임랩스) 추가. 셀프테스트 18항목.
+- 2026-07-17: 독립 인증·회원·RBAC·정책·사용자별 레이아웃·모의결제·운영 알림과 클라우드 WAF
+  운영 문서를 추가. 레이아웃 저장소를 전역 JSON에서 사용자별 RDB로 전환.

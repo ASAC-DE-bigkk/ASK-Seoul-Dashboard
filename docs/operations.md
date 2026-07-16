@@ -1,7 +1,7 @@
 # 운영 매뉴얼 — 솔루션 기동(up) / 중지(down)
 
 대상: 이 데모(카탈로그 + Charts Studio)를 켜고 끄고 초기화하는 사람.
-구성 요소는 둘뿐이다 — **① 데이터 스택(docker compose, sample/ 루트)** 과 **② 대시보드 서버(FastAPI, 이 리포)**.
+구성 요소는 **① 데이터 스택(docker compose)**, **② 인증/권한 RDB**, **③ 대시보드 서버(FastAPI)**다.
 
 ```
 [R2/Iceberg gold] ←질의─ Trino(:30586) ←─ ② FastAPI(:8765) ─→ 브라우저 (/charts, /catalog)
@@ -45,6 +45,11 @@ curl -s http://127.0.0.1:30586/v1/info | head -c 80  # {"nodeId":...,"state":"AC
 cd sample/dashboard
 python3.12 -m venv .venv                      # macOS/Linux (Windows: py -3.12 -m venv .venv)
 .venv/bin/pip install -r requirements.txt     # Windows: .venv\Scripts\pip
+cp .env.example .env
+# .env 값을 편집한 뒤:
+set -a; source .env; set +a
+python3 scripts/init_auth_db.py
+python3 scripts/create_admin.py --email admin@example.com
 ```
 
 기동:
@@ -59,6 +64,9 @@ python3.12 -m venv .venv                      # macOS/Linux (Windows: py -3.12 -
 | URL | 화면 |
 |---|---|
 | http://127.0.0.1:8765/ | 랜딩 |
+| http://127.0.0.1:8765/auth/login | 로그인 |
+| http://127.0.0.1:8765/profile | 프로필·온톨로지·이용권 |
+| http://127.0.0.1:8765/admin | 회원·권한·정책·결제 운영 콘솔 |
 | http://127.0.0.1:8765/catalog | 데이터 마켓플레이스(카탈로그) |
 | http://127.0.0.1:8765/charts | **Charts Studio** |
 | http://127.0.0.1:8765/docs | Swagger (전체 API) |
@@ -67,13 +75,19 @@ python3.12 -m venv .venv                      # macOS/Linux (Windows: py -3.12 -
 기동 검증(권장): 브라우저로 `http://127.0.0.1:8765/charts?selftest=1` 접속 →
 탭 제목이 `SELFTEST_ALL_PASS` 면 레이아웃 CRUD·질의·온톨로지 폴백까지 전부 정상.
 
-### 1-3. 환경변수 (선택 — 기본값으로 충분)
+### 1-3. 환경변수
 
 | 변수 | 기본값 | 용도 |
 |---|---|---|
 | `CHARTS_TRINO_URL` | `http://127.0.0.1:30586` | Trino 주소 |
 | `CHARTS_TRINO_USER` | `charts-studio` | X-Trino-User 헤더 |
 | `CHARTS_CACHE_TTL` | `600` (초) | 질의 결과 디스크 캐시 신선 기간 |
+| `DATABASE_URL` | `sqlite:///./data/ask_seoul.db` | 인증·권한·레이아웃 RDB |
+| `AUTH_PUBLIC_BASE_URL` | `http://127.0.0.1:8765` | 쿠키/CSRF/이메일 링크 기준 origin |
+| `AUTH_SESSION_PEPPER` | 개발만 자동 생성 | 운영 필수 secret |
+| `AUTH_COOKIE_SECURE` | production이면 true | HTTPS 전용 세션 쿠키 |
+
+운영 전체 설정은 [additional_doc/auth/security-architecture.md](additional_doc/auth/security-architecture.md)를 따른다.
 
 ---
 
@@ -96,11 +110,12 @@ docker compose down        # 컨테이너 제거(볼륨은 유지). -v 는 데�
 
 | 하고 싶은 것 | 방법 |
 |---|---|
-| 레이아웃 페이지를 기본 시드 3페이지로 되돌리기 | `rm app/charts/data/layouts.json` 후 서버 재시작(시드 `layouts.seed.json` 이 복사됨) |
+| 특정 사용자의 레이아웃을 기본 시드로 되돌리기 | 운영 승인 후 해당 사용자의 `auth_dashboard_layouts` 행만 삭제. 다음 접근 때 `layouts.seed.json`을 다시 복제 |
 | 질의 캐시 비우기 | `rm -r app/charts/data/cache/` |
 | 카탈로그 메타(소스 목록·스키마) 갱신 | `python extract.py` → `snapshot/catalog_snapshot.json` 재생성 (스택 기동 + dbt manifest 전제) |
 
-> 참고: `layouts.json`·`cache/` 는 gitignore 대상 런타임 파일이다. 커밋되는 것은 시드뿐이다.
+> 참고: 레이아웃은 RDB 사용자 데이터다. 전체 DB 파일 삭제로 초기화하지 말고 대상 사용자 행을 좁혀 처리한다.
+> `app/charts/data/cache/`는 계속 gitignore 대상 런타임 캐시이며, 커밋되는 기본 레이아웃은 시드뿐이다.
 
 ---
 

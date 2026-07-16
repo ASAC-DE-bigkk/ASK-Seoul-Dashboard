@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ASK SEOUL — Seoul Open-Data Lakehouse</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="/static/auth/session-ui.css">
 <style>
   :root {
     --bg: #ffffff; --bg-2: #f7f8fa; --panel: #ffffff; --panel-line: #e2e6ed;
@@ -114,9 +115,10 @@
 <nav class="nav">
   <div class="mark">AS</div><b>ASK SEOUL</b>
   <div class="links">
-    <a href="/catalog">Marketplace</a>
+    <a href="#features">솔루션</a>
     <a href="/docs" target="_blank">API Docs</a>
     <a href="/health" target="_blank">Status</a>
+    <span id="landing-auth-slot" class="auth-landing-actions"></span>
   </div>
 </nav>
 
@@ -127,7 +129,7 @@
      원천까지의 계보를 붙인 gold 데이터셋으로 제공합니다.
      탐색은 마켓플레이스에서, 소비는 조회 전용 REST API로.</p>
   <div class="cta-row rise d3">
-    <a class="cta primary" href="/catalog">마켓플레이스 열기
+    <a class="cta primary" id="use-solution" href="/catalog">사용하기
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12h14m-6-6l6 6-6 6"/></svg></a>
     <a class="cta ghost" href="/docs" target="_blank">API 문서 보기</a>
   </div>
@@ -138,12 +140,12 @@
     <div class="cell"><div class="label">Published Datasets</div><div class="value num" id="v-ds">—</div><div class="sub">전 도메인 gold layer</div></div>
     <div class="cell"><div class="label">Total Rows</div><div class="value num" id="v-rows">—</div><div class="sub">Trino 실측</div></div>
     <div class="cell"><div class="label">Contract Coverage</div><div class="value num" id="v-ct">—</div><div class="sub">dbt contract enforced</div></div>
-    <div class="cell"><div class="label">Spatial Precision</div><div class="value num" id="v-q">—</div><div class="sub">행정동 정밀 매칭</div></div>
+    <div class="cell"><div class="label">Domains</div><div class="value num" id="v-q">—</div><div class="sub">공개 데이터 영역</div></div>
   </div>
   <div class="note"><span class="pulse"></span><span id="live-note">카탈로그 API에서 방금 조회한 값</span></div>
 </section>
 
-<section class="features">
+<section class="features" id="features">
   <h2>Why it's different</h2>
   <div class="fgrid">
     <div class="fcard">
@@ -200,24 +202,17 @@
   </div>
 </footer>
 
+<script src="/static/auth/session-ui.js"></script>
 <script>
 const fmt = n => n.toLocaleString('ko-KR');
 (async () => {
   try {
-    const cat = await (await fetch('/api/v1/catalog/tables')).json();
-    const ts = cat.tables;
-    document.getElementById('v-ds').textContent = ts.length;
-    document.getElementById('v-rows').textContent = fmt(ts.reduce((a, t) => a + t.row_count, 0));
+    const cat = await AuthUI.api('/api/v1/public/summary');
+    document.getElementById('v-ds').textContent = cat.dataset_count;
+    document.getElementById('v-rows').textContent = fmt(cat.total_rows);
     document.getElementById('v-ct').innerHTML =
-      `${Math.round(ts.filter(t => t.contract_enforced).length / ts.length * 100)}<span class="unit">%</span>`;
-    const all = await Promise.all(ts.map(t => fetch(`/api/v1/catalog/tables/${t.name}`).then(r => r.json())));
-    let tot = 0, prec = 0; const seen = new Set();
-    all.forEach(d => d.quality.forEach(q => {
-      if (seen.has(q.table)) return; seen.add(q.table);
-      Object.entries(q.distribution).forEach(([k, v]) => { tot += v; if (k === 'dong_precise') prec += v; });
-    }));
-    document.getElementById('v-q').innerHTML =
-      `${(prec / tot * 100).toFixed(1)}<span class="unit">%</span>`;
+      `${Math.round(cat.contract_count / Math.max(1, cat.dataset_count) * 100)}<span class="unit">%</span>`;
+    document.getElementById('v-q').textContent = cat.domain_count;
     const m = Math.round((Date.now() - new Date(cat.generated_at)) / 60000);
     document.getElementById('live-note').textContent =
       `카탈로그 API 라이브 응답 · 스냅샷 ${m < 60 ? m + '분' : Math.round(m/60) + '시간'} 전 생성`;
@@ -225,6 +220,7 @@ const fmt = n => n.toLocaleString('ko-KR');
     document.getElementById('live-note').textContent = 'API 연결 실패 — 서버 상태를 확인하세요';
   }
 })();
+AuthUI.bootstrapLanding();
 </script>
 </body>
 </html>

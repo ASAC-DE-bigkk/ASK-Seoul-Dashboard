@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
 <link rel="stylesheet" href="/static/charts/charts.css">
+<link rel="stylesheet" href="/static/auth/session-ui.css">
 </head>
 <body>
 
@@ -26,8 +27,9 @@
   </button>
 
   <div class="sec">Platform</div>
-  <a class="nav-item" href="/catalog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>Marketplace</a>
-  <a class="nav-item" href="/docs" target="_blank"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 3h8l4 4v14a1 1 0 01-1 1H7a1 1 0 01-1-1V4a1 1 0 011-1z"/><path d="M15 3v4h4M9 13h6M9 17h6"/></svg>API Reference</a>
+  <a class="nav-item" href="/catalog" data-page-key="catalog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>Marketplace</a>
+  <a class="nav-item" href="/docs" data-page-key="api_docs" target="_blank"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 3h8l4 4v14a1 1 0 01-1 1H7a1 1 0 01-1-1V4a1 1 0 011-1z"/><path d="M15 3v4h4M9 13h6M9 17h6"/></svg>API Reference</a>
+  <a class="nav-item" href="/admin" data-page-key="admin_users"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20v-2a4 4 0 014-4h8a4 4 0 014 4v2"/><circle cx="12" cy="7" r="4"/></svg>회원 관리</a>
   <div class="foot">
     <div class="row"><span>API</span><b>charts v1</b></div>
     <div class="row"><span>Engine</span><b>Trino · Iceberg gold</b></div>
@@ -44,6 +46,7 @@
     <span class="env">DEV</span>
     <div class="right">
       <span class="sync"><span class="pulse" id="pulse"></span><span id="sync-note" class="num">connecting…</span></span>
+      <span id="profile-action-slot"></span>
       <select id="refresh-sel" class="sel" title="자동 갱신 간격 — gold 를 주기적으로 재질의해 화면을 갱신합니다">
         <option value="0">자동 갱신 끔</option>
         <option value="60">1분</option>
@@ -123,6 +126,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"></script>
+<script src="/static/auth/session-ui.js"></script>
 <script src="/static/charts/js/api.js"></script>
 <script src="/static/charts/js/recommend.js"></script>
 <script src="/static/charts/js/geo.js"></script>

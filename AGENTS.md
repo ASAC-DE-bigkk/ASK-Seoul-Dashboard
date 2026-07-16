@@ -150,22 +150,24 @@ dashboard/
 ├─ snapshot/
 │  └─ catalog_snapshot.json        # 카탈로그·Charts 소스 메타 스냅샷
 ├─ app/
-│  ├─ main.py                      # FastAPI 본체·카탈로그 API·화면 라우트·charts include
+│  ├─ main.py                      # FastAPI 본체·카탈로그 API·auth/charts include
 │  ├─ models.py                    # 카탈로그 API Pydantic 계약
+│  ├─ auth/                        # 회원·세션·RBAC·정책·결제·보안 미들웨어
+│  ├─ notifications/               # Discord·Slack·Telegram 알림 인터페이스
 │  ├─ charts/                      # Charts Studio 백엔드 번들
 │  │  ├─ ontology.py               # role 추론·CHART_TYPES·VALUE_LABELS·CURATED 정본
 │  │  ├─ querybuilder.py           # 화이트리스트 SQL 조립
 │  │  ├─ trino.py                  # Trino REST·재시도·취소·캐시·stale 폴백
-│  │  ├─ layouts.py                # 레이아웃 JSON 락·원자 저장·시드 복사
+│  │  ├─ layouts.py                # 사용자별 RDB 레이아웃·시드 복사
 │  │  ├─ router.py                 # /api/v1/charts/*
 │  │  ├─ models.py                 # Charts API Pydantic 계약
 │  │  └─ data/
 │  │     ├─ layouts.seed.json      # 커밋 대상 기본 레이아웃
-│  │     ├─ layouts.json           # 런타임, 커밋 금지
 │  │     └─ cache/                 # 런타임, 커밋 금지
 │  └─ static/
 │     ├─ landing.html
 │     ├─ index.html                # 데이터 마켓플레이스
+│     ├─ auth/                     # 로그인·가입·프로필·운영 콘솔
 │     └─ charts/                   # Charts Studio 프론트 번들
 │        ├─ index.html
 │        ├─ charts.css
@@ -181,6 +183,7 @@ dashboard/
    ├─ README.md                    # 문서 인덱스
    ├─ charts-design-intents.md     # 설계 의도 A~F
    ├─ charts-user-guide.md
+   ├─ additional_doc/              # 인증·RDB·알림·클라우드 WAF
    └─ operations.md
 ```
 
@@ -250,8 +253,9 @@ dashboard/
 ## 8. 레이아웃과 런타임 상태
 
 - `app/charts/data/layouts.seed.json`만 기본 레이아웃으로 커밋한다.
-- `layouts.json`과 `cache/`는 런타임 산출물이므로 커밋하지 않는다.
-- 레이아웃 저장은 락과 원자 교체 규칙을 유지한다.
+- 사용자 레이아웃은 `auth_dashboard_layouts`에 저장하고 모든 조회/수정에 `user_id` 조건을 둔다.
+- `cache/`는 런타임 산출물이므로 커밋하지 않는다.
+- 특정 사용자 초기화는 그 사용자의 레이아웃 행만 대상으로 하며 전체 DB를 지우지 않는다.
 - 일반 모드에서는 타일을 고정하고, 편집 모드에서만 이동·리사이즈한다.
 - 변경은 명시적 저장 전까지 영속되지 않아야 한다.
 - 페이지 전환 경합으로 늦은 응답이 다른 페이지를 덮어쓰지 않게 세대/요청 식별 규칙을 보존한다.
@@ -269,6 +273,10 @@ dashboard/
 - 동적 SQL은 값 이스케이프만 믿지 말고 식별자·집계·연산자 화이트리스트를 모두 통과시킨다.
 - 로그·예외·캐시·레이아웃·스냅샷에 API 키, 인증 헤더, DSN 비밀번호를 남기지 않는다.
 - 새 시크릿은 환경변수로 주입하고 실제 값은 커밋하지 않는다.
+- 인증/권한은 UI 숨김이 아니라 전역 미들웨어와 API 의존성에서 매 요청마다 강제한다.
+- 역할 기본 권한과 사용자별 allow/deny override를 분리하고, 운영자는 자신보다 낮은 역할만 관리한다.
+- 세션 원문·CSRF 원문·비밀번호 원문은 DB/로그에 저장하지 않는다.
+- 인증·정책·RDB 변경은 `docs/additional_doc/`의 해당 운영 문서를 같은 변경에서 갱신한다.
 - 외부 CDN이나 새 원격 자산은 재현성과 장애 격리를 해칠 수 있으므로, 기존 동봉 자산으로
   해결할 수 없는 경우에만 승인 후 추가한다.
 
@@ -325,9 +333,11 @@ dashboard/
 ```bash
 # Python
 .venv/bin/python -m compileall -q app extract.py
+.venv/bin/python -m pytest -q
 
-# Charts JavaScript
+# JavaScript
 node --check app/static/charts/js/*.js
+node --check app/static/auth/*.js
 ```
 
 ### 서버·API
@@ -335,7 +345,7 @@ node --check app/static/charts/js/*.js
 ```bash
 .venv/bin/uvicorn app.main:app --port 8765
 curl -fsS http://127.0.0.1:8765/health
-curl -fsS http://127.0.0.1:8765/api/v1/charts/meta
+curl -fsS http://127.0.0.1:8765/api/v1/public/summary
 ```
 
 ### 브라우저
@@ -357,7 +367,7 @@ git status --short
 git diff --check
 ```
 
-- `.venv/`, `__pycache__/`, `app/charts/data/cache/`, `layouts.json`이 포함되지 않았는지 확인한다.
+- `.venv/`, `__pycache__/`, `data/`, `app/charts/data/cache/`가 포함되지 않았는지 확인한다.
 - 문서의 페이지 수·도표 수·경로·포트가 코드와 맞는지 확인한다.
 
 ---

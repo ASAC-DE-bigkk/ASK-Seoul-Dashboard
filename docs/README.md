@@ -10,6 +10,7 @@
 | [charts-user-guide.md](charts-user-guide.md) | Charts Studio 화면 사용법 (레이아웃·차트 추가·자동 갱신) | 화면을 쓰는 사람 |
 | [charts-design-intents.md](charts-design-intents.md) | 개발 의도 정리 — 대분류 › 중분류 › 소분류 | 코드를 고치는 사람 |
 | [HERITAGE.md](HERITAGE.md) | **계승 문서** — 규정·설계 바탕·불변식·확장법·검증 절차 | 다음 작업자(사람/AI) |
+| [additional_doc/README.md](additional_doc/README.md) | 인증·RDB·알림·AWS/GCP/Cloudflare 보안 운영 | 보안·DB·인프라 운영자 |
 
 관련 상위 문서: [../README.md](../README.md) (프로젝트 개요·API 표) ·
 dbt 커머스 gold 정의: `sample/dbt/domains/commerce/` · 수집 파이프라인: `sample/dags/domains/commerce/`

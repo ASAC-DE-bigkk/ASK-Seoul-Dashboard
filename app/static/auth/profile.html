@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>프로필 · ASK SEOUL</title>
+  <link rel="stylesheet" href="/static/auth/auth.css">
+</head>
+<body>
+<div class="console">
+  <aside class="console-side">
+    <a class="brand" href="/"><span class="brand-mark">AS</span>ASK SEOUL</a>
+    <div class="console-profile">
+      <span class="avatar-lg" id="side-avatar">AS</span>
+      <b id="side-nickname">불러오는 중</b>
+      <span id="side-identity">프로필 확인 중</span>
+    </div>
+    <nav class="console-nav">
+      <a class="on" href="/profile">내 프로필</a>
+      <a href="/catalog" data-page-key="catalog">데이터 마켓플레이스</a>
+      <a href="/charts" data-page-key="charts">Charts Studio</a>
+      <a href="/docs" data-page-key="api_docs">API 문서</a>
+      <a href="/admin#users" data-page-key="admin_users">운영 콘솔</a>
+    </nav>
+    <button class="btn logout" type="button" data-logout>로그아웃</button>
+  </aside>
+  <main class="console-main">
+    <header class="console-top">
+      <h1>프로필과 개인 설정</h1>
+      <span class="right">계정·온톨로지·이용권</span>
+    </header>
+    <div class="console-body">
+      <div id="message" class="message info" hidden></div>
+
+      <section class="section">
+        <h2>계정 정보</h2>
+        <p class="desc">외부 화면에는 UUID 전체 대신 앞 4자리만 남긴 마스킹 ID를 표시합니다.</p>
+        <div class="grid-3">
+          <div class="data-card"><div class="k">Masked ID</div><div class="v" id="profile-id">-</div></div>
+          <div class="data-card"><div class="k">Role</div><div class="v" id="profile-role">-</div></div>
+          <div class="data-card"><div class="k">Membership</div><div class="v" id="profile-membership">-</div></div>
+          <div class="data-card"><div class="k">Email</div><div class="v" id="profile-email">-</div></div>
+          <div class="data-card"><div class="k">Email verified</div><div class="v" id="profile-verified">-</div></div>
+          <div class="data-card"><div class="k">Last login</div><div class="v" id="profile-login">-</div></div>
+        </div>
+      </section>
+
+      <div class="grid-2">
+        <section class="section">
+          <h2>닉네임 변경</h2>
+          <p class="desc">3~40자의 한글·영문·숫자·._- 조합을 사용할 수 있습니다.</p>
+          <form id="nickname-form" class="form">
+            <div class="field"><label for="nickname">닉네임</label><input id="nickname" name="nickname" maxlength="40" required></div>
+            <button class="btn primary" type="submit">닉네임 저장</button>
+          </form>
+        </section>
+        <section class="section">
+          <h2>비밀번호 변경</h2>
+          <p class="desc">변경하면 현재 세션을 포함한 모든 로그인 세션이 종료됩니다.</p>
+          <form id="password-form" class="form">
+            <div class="field"><label for="current-password">현재 비밀번호</label><input id="current-password" name="current_password" type="password" autocomplete="current-password" required></div>
+            <div class="field"><label for="new-password">새 비밀번호</label><input id="new-password" name="new_password" type="password" autocomplete="new-password" minlength="15" maxlength="128" required><span class="hint">15~128자, 널리 쓰이는 비밀번호와 이메일 아이디 포함 금지</span></div>
+            <button class="btn primary" type="submit">비밀번호 변경</button>
+          </form>
+        </section>
+      </div>
+
+      <section class="section" id="ontology">
+        <h2>내 온톨로지·화면 설정</h2>
+        <p class="desc">공통/역할 정책 위에 개인 설정이 병합됩니다. 숨긴 차트 유형은 Charts Studio 소스 계약에서도 제외됩니다.</p>
+        <form id="preference-form" class="form">
+          <div class="field"><label for="default-domain">기본 도메인</label>
+            <select id="default-domain" name="default_domain"><option value="all">전체</option></select>
+          </div>
+          <div class="field"><label>Charts Studio에 표시할 차트 유형</label><div id="chart-types" class="grid-3"></div></div>
+          <label class="check"><input id="dense-ui" type="checkbox">밀도 높은 화면 구성을 기본값으로 사용</label>
+          <button class="btn primary" type="submit">개인 설정 저장</button>
+        </form>
+      </section>
+
+      <section class="section" id="billing" data-page-key="billing">
+        <h2>이용권</h2>
+        <p class="desc">현재는 모의 결제입니다. 요청 후 운영자 또는 최고관리자가 확인·승인해야 종료일이 연장됩니다.</p>
+        <div id="plans" class="plans"></div>
+        <div class="table-wrap">
+          <table><thead><tr><th>요청일</th><th>요금제</th><th>상태</th><th>검토일</th><th>메모</th></tr></thead>
+          <tbody id="payment-history"></tbody></table>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<div id="payment-modal" class="modal-wrap" hidden>
+  <section class="modal">
+    <h3>모의 결제 요청</h3>
+    <p class="lead" id="payment-summary"></p>
+    <div class="message warn">실제 결제 승인이 아닙니다. 요청은 운영자/최고관리자에게 전달되며 관리자 화면에서 승인된 뒤 이용권에 반영됩니다.</div>
+    <div class="actions"><button class="btn" type="button" data-close-modal>취소</button><button class="btn primary" id="confirm-payment" type="button">승인 요청 보내기</button></div>
+  </section>
+</div>
+
+<script src="/static/auth/session-ui.js"></script>
+<script src="/static/auth/profile.js"></script>
+</body>
+</html>

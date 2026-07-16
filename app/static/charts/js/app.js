@@ -878,6 +878,7 @@ async function boot() {
   try {
     const [meta, srcs, pages] = await Promise.all([API.meta(), API.sources('all'), API.pages()]);
     S.meta = meta; S.sources = srcs.sources; S.pages = pages;
+    CFG.domain = meta.default_domain || 'all';
     RENDER.setMeta(meta);
     RECO.setMeta(meta);
     initAutoRefresh();
@@ -981,7 +982,7 @@ async function selftest() {
   document.title = R.every(r => r.startsWith('PASS')) ? 'SELFTEST_ALL_PASS' : 'SELFTEST_FAIL';
 }
 
-boot().then(async () => {
+AuthUI.bootstrapProtected().then(boot).then(async () => {
   const q = new URLSearchParams(location.search);
   if (q.get('selftest') === '1') selftest();
   if (q.get('uidemo')) {           // 개발/검증용: 편집모드·드로어를 열어둔 상태로 진입
