@@ -1,7 +1,17 @@
-# culture Data Catalog — Marketplace 데모
+# Data Catalog — Marketplace 데모
 
 Snowflake Marketplace 스타일의 **데이터 카탈로그 API + 웹화면** 데모.
-W3 "품질·카탈로그 API화"의 culture 단독 축소판이다.
+W3 "품질·카탈로그 API화"의 축소판 — **전 도메인 gold** 를 싣는다 (7/15 확장).
+
+도메인 2계층:
+
+| 계층 | 도메인 | 메타 수준 |
+|---|---|---|
+| rich | culture | dbt manifest/catalog 보유 → 설명·contract·계보·quality_status까지 |
+| basic | commerce · traffic · weather · citydata | Trino 실측만 (스키마·행수·기간·샘플) — dbt 아티팩트 미제공이라 설명/계약/계보 공란 |
+
+basic 도메인의 빈 칸이 곧 "메타데이터 채무" 가시화다 — W3 본작업에서
+각 도메인이 dbt 아티팩트를 등록하면 자동으로 rich 로 승격되는 구조.
 
 사상: **계산은 파이프라인이 미리, API는 얇게.** 요청 시 Trino를 두드리지 않고,
 추출기가 박제한 스냅샷 JSON만 서빙한다 (조회 전용 서빙 레이어).

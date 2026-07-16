@@ -9,12 +9,12 @@
   :root {
     --accent: #2a78d6; --accent-deep: #1c5cab; --accent-soft: #eaf1fb;
     --good: #0ca30c; --warn: #fab219; --serious: #ec835a; --good-deep: #0a7d0a;
-    --side-bg: #0b1220; --side-ink: #b9c4d8; --side-dim: #5d6b84; --side-line: #1c2740;
+    --side-bg: #ffffff; --side-ink: #4c5566; --side-dim: #8a93a5; --side-line: #e8ecf2;
     --ink: #171c26; --ink-2: #4c5566; --ink-3: #8a93a5; --ink-4: #b3bac7;
     --line: #e2e6ed; --line-soft: #edf0f5;
-    --bg: #f7f8fa; --panel: #ffffff;
+    --bg: #ffffff; --panel: #ffffff;
     --mono: "Cascadia Mono", Consolas, "SF Mono", monospace;
-    --shadow: 0 1px 2px rgba(18,26,44,.05);
+    --shadow: 0 1px 3px rgba(18,26,44,.06);
   }
   * { box-sizing: border-box; margin: 0; }
   html { font-size: 14px; }
@@ -28,13 +28,14 @@
 
   /* ── sidebar ─────────────────────────────────────────── */
   .side { width: 208px; flex: none; background: var(--side-bg); color: var(--side-ink);
-          display: flex; flex-direction: column; padding: 14px 10px; }
+          display: flex; flex-direction: column; padding: 14px 10px;
+          border-right: 1px solid var(--line); }
   .ws { display: flex; align-items: center; gap: 9px; padding: 6px 10px 14px;
         border-bottom: 1px solid var(--side-line); margin-bottom: 10px; }
   .ws .mark { width: 26px; height: 26px; border-radius: 7px; flex: none;
               background: linear-gradient(135deg, #2a78d6, #143b78);
               display: grid; place-items: center; color: #fff; font-weight: 800; font-size: 11px; letter-spacing: .02em; }
-  .ws .t b { display: block; font-size: 12.5px; color: #f2f5fa; font-weight: 650; letter-spacing: .01em; }
+  .ws .t b { display: block; font-size: 12.5px; color: var(--ink); font-weight: 650; letter-spacing: .01em; }
   .ws .t span { font-size: 10px; color: var(--side-dim); letter-spacing: .03em; }
   .side .sec { font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase;
                color: var(--side-dim); padding: 12px 10px 5px; }
@@ -42,14 +43,14 @@
               color: var(--side-ink); font-size: 12.5px; font-weight: 450; text-decoration: none;
               border: none; background: none; width: 100%; text-align: left; }
   .nav-item svg { width: 14px; height: 14px; flex: none; opacity: .6; }
-  .nav-item.on { background: rgba(42,120,214,.16); color: #fff; font-weight: 550; }
-  .nav-item.on svg { opacity: 1; color: #6ea6e8; }
-  .nav-item:hover:not(.on):not(.soon) { background: rgba(255,255,255,.04); }
+  .nav-item.on { background: var(--accent-soft); color: var(--accent-deep); font-weight: 550; }
+  .nav-item.on svg { opacity: 1; color: var(--accent); }
+  .nav-item:hover:not(.on):not(.soon) { background: #f2f5f9; }
   .nav-item.soon { color: var(--side-dim); cursor: default; }
   .nav-item .tag { margin-left: auto; font-size: 9px; font-weight: 650; letter-spacing: .05em;
                    font-variant-numeric: tabular-nums;
                    color: var(--side-dim); border: 1px solid var(--side-line); border-radius: 4px; padding: 1px 6px; }
-  .nav-item.on .tag { color: #8fc0f5; border-color: rgba(110,166,232,.35); }
+  .nav-item.on .tag { color: var(--accent-deep); border-color: #c3d8f2; }
   .side .foot { margin-top: auto; padding: 10px 10px 4px; border-top: 1px solid var(--side-line);
                 font-size: 10px; color: var(--side-dim); line-height: 1.7; letter-spacing: .02em; }
   .side .foot .row { display: flex; justify-content: space-between; }
@@ -98,6 +99,18 @@
   .view-toggle button + button { border-left: 1px solid var(--line-soft); }
   .view-toggle button svg { width: 12px; height: 12px; }
   .view-toggle button.on { background: var(--accent-soft); color: var(--accent-deep); }
+
+  /* ── domain filter chips ── */
+  .domchips { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 2px; }
+  .domchips .chip { display: inline-flex; align-items: center; gap: 7px; padding: 6px 13px;
+    border: 1px solid var(--line); border-radius: 999px; background: var(--panel);
+    font-size: 12.5px; color: var(--ink-2); cursor: pointer; transition: all .12s; }
+  .domchips .chip b { font-weight: 700; color: var(--ink-3); margin-left: 1px; }
+  .domchips .chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--c); }
+  .domchips .chip:hover { border-color: var(--c); }
+  .domchips .chip.on { border-color: var(--c); color: var(--ink);
+    box-shadow: inset 0 0 0 1px var(--c); }
+  .domchips .chip.on b { color: var(--ink); }
 
   .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; margin-bottom: 18px;
            background: var(--line); border: 1px solid var(--line); border-radius: 10px;
@@ -294,12 +307,13 @@
     <div class="t"><b>ASK SEOUL</b><span>Seoul Open-Data Lakehouse</span></div>
   </a>
   <div class="sec">Marketplace</div>
-  <button class="nav-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V9l8-6 8 6v10a1 1 0 01-1 1h-5v-6h-4v6H5a1 1 0 01-1-1z"/></svg>culture<span class="tag">6</span></button>
-  <button class="nav-item soon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16M10 4v16"/></svg>citydata<span class="tag">soon</span></button>
-  <button class="nav-item soon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 20V10m6 10V4m6 16v-7"/></svg>commerce<span class="tag">soon</span></button>
-  <button class="nav-item soon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3.6 9h16.8M3.6 15h16.8"/></svg>traffic<span class="tag">soon</span></button>
-  <button class="nav-item soon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 18a4 4 0 100-8 5.5 5.5 0 00-10.4 1.5A3.5 3.5 0 007 18h10z"/></svg>weather<span class="tag">soon</span></button>
-  <button class="nav-item soon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M16 11a3 3 0 100-6M21 20c0-2.8-1.9-5.1-4.5-5.8"/></svg>population<span class="tag">soon</span></button>
+  <button class="nav-item on" data-domain="all" onclick="setDomain('all')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>all datasets<span class="tag" data-count="all"></span></button>
+  <button class="nav-item" data-domain="culture" onclick="setDomain('culture')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V9l8-6 8 6v10a1 1 0 01-1 1h-5v-6h-4v6H5a1 1 0 01-1-1z"/></svg>culture<span class="tag" data-count="culture"></span></button>
+  <button class="nav-item" data-domain="citydata" onclick="setDomain('citydata')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16M10 4v16"/></svg>citydata<span class="tag" data-count="citydata"></span></button>
+  <button class="nav-item" data-domain="commerce" onclick="setDomain('commerce')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 20V10m6 10V4m6 16v-7"/></svg>commerce<span class="tag" data-count="commerce"></span></button>
+  <button class="nav-item" data-domain="traffic" onclick="setDomain('traffic')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3.6 9h16.8M3.6 15h16.8"/></svg>traffic<span class="tag" data-count="traffic"></span></button>
+  <button class="nav-item" data-domain="weather" onclick="setDomain('weather')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 18a4 4 0 100-8 5.5 5.5 0 00-10.4 1.5A3.5 3.5 0 007 18h10z"/></svg>weather<span class="tag" data-count="weather"></span></button>
+  <button class="nav-item" data-domain="transit" onclick="setDomain('transit')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="3" width="14" height="14" rx="2"/><path d="M5 11h14M9 21l1.5-4M15 21l-1.5-4"/><circle cx="9" cy="13.5" r=".6"/><circle cx="15" cy="13.5" r=".6"/></svg>transit<span class="tag" data-count="transit"></span></button>
   <div class="sec">Platform</div>
   <a class="nav-item" href="/docs" target="_blank"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 3h8l4 4v14a1 1 0 01-1 1H7a1 1 0 01-1-1V4a1 1 0 011-1z"/><path d="M15 3v4h4M9 13h6M9 17h6"/></svg>API Reference</a>
   <a class="nav-item" href="/health" target="_blank"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Service Health</a>
@@ -312,7 +326,7 @@
 
 <main class="main">
   <div class="topbar">
-    <div class="crumb">Marketplace<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg><b>culture</b></div>
+    <div class="crumb">Marketplace<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg><b>all datasets</b></div>
     <span class="env">DEV</span>
     <div class="right">
       <span class="sync"><span class="pulse"></span><span id="snap" class="num">connecting…</span></span>
@@ -325,8 +339,8 @@
     <div class="wrap">
       <div class="pagehead">
         <div>
-          <h1>Culture Datasets</h1>
-          <p>계약(contract)·품질(quality)·계보(lineage)가 검증된 published gold — 조회 전용 API로 제공</p>
+          <h1>Seoul Datasets</h1>
+          <p>전 도메인 published gold — culture는 계약·품질·계보 완비(rich), 그 외는 Trino 실측(basic) · 조회 전용 API</p>
         </div>
       </div>
 
@@ -343,6 +357,8 @@
           <button id="vt-list" onclick="setView('list')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>리스트</button>
         </div>
       </div>
+
+      <div class="domchips" id="domchips"></div>
 
       <div class="listhead">
         <h2>Published Datasets</h2>
@@ -402,12 +418,22 @@ const Q_META = {
   gu_only:      { label: '구 수준만',   cls: 'w' },
   unmatched:    { label: '매칭 실패',   cls: 's' },
 };
+/* 도메인 색 — culture 만 rich 메타(dbt 아티팩트), 나머지는 Trino 실측 basic */
+const DOMAIN_META = {
+  culture:  { c: '#4a3aa7', label: 'Culture'  },
+  commerce: { c: '#eda100', label: 'Commerce' },
+  traffic:  { c: '#e34948', label: 'Traffic'  },
+  weather:  { c: '#2a78d6', label: 'Weather'  },
+  citydata: { c: '#1baf7a', label: 'Citydata' },
+  transit:  { c: '#d1499a', label: 'Transit'  },
+};
+const dmeta = d => DOMAIN_META[d] || { c: '#888780', label: d };
 const fmt = n => n.toLocaleString('ko-KR');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const ident = n => IDENT[n] || { c: '#2a78d6', cat: 'dataset' };
+const ident = t => IDENT[t.name] || { c: dmeta(t.domain).c, cat: `${dmeta(t.domain).label} · gold` };
 
 let summaries = [], details = {}, view = 'card', activeTab = 0, current = null;
-let sortKey = null, sortDir = 1, generatedAt = null;
+let sortKey = null, sortDir = 1, generatedAt = null, domainFilter = 'all';
 
 function relTime(iso) {
   const m = Math.round((Date.now() - new Date(iso)) / 60000);
@@ -435,7 +461,7 @@ async function boot() {
   const all = await Promise.all(summaries.map(t =>
     fetch(`/api/v1/catalog/tables/${t.name}`).then(r => r.json())));
   all.forEach(d => details[d.name] = d);
-  renderStats(); refresh();
+  renderStats(); renderChips(); updateSideCounts(); refresh();
   document.getElementById('search').addEventListener('input', refresh);
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') closeDrawer();
@@ -447,7 +473,9 @@ async function boot() {
 
 function filtered() {
   const q = document.getElementById('search').value.trim().toLowerCase();
-  let arr = summaries.filter(t => (t.name + ' ' + t.description + ' ' + ident(t.name).cat).toLowerCase().includes(q));
+  let arr = summaries.filter(t =>
+    (domainFilter === 'all' || t.domain === domainFilter) &&
+    (t.name + ' ' + t.description + ' ' + t.domain + ' ' + ident(t).cat).toLowerCase().includes(q));
   if (sortKey) arr = [...arr].sort((a, b) => {
     const va = sortKey === 'name' ? a.name : a.row_count;
     const vb = sortKey === 'name' ? b.name : b.row_count;
@@ -478,11 +506,12 @@ function renderStats() {
     Object.entries(q.distribution).forEach(([k, v]) => { pTot += v; if (k === 'dong_precise') pPrec += v; });
   }));
   const rate = pTot ? Math.round(pPrec / pTot * 1000) / 10 : 0;
+  const domainCount = new Set(summaries.map(t => t.domain)).size;
   document.getElementById('stats').innerHTML = [
-    { label: 'Published Datasets', value: summaries.length, sub: 'gold layer · read-only API' },
+    { label: 'Published Datasets', value: summaries.length, sub: `${domainCount}개 도메인 · gold layer` },
     { label: 'Total Rows', value: fmt(totalRows), sub: 'Trino 실측 (스냅샷)' },
-    { label: 'Contract Coverage', value: `${contract}/${summaries.length}`, sub: 'dbt contract enforced' },
-    { label: 'Spatial Precision', value: rate + '<span class="unit">%</span>', sub: `행정동 정밀 · silver ${seen.size}개 ${fmt(pTot)}행` },
+    { label: 'Contract Coverage', value: `${contract}/${summaries.length}`, sub: 'dbt contract enforced (culture)' },
+    { label: 'Spatial Precision', value: rate + '<span class="unit">%</span>', sub: `행정동 정밀 · culture silver ${seen.size}개` },
   ].map(s => `<div class="stat"><div class="label">${s.label}</div>
       <div class="value num">${s.value}</div><div class="sub">${s.sub}</div></div>`).join('');
 }
@@ -491,6 +520,33 @@ function meterHtml(agg, total) {
   return '<div class="meter">' + Object.entries(Q_META).filter(([k]) => agg[k])
     .map(([k, m]) => `<i class="${m.cls}" style="flex:${agg[k] / total}" title="${m.label} ${fmt(agg[k])} (${(agg[k]/total*100).toFixed(1)}%)"></i>`)
     .join('') + '</div>';
+}
+
+function setDomain(d) {
+  domainFilter = d;
+  document.querySelectorAll('.nav-item[data-domain]').forEach(el =>
+    el.classList.toggle('on', el.dataset.domain === d));
+  const crumb = document.querySelector('.crumb b');
+  if (crumb) crumb.textContent = d === 'all' ? 'all datasets' : d;
+  renderChips(); refresh();
+}
+
+function updateSideCounts() {
+  const counts = { all: summaries.length };
+  summaries.forEach(t => counts[t.domain] = (counts[t.domain] || 0) + 1);
+  document.querySelectorAll('.tag[data-count]').forEach(el =>
+    el.textContent = counts[el.dataset.count] || 0);
+}
+
+function renderChips() {
+  const counts = {};
+  summaries.forEach(t => counts[t.domain] = (counts[t.domain] || 0) + 1);
+  const chips = [['all', `전체 <b>${summaries.length}</b>`]]
+    .concat(Object.keys(DOMAIN_META).filter(d => counts[d])
+      .map(d => [d, `${dmeta(d).label} <b>${counts[d]}</b>`]));
+  document.getElementById('domchips').innerHTML = chips.map(([d, label]) =>
+    `<button class="chip ${domainFilter === d ? 'on' : ''}" style="--c:${d === 'all' ? '#5f5e5a' : dmeta(d).c}"
+       onclick="setDomain('${d}')">${d !== 'all' ? '<span class="dot"></span>' : ''}${label}</button>`).join('');
 }
 
 function setView(v) {
@@ -509,14 +565,14 @@ function render(tables) {
 
 function renderCards(tables) {
   return '<div class="cards">' + tables.map(t => {
-    const id = ident(t.name), q = qualityAgg(t.name);
+    const id = ident(t), q = qualityAgg(t.name);
     const range = t.date_range && t.date_range.min ? `${t.date_range.min} ~ ${t.date_range.max}` : '—';
     const qfoot = q
       ? `<div class="qwrap">${meterHtml(q.agg, q.total)}
            <span class="qtext num"><b>${(q.precise * 100).toFixed(1)}%</b> 정밀</span></div>`
-      : `<div class="qwrap"><span class="qtext">검수 seed 기반</span></div>`;
+      : `<div class="qwrap"><span class="qtext">${t.domain === 'culture' ? '검수 seed 기반' : 'quality 미계측'}</span></div>`;
     return `<article class="card" style="--c:${id.c}" onclick="openDrawer('${t.name}')">
-      <div class="cat"><span class="dot"></span>${esc(id.cat)}<span class="upd num">updated ${relTime(generatedAt)}</span></div>
+      <div class="cat"><span class="dot"></span>${esc(dmeta(t.domain).label)}${IDENT[t.name] ? ' · ' + esc(id.cat) : ''}<span class="upd num">updated ${relTime(generatedAt)}</span></div>
       <div class="nm">${esc(t.name)}</div>
       <p class="desc">${esc(t.description) || '설명 없음'}</p>
       <div class="facts num">
@@ -538,11 +594,11 @@ function renderList(tables) {
     <div class="sort" onclick="toggleSort('rows')" style="justify-content:flex-end">Rows ${arr('rows')}</div>
     <div style="justify-content:flex-end">Cols</div><div>Coverage</div><div>Quality</div><div>Contract</div></div>`;
   return '<div class="listing">' + head + tables.map(t => {
-    const id = ident(t.name), q = qualityAgg(t.name);
+    const id = ident(t), q = qualityAgg(t.name);
     const qcell = q
       ? `<div class="qcell">${meterHtml(q.agg, q.total)}
            <span class="qtext num"><b>${(q.precise * 100).toFixed(1)}%</b></span></div>`
-      : `<span class="pill dim">seed</span>`;
+      : `<span class="pill dim">${t.domain === 'culture' ? 'seed' : '—'}</span>`;
     const range = t.date_range && t.date_range.min ? `${t.date_range.min} ~ ${t.date_range.max}` : '—';
     return `<div class="lrow" style="--c:${id.c}" onclick="openDrawer('${t.name}')">
       <div class="nmcell"><span class="dot"></span>
@@ -561,10 +617,10 @@ const TABS = t => [['개요', null], ['스키마', t.columns.length], ['품질',
 
 function openDrawer(name) {
   current = details[name]; activeTab = 0;
-  const id = ident(name);
+  const id = ident(current);
   const crumb = document.getElementById('d-crumb');
   crumb.style.setProperty('--c', id.c);
-  crumb.innerHTML = `<span class="dot"></span>culture · gold · ${esc(id.cat)}`;
+  crumb.innerHTML = `<span class="dot"></span>${esc(current.domain)} · gold${IDENT[name] ? ' · ' + esc(id.cat) : ''}`;
   document.getElementById('d-title').textContent = current.name;
   document.getElementById('d-rel').textContent = current.relation;
   document.getElementById('d-foot-note').textContent =
@@ -625,7 +681,9 @@ function renderTab() {
             `<span class="li"><span class="dot-s ${m.cls}"></span>${m.label} ${fmt(q.distribution[k])}
              (${(q.distribution[k] / total * 100).toFixed(1)}%)</span>`).join('')}</div>
         </div>`;
-      }).join('') : '<p class="desc">상류 quality_status 없음 — 검수된 seed 기반 테이블</p>'}
+      }).join('') : (t.domain === 'culture'
+        ? '<p class="desc">상류 quality_status 없음 — 검수된 seed 기반 테이블</p>'
+        : '<p class="desc">이 도메인은 quality_status 미계측 — 행 단위 품질 지표는 culture만 공개 중</p>')}
     </section>`;
   } else if (activeTab === 3) {
     const cols = t.sample.length ? Object.keys(t.sample[0]) : [];
@@ -643,12 +701,16 @@ function renderTab() {
     const stages = order.filter(([k]) => t.lineage[k]).map(([k, label]) =>
       `<div class="stage"><div class="t">${label}</div>
        <div class="names">${t.lineage[k].map(n => `<span>${esc(n)}</span>`).join('')}</div></div>`);
-    b.innerHTML = `<section><h3>Lineage — upstream → downstream</h3><div class="flow">
-      ${stages.join('<div class="arrow">↓</div>')}
-      <div class="arrow">↓</div>
-      <div class="stage gold"><div class="t">Gold · this dataset</div>
-        <div class="names"><span>${esc(t.name)}</span></div></div>
-    </div></section>`;
+    b.innerHTML = stages.length
+      ? `<section><h3>Lineage — upstream → downstream</h3><div class="flow">
+          ${stages.join('<div class="arrow">↓</div>')}
+          <div class="arrow">↓</div>
+          <div class="stage gold"><div class="t">Gold · this dataset</div>
+            <div class="names"><span>${esc(t.name)}</span></div></div>
+        </div></section>`
+      : `<section><h3>Lineage</h3>
+          <p class="desc">계보 메타 없음 — 이 도메인은 dbt manifest 미제공(Trino 실측 basic 카탈로그).
+          culture처럼 dbt 아티팩트를 등록하면 raw→gold 계보가 자동 채워집니다.</p></section>`;
   } else {
     const eps = [['', '상세 전부'], ['/schema', '스키마'], ['/quality', '품질 분포'], ['/sample', '샘플 5행']];
     b.innerHTML = `<section><h3>REST API · v1</h3><div class="api-list">

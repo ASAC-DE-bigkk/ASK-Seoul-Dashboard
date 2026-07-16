@@ -3,13 +3,18 @@
 사상: "계산은 파이프라인이 미리, API는 얇게". 이 스크립트가 W3 본작업에서
 Airflow 태스크(또는 transform 후속 스텝)가 될 부분의 데모 축소판이다.
 
+도메인 2계층:
+  - culture (rich)  — dbt manifest/catalog.json 보유 → 설명·contract·계보·quality까지
+  - 그 외 (basic)   — Trino 실측만(스키마·행수·기간·샘플). dbt 아티팩트가 없어서
+                       설명/계약/계보는 비어 있다 = "메타데이터 채무"가 화면에 그대로 보인다.
+
 소스 3종:
   1. dbt manifest.json  — 모델 설명·컬럼 설명·contract·계보(depends_on)
   2. dbt catalog.json   — 물리 컬럼 타입 (docs generate 산출물)
   3. Trino (docker compose exec 경유) — 행수·기간·quality_status 분포·샘플 5행
 
 실행:  python extract.py   →  snapshot/catalog_snapshot.json
-전제:  sample/ 스택 기동 중, dbt target/ 에 manifest.json + catalog.json 존재.
+전제:  sample/ 스택 기동 중, culture dbt target/ 에 manifest.json + catalog.json 존재.
 """
 from __future__ import annotations
 
@@ -22,21 +27,38 @@ from pathlib import Path
 HERE = Path(__file__).parent
 SAMPLE_DIR = HERE.parent / "sample"
 TARGET_DIR = SAMPLE_DIR / "dbt" / "domains" / "culture" / "target"
+DBT_DOMAINS_DIR = SAMPLE_DIR / "dbt" / "domains"
 OUT_PATH = HERE / "snapshot" / "catalog_snapshot.json"
+
+# basic 도메인 description 을 끌어올 dbt 프로젝트(모델명 전역 유일 → 병합 lookup).
+# traffic·weather 는 하나의 dbt 프로젝트(traffic_weather)로 합쳐져 있다.
+BASIC_MANIFEST_PROJECTS = ("commerce", "citydata", "traffic_weather", "transit")
 
 MAX_SAMPLE_TEXT = 120  # 샘플 셀 문자열 절단 길이 (UI 가독성)
 
+# dbt 아티팩트가 없는 도메인 — Trino 실측만으로 basic 카탈로그 구성. 라벨 → dev 스키마.
+OTHER_DOMAINS = {
+    "commerce": "commerce",
+    "traffic": "traffic",
+    "weather": "weather",
+    "citydata": "seoul_citydata",
+    "transit": "transit",
+}
 
-def trino_rows(sql: str) -> list[dict]:
+
+def trino_rows(sql: str, timeout: int = 300) -> list[dict]:
     """Trino CLI(JSON 출력 = 행마다 JSON 객체 한 줄)를 실행해 dict 리스트로 반환."""
     cmd = [
         "docker", "compose", "exec", "-T", "trino",
         "trino", "--output-format", "JSON", "--execute", sql,
     ]
-    proc = subprocess.run(
-        cmd, cwd=SAMPLE_DIR, capture_output=True, text=True,
-        encoding="utf-8", errors="replace", timeout=120,
-    )
+    try:
+        proc = subprocess.run(
+            cmd, cwd=SAMPLE_DIR, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"trino timeout({timeout}s): {sql[:120]}") from exc
     if proc.returncode != 0:
         raise RuntimeError(f"trino failed: {proc.stderr.strip()[:300]}")
     return [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
@@ -99,6 +121,109 @@ def truncate_cell(value):
     return value
 
 
+def measure(rel: str, columns: list[dict]) -> tuple[int, dict | None, list[dict]]:
+    """행수·시간축 범위·샘플 5행 — rich/basic 두 경로가 공유하는 Trino 실측."""
+    row_count = trino_rows(f"SELECT count(*) AS c FROM {rel}")[0]["c"]
+
+    date_col = next((c["name"] for c in columns if c["type"].startswith(("date", "timestamp"))), None)
+    date_range = None
+    if date_col:
+        r = trino_rows(
+            f'SELECT cast(min("{date_col}") AS varchar) AS mn, cast(max("{date_col}") AS varchar) AS mx FROM {rel}'
+        )[0]
+        date_range = {"column": date_col, "min": r["mn"], "max": r["mx"]}
+
+    try:  # 샘플은 느리거나 실패해도 테이블 자체는 유지 (count/스키마는 이미 확보)
+        sample = [
+            {k: truncate_cell(v) for k, v in row.items()}
+            for row in trino_rows(f"SELECT * FROM {rel} LIMIT 5", timeout=60)
+        ]
+    except RuntimeError as exc:
+        print(f"  ! sample skip: {exc}")
+        sample = []
+    return row_count, date_range, sample
+
+
+def load_basic_meta() -> dict:
+    """basic 도메인 모델의 description·컬럼설명·tags·contract 를 각 도메인 manifest 에서
+    병합해 name → 메타 dict 로. 모델명 전역 유일 전제(gold_citydata_*·gold_traffic_* 등).
+    manifest 는 도메인 dbt 를 `dbt deps && dbt parse` 하면 생긴다(gitignore 산출물)."""
+    lookup: dict[str, dict] = {}
+    for proj in BASIC_MANIFEST_PROJECTS:
+        path = DBT_DOMAINS_DIR / proj / "target" / "manifest.json"
+        if not path.exists():
+            print(f"  ! manifest 없음(설명 스킵): {proj}")
+            continue
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        all_nodes = {**manifest.get("nodes", {}), **manifest.get("sources", {})}
+        for uid, node in manifest.get("nodes", {}).items():
+            if node.get("resource_type") != "model":
+                continue
+            cfg = node.get("config", {})
+            lookup[node["name"]] = {
+                "description": node.get("description", ""),
+                "columns": {
+                    c: (meta.get("description", "") or "")
+                    for c, meta in node.get("columns", {}).items()
+                },
+                "tags": node.get("tags", []),
+                "contract_enforced": bool(cfg.get("contract", {}).get("enforced")),
+                "materialized": cfg.get("materialized", ""),
+                # 계보 — culture rich 와 같은 upstream_layers 재사용 (도메인 manifest 내 한정)
+                "lineage": upstream_layers(uid, all_nodes),
+            }
+    return lookup
+
+
+def extract_basic_domain(domain: str, schema: str, meta_lookup: dict) -> list[dict]:
+    """dbt 계보·quality 는 아직 미추출(culture 전용)이나, 도메인 manifest 에서
+    description·컬럼설명·tags·contract 는 채운다(dbt docs 투자분 반영)."""
+    names = sorted(
+        r["Table"] for r in trino_rows(f"SHOW TABLES FROM iceberg_dev.{schema}")
+        if r["Table"].startswith("gold_")
+        and "__dbt_" not in r["Table"]          # dbt 임시/백업 테이블 제외
+        and not r["Table"].startswith("recovery_")
+    )
+    tables = []
+    for name in names:
+        rel = f"iceberg_dev.{schema}.{name}"
+        meta = meta_lookup.get(name, {})
+        col_desc = meta.get("columns", {})
+        print(f"→ [{domain}] {name}")
+        try:
+            cols = trino_rows(f"SHOW COLUMNS FROM {rel}")
+            columns = [
+                {
+                    "name": c["Column"],
+                    "type": c["Type"],
+                    # manifest 설명 우선, 없으면 테이블 물리 COMMENT(persist_docs) 폴백.
+                    "description": col_desc.get(c["Column"]) or (c.get("Comment") or ""),
+                }
+                for c in cols
+            ]
+            row_count, date_range, sample = measure(rel, columns)
+        except RuntimeError as exc:
+            print(f"  ! skip: {exc}")
+            continue
+        tables.append({
+            "name": name,
+            "domain": domain,
+            "relation": rel,
+            "description": meta.get("description", ""),
+            "tags": meta.get("tags", []),
+            "contract_enforced": meta.get("contract_enforced", False),
+            "materialized": meta.get("materialized", ""),
+            "on_table_exists": None,
+            "row_count": row_count,
+            "date_range": date_range,
+            "columns": columns,
+            "quality": [],
+            "lineage": meta.get("lineage", {}),
+            "sample": sample,
+        })
+    return tables
+
+
 def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")
     manifest, catalog = load_artifacts()
@@ -123,21 +248,17 @@ def main() -> None:
             }
             for c, meta in sorted(cat_cols.items(), key=lambda kv: kv[1].get("index", 0))
         ]
+        if not columns:  # catalog.json 이 모델 빌드보다 오래된 경우 — Trino 실측 폴백
+            columns = [
+                {
+                    "name": c["Column"],
+                    "type": c["Type"],
+                    "description": node.get("columns", {}).get(c["Column"], {}).get("description", ""),
+                }
+                for c in trino_rows(f"SHOW COLUMNS FROM {rel}")
+            ]
 
-        row_count = trino_rows(f"SELECT count(*) AS c FROM {rel}")[0]["c"]
-
-        date_col = next((c["name"] for c in columns if c["type"].startswith(("date", "timestamp"))), None)
-        date_range = None
-        if date_col:
-            r = trino_rows(
-                f"SELECT cast(min({date_col}) AS varchar) AS mn, cast(max({date_col}) AS varchar) AS mx FROM {rel}"
-            )[0]
-            date_range = {"column": date_col, "min": r["mn"], "max": r["mx"]}
-
-        sample = [
-            {k: truncate_cell(v) for k, v in row.items()}
-            for row in trino_rows(f"SELECT * FROM {rel} LIMIT 5")
-        ]
+        row_count, date_range, sample = measure(rel, columns)
 
         quality = []
         for silver_uid in quality_parents(uid, nodes):
@@ -154,6 +275,7 @@ def main() -> None:
 
         tables.append({
             "name": name,
+            "domain": "culture",
             "relation": rel.replace('"', ""),
             "description": node.get("description", ""),
             "tags": node.get("tags", []),
@@ -169,9 +291,18 @@ def main() -> None:
             "sample": sample,
         })
 
+    basic_meta = load_basic_meta()
+    for domain, schema in OTHER_DOMAINS.items():
+        tables.extend(extract_basic_domain(domain, schema, basic_meta))
+
+    domains = {}
+    for t in tables:
+        domains[t["domain"]] = domains.get(t["domain"], 0) + 1
+
     snapshot = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "domain": "culture",
+        "domain": "all",
+        "domains": domains,
         "dbt_project": manifest.get("metadata", {}).get("project_name", ""),
         "table_count": len(tables),
         "tables": tables,

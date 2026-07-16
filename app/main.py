@@ -22,10 +22,11 @@ HERE = Path(__file__).parent
 SNAPSHOT_PATH = HERE.parent / "snapshot" / "catalog_snapshot.json"
 
 app = FastAPI(
-    title="ASK SEOUL — Culture Data Catalog API (demo)",
+    title="ASK SEOUL — Data Catalog API (demo)",
     description="dbt manifest/catalog + Trino 실측 스냅샷을 서빙하는 조회 전용 카탈로그 API. "
-                "W3 '품질·카탈로그 API화'의 culture 단독 축소판.",
-    version="0.1.0",
+                "W3 '품질·카탈로그 API화'의 축소판 — culture는 rich(계약·계보·품질), "
+                "그 외 도메인은 Trino 실측 basic 메타.",
+    version="0.2.0",
 )
 
 _snapshot = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
@@ -36,6 +37,7 @@ def _summary(t: dict) -> dict:
     return {
         **{k: t[k] for k in ("name", "relation", "description", "tags",
                              "contract_enforced", "materialized", "row_count", "date_range")},
+        "domain": t.get("domain", "culture"),
         "column_count": len(t["columns"]),
         "quality_source_count": len(t["quality"]),
     }
@@ -70,6 +72,7 @@ def list_tables() -> dict:
     return {
         "generated_at": _snapshot["generated_at"],
         "domain": _snapshot["domain"],
+        "domains": _snapshot.get("domains", {}),
         "table_count": _snapshot["table_count"],
         "tables": [_summary(t) for t in _snapshot["tables"]],
     }

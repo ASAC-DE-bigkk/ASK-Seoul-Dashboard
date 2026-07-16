@@ -7,9 +7,9 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
 <style>
   :root {
-    --bg: #0b1220; --bg-2: #0e1729; --panel: #111c31; --panel-line: #1e2c4a;
-    --ink: #eef2f9; --ink-2: #9fadc6; --ink-3: #5d6b84;
-    --accent: #4a90e2; --accent-deep: #2a78d6; --good: #35c06a;
+    --bg: #ffffff; --bg-2: #f7f8fa; --panel: #ffffff; --panel-line: #e2e6ed;
+    --ink: #171c26; --ink-2: #4c5566; --ink-3: #8a93a5;
+    --accent: #2a78d6; --accent-deep: #1c5cab; --good: #0ca30c;
     --mono: "Cascadia Mono", Consolas, monospace;
   }
   * { box-sizing: border-box; margin: 0; }
@@ -32,7 +32,7 @@
   .hero { max-width: 1080px; margin: 0 auto; padding: 72px 28px 56px; position: relative; }
   .hero::before { content: ''; position: absolute; top: -140px; left: 50%; transform: translateX(-50%);
                   width: 780px; height: 480px; pointer-events: none;
-                  background: radial-gradient(ellipse at center, rgba(42,120,214,.16), transparent 65%); }
+                  background: radial-gradient(ellipse at center, rgba(42,120,214,.07), transparent 65%); }
   .eyebrow { font-size: 11.5px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase;
              color: var(--accent); margin-bottom: 18px; }
   h1 { font-size: clamp(30px, 4.6vw, 46px); font-weight: 800; letter-spacing: -0.025em;
@@ -46,8 +46,8 @@
   .cta.primary { background: var(--accent-deep); color: #fff;
                  box-shadow: 0 4px 18px rgba(42,120,214,.35); }
   .cta.primary:hover { transform: translateY(-2px); box-shadow: 0 8px 26px rgba(42,120,214,.45); }
-  .cta.ghost { border: 1px solid var(--panel-line); color: var(--ink-2); background: rgba(255,255,255,.02); }
-  .cta.ghost:hover { color: var(--ink); border-color: #2c3e63; }
+  .cta.ghost { border: 1px solid var(--panel-line); color: var(--ink-2); background: #fff; }
+  .cta.ghost:hover { color: var(--ink); border-color: #b3bac7; }
 
   .live { max-width: 1080px; margin: 0 auto; padding: 0 28px; }
   .live .band { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px;
@@ -69,7 +69,7 @@
   .fgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
   .fcard { background: var(--panel); border: 1px solid var(--panel-line); border-radius: 13px; padding: 22px; }
   .fcard .ic { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center;
-               background: rgba(74,144,226,.12); color: var(--accent); margin-bottom: 14px; }
+               background: #eaf1fb; color: var(--accent); margin-bottom: 14px; }
   .fcard .ic svg { width: 17px; height: 17px; }
   .fcard b { font-size: 14.5px; font-weight: 700; display: block; margin-bottom: 6px; letter-spacing: -0.01em; }
   .fcard p { font-size: 12.5px; color: var(--ink-2); line-height: 1.65; }
@@ -82,10 +82,10 @@
   .apis .d { font-size: 13.5px; color: var(--ink-2); margin-top: 12px; }
   .apis .d code { font-family: var(--mono); font-size: 12px; color: var(--ink); background: var(--panel);
                   border: 1px solid var(--panel-line); border-radius: 5px; padding: 1px 7px; }
-  .term { background: #0a101d; border: 1px solid var(--panel-line); border-radius: 13px; overflow: hidden;
-          box-shadow: 0 20px 60px rgba(0,0,0,.4); }
+  .term { background: #0a101d; border: 1px solid #1e2c4a; border-radius: 13px; overflow: hidden;
+          box-shadow: 0 16px 44px rgba(18,26,44,.18); }
   .term .bar { display: flex; align-items: center; gap: 6px; padding: 10px 14px;
-               border-bottom: 1px solid var(--panel-line); }
+               border-bottom: 1px solid #1e2c4a; }
   .term .bar i { width: 10px; height: 10px; border-radius: 50%; }
   .term .bar i:nth-child(1) { background: #3a4a6b; } .term .bar i:nth-child(2) { background: #2c3e63; }
   .term .bar i:nth-child(3) { background: #22314f; }
@@ -135,7 +135,7 @@
 
 <section class="live rise d3">
   <div class="band" id="band">
-    <div class="cell"><div class="label">Published Datasets</div><div class="value num" id="v-ds">—</div><div class="sub">culture gold layer</div></div>
+    <div class="cell"><div class="label">Published Datasets</div><div class="value num" id="v-ds">—</div><div class="sub">전 도메인 gold layer</div></div>
     <div class="cell"><div class="label">Total Rows</div><div class="value num" id="v-rows">—</div><div class="sub">Trino 실측</div></div>
     <div class="cell"><div class="label">Contract Coverage</div><div class="value num" id="v-ct">—</div><div class="sub">dbt contract enforced</div></div>
     <div class="cell"><div class="label">Spatial Precision</div><div class="value num" id="v-q">—</div><div class="sub">행정동 정밀 매칭</div></div>

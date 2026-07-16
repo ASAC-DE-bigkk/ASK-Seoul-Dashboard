@@ -27,6 +27,7 @@ class QualityEntry(BaseModel):
 
 class TableSummary(BaseModel):
     name: str
+    domain: str = "culture"
     relation: str
     description: str = ""
     tags: list[str] = []
@@ -48,6 +49,7 @@ class TableDetail(TableSummary):
 class CatalogResponse(BaseModel):
     generated_at: str
     domain: str
+    domains: dict[str, int] = {}
     table_count: int
     tables: list[TableSummary]
 
