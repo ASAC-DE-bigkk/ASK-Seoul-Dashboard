@@ -81,6 +81,16 @@ CHART_TYPES: dict[str, dict] = {
         ],
         "options": {"area": False, "smooth": False},
     },
+    "race": {
+        # 타임랩스 — 시간 프레임을 영상처럼 재생하며 축 항목들의 순위 변화를 보여준다
+        "label": "타임랩스 경주", "icon": "race",
+        "slots": [
+            {"name": "time", "label": "시간축", "accepts": ["time", "sequence"], "required": True},
+            {"name": "axis", "label": "경주 축", "accepts": ["category", "geo_gu", "geo_dong", "geo_sido", "geo_country"], "required": True},
+            {"name": "value", "label": "값", "accepts": ["measure"], "required": True},
+        ],
+        "options": {"cumulative": True, "top_n": 12, "interval_ms": 800},
+    },
     "pie": {
         "label": "원형", "icon": "pie",
         "slots": [

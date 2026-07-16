@@ -308,6 +308,96 @@ const RENDER = (() => {
     };
   }
 
+  /* ── 타임랩스 경주 — 시간 프레임을 재생하며 순위 변화를 애니메이션으로 ── */
+  function buildRaceModel(ctx) {
+    const { chart, b } = ctx;
+    const o = chart.options || {};
+    const cumulative = o.cumulative !== false;
+    const topN = o.top_n || 12;
+    const interval = Math.max(200, Math.min(5000, o.interval_ms || 800));
+    const tLabel = axisLabelFn(ctx, b.time);
+    const byTime = new Map();
+    const axes = new Set();
+    ctx.rows.forEach(r => {
+      const t = String(r[0] ?? ''), a = String(r[1] ?? '—');
+      if (!byTime.has(t)) byTime.set(t, new Map());
+      const cur = byTime.get(t);
+      cur.set(a, (cur.get(a) || 0) + (Number(r[2]) || 0));
+      axes.add(a);
+    });
+    const times = smartOrder([...byTime.keys()]) || [...byTime.keys()].sort();
+    const running = new Map([...axes].map(a => [a, 0]));
+    const frames = times.map(t => {
+      const cur = byTime.get(t);
+      if (cumulative) cur.forEach((v, a) => running.set(a, running.get(a) + v));
+      const src = cumulative ? running : new Map([...axes].map(a => [a, cur.get(a) || 0]));
+      return { label: tLabel(t), rows: [...src.entries()].map(([a, v]) => [vlabel(b.axis, a), v]) };
+    });
+    return { frames, topN, interval, cumulative };
+  }
+
+  const raceGraphic = (text, playing) => ({
+    elements: [
+      { type: 'text', right: 18, bottom: 14, silent: true,
+        style: { text, font: '750 26px "Pretendard Variable", Pretendard, sans-serif', fill: '#dfe4ec' } },
+      { type: 'text', right: 18, bottom: 48, silent: true,
+        style: { text: playing ? '' : '⏸ 일시정지 — 클릭으로 재생', font: '600 11px Pretendard, sans-serif', fill: '#8a93a5' } },
+    ],
+  });
+
+  function rRace(ctx) {
+    const model = buildRaceModel(ctx);
+    ctx.__race = model;
+    ctx.note = `${model.frames.length}프레임 · ${model.cumulative ? '누적' : '구간'} · 클릭=일시정지`;
+    return {
+      ...base(),
+      tooltip: { ...tooltipBase, trigger: 'item',
+        formatter: p => `${escapeHtml(p.value[0])}<br><b>${fmt(p.value[1])}</b>` },
+      grid: { left: 8, right: 56, top: 8, bottom: 4, containLabel: true },
+      xAxis: { type: 'value', max: 'dataMax',
+               splitLine: { lineStyle: { color: INK.grid } },
+               axisLabel: { color: INK.m, fontSize: 10.5, formatter: fmt } },
+      yAxis: { type: 'category', inverse: true, max: model.topN - 1,
+               axisLine: { show: false }, axisTick: { show: false },
+               axisLabel: { color: INK.s, fontSize: 10.5 },
+               animationDuration: 200, animationDurationUpdate: 200 },
+      dataset: { source: model.frames.length ? model.frames[0].rows : [] },
+      series: [{
+        type: 'bar', encode: { x: 1, y: 0 }, realtimeSort: true,
+        barMaxWidth: 22, itemStyle: { color: PALETTE[0], borderRadius: [0, 4, 4, 0] },
+        label: { show: true, position: 'right', valueAnimation: true,
+                 color: INK.s, fontSize: 10, formatter: p => fmt(p.value[1]) },
+      }],
+      graphic: raceGraphic(model.frames.length ? model.frames[0].label : '', true),
+      animationDuration: 0,
+      animationDurationUpdate: model.interval,
+      animationEasing: 'linear', animationEasingUpdate: 'linear',
+    };
+  }
+
+  /* 프레임 재생 루프 — dispose 자가 감지로 정리, 클릭으로 일시정지/재생, 끝나면 잠시 쉬고 반복 */
+  function startRace(inst, model) {
+    stopRace(inst);
+    let i = 1, playing = true, holdUntil = 0;
+    inst.getZr().on('click', () => {
+      playing = !playing;
+      const cur = model.frames[Math.max(0, i - 1)];
+      inst.setOption({ graphic: raceGraphic(cur ? cur.label : '', playing) });
+    });
+    inst.__raceTimer = setInterval(() => {
+      if (!inst.getZr || (inst.isDisposed && inst.isDisposed())) { clearInterval(inst.__raceTimer); return; }
+      if (!playing || Date.now() < holdUntil) return;
+      const f = model.frames[i];
+      if (!f) { i = 0; holdUntil = Date.now() + 1500; return; }   // 한 바퀴 끝 — 쉬었다 처음부터
+      inst.setOption({ dataset: { source: f.rows }, graphic: raceGraphic(f.label, playing) });
+      i++;
+    }, model.interval);
+  }
+  function stopRace(inst) {
+    if (inst.__raceTimer) { clearInterval(inst.__raceTimer); inst.__raceTimer = null; }
+    if (inst.getZr && !((inst.isDisposed && inst.isDisposed()))) inst.getZr().off('click');
+  }
+
   function rStat(el, ctx) {
     const v = ctx.rows.length ? Number(ctx.rows[0][0]) : null;
     const usePct = pctLike(ctx.b.value, [v || 0]);
@@ -352,13 +442,16 @@ const RENDER = (() => {
     else if (t === 'pie') option = rPie(ctx);
     else if (t === 'scatter') option = rScatter(ctx);
     else if (t === 'heatmap') option = rHeatmap(ctx);
+    else if (t === 'race') option = rRace(ctx);
     else if (t === 'map_points') option = rMapPoints(ctx);
     else if (t.startsWith('map_')) option = rMap(ctx);
     else throw new Error(`렌더러 없음: ${t}`);
 
     let inst = echarts.getInstanceByDom(plotEl);
     if (!inst) inst = echarts.init(plotEl, null, { renderer: 'canvas' });
+    stopRace(inst);   // 같은 인스턴스가 경주→다른 타입으로 바뀌어도 재생 루프가 남지 않게
     inst.setOption(option, true);
+    if (t === 'race' && ctx.__race) startRace(inst, ctx.__race);
     return inst;
   }
 

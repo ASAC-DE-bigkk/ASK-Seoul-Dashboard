@@ -75,6 +75,10 @@ const RECO = (() => {
     else if (seq && v)
       put('line', 3, `${q(seq)} 순서대로 점을 이으면 곡선이 이야기를 들려줘요 — 생존곡선처럼요.`);
 
+    const raceAxis = cats.find(f => !knownSmall(f)) || cats[0] || gu || dong;
+    if ((t || seq) && raceAxis && v)
+      put('race', 3, `${q(t || seq)}가 흐르고 ${q(raceAxis)}가 겨루는 소스 — 순위가 엎치락뒤치락하는 걸 영상처럼 볼 수 있어요.`);
+
     const smallCat = cats.find(knownSmall);
     if (smallCat && v)
       put('pie', 2, `${q(smallCat)}는 가짓수가 몇 안 되죠 — 구성비는 도넛 한 바퀴면 충분해요.`);
@@ -137,6 +141,15 @@ const RECO = (() => {
       if (axis && v) mk(`${sl(axis)} 추이 — ${vLabel(v, 'sum')}`, { axis: axis.name, value: v.name }, 'sum');
       if (axis && v && smallCat) mk(`${sl(smallCat)}별로 갈라 본 추이`, { axis: axis.name, value: v.name, series: smallCat.name }, 'sum');
       if (axis && r) mk(`${sl(axis)} 흐름 — ${vLabel(r, 'avg')}`, { axis: axis.name, value: r.name }, 'avg');
+    } else if (type === 'race') {
+      const axis = cats.find(c => !knownSmall(c)) || cat0 || gu || dong;
+      const t0 = t || seq;
+      if (t0 && axis && v) {
+        mk(`${sl(axis)} 누적 경주 — ${vLabel(v, 'sum')}`,
+           { time: t0.name, axis: axis.name, value: v.name }, 'sum', { cumulative: true, top_n: 12 });
+        mk(`${sl(axis)} 구간별 경주 (비누적)`,
+           { time: t0.name, axis: axis.name, value: v.name }, 'sum', { cumulative: false, top_n: 12 });
+      }
     } else if (type === 'pie') {
       const c = smallCat || cat0;
       if (c && v) mk(`${sl(c)} 구성비`, { axis: c.name, value: v.name }, 'sum', { donut: true });

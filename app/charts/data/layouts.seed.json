@@ -127,6 +127,26 @@
    ]
   },
   {
+   "id": "seed-race",
+   "name": "타임랩스",
+   "charts": [
+    {
+     "id": "ra-cat-open",
+     "title": "업종별 누적 개업 경주 (2016~)",
+     "type": "race",
+     "source": "gold_license_flow_monthly",
+     "bindings": {"time": "ym", "axis": "category", "value": "cnt"},
+     "agg": "sum",
+     "filters": [
+      {"field": "event_type", "op": "eq", "value": "opened"},
+      {"field": "ym", "op": "gte", "value": "2016-01"}
+     ],
+     "options": {"cumulative": true, "top_n": 12, "interval_ms": 600},
+     "grid": {"x": 0, "y": 0, "w": 12, "h": 6}
+    }
+   ]
+  },
+  {
    "id": "seed-geo",
    "name": "지역 심층",
    "charts": [

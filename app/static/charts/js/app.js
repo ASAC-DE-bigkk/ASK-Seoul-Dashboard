@@ -127,6 +127,10 @@ function buildSpec(chart, src, b) {
     spec.limit = o.top_n || 300;
   }
   else if (t === 'heatmap') { spec.dims = [b.x, b.y]; spec.measures = [m(b.value)]; spec.limit = 5000; }
+  else if (t === 'race') {
+    spec.dims = [b.time, b.axis]; spec.measures = [m(b.value)];
+    spec.order_by = [{ field: b.time, dir: 'asc' }]; spec.limit = 5000;
+  }
   else if (t === 'map_points') {
     spec.dims = [b.lat, b.lng]; spec.measures = [m(b.value)]; spec.limit = o.top_n || 4000;
   }
@@ -417,6 +421,7 @@ const TYPE_ICONS = {
   area: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 19l5-7 4 3 6-8v12H3z" fill="currentColor" fill-opacity=".15"/></svg>',
   pie: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/><path d="M12 4v8l6 5"/></svg>',
   scatter: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="7" cy="15" r="1.7"/><circle cx="11" cy="9" r="1.7"/><circle cx="16" cy="13" r="1.7"/><circle cx="18" cy="6" r="1.7"/></svg>',
+  race: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h9M4 12h13M4 18h6"/><path d="M17 15l4 3-4 3z" fill="currentColor" stroke="none"/></svg>',
   heatmap: '<svg viewBox="0 0 24 24" fill="currentColor" opacity=".8"><rect x="4" y="4" width="5" height="5" rx="1"/><rect x="10" y="4" width="5" height="5" rx="1" opacity=".45"/><rect x="16" y="4" width="5" height="5" rx="1"/><rect x="4" y="10" width="5" height="5" rx="1" opacity=".3"/><rect x="10" y="10" width="5" height="5" rx="1"/><rect x="16" y="10" width="5" height="5" rx="1" opacity=".55"/><rect x="4" y="16" width="5" height="5" rx="1" opacity=".7"/><rect x="10" y="16" width="5" height="5" rx="1" opacity=".25"/><rect x="16" y="16" width="5" height="5" rx="1" opacity=".9"/></svg>',
   table: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M3 14h18M10 9v11"/></svg>',
   map: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/></svg>',
@@ -633,8 +638,12 @@ function renderCfgBind(body) {
               .filter(([a]) => CFG.type !== 'scatter' || (a !== 'count' && a !== 'count_distinct'))
               .map(([a, l]) => `<option value="${a}" ${a === CFG.agg ? 'selected' : ''}>${l} (${a})</option>`).join('')}
           </select></div>
-          ${def.options && 'top_n' in def.options ? `<div class="bind-row"><label>상위 N</label>
-            <input type="number" id="cfg-topn" min="3" max="500" value="${CFG.options.top_n || def.options.top_n}"></div>` : ''}
+          ${def.options ? Object.keys(def.options).filter(k => typeof def.options[k] === 'number').map(k => {
+            const lim = k === 'interval_ms' ? [200, 5000] : [3, 500];
+            const nm = { top_n: '상위 N', interval_ms: '프레임 간격(ms)' }[k] || k;
+            return `<div class="bind-row"><label>${nm}</label>
+            <input type="number" data-numopt="${k}" min="${lim[0]}" max="${lim[1]}" value="${CFG.options[k] ?? def.options[k]}"></div>`;
+          }).join('') : ''}
         </div>
         ${renderOptToggles(def)}
       </div>
@@ -675,8 +684,11 @@ function renderCfgBind(body) {
     $('cfg-preview').click();     // 적용 즉시 미리보기
   });
   $('cfg-agg').onchange = e => { CFG.agg = e.target.value; };
-  const topn = $('cfg-topn');
-  if (topn) topn.onchange = e => { CFG.options.top_n = Math.max(3, Math.min(500, Number(e.target.value) || 20)); };
+  body.querySelectorAll('input[data-numopt]').forEach(inp => inp.onchange = e => {
+    const k = inp.dataset.numopt;
+    const lo = Number(inp.min), hi = Number(inp.max);
+    CFG.options[k] = Math.max(lo, Math.min(hi, Number(e.target.value) || Number(inp.min)));
+  });
   body.querySelectorAll('.opt-toggle input').forEach(t => t.onchange = () => { CFG.options[t.dataset.opt] = t.checked; });
   $('f-add').onclick = () => { CFG.filters.push({ field: src.fields[0].name, op: 'eq', value: '' }); renderCfgBind(body); };
   body.querySelectorAll('#f-list [data-fi]').forEach(row => {
@@ -693,7 +705,8 @@ function renderOptToggles(def) {
   if (!def.options) return '';
   const toggles = Object.keys(def.options).filter(k => typeof def.options[k] === 'boolean');
   if (!toggles.length) return '';
-  const NAMES = { horizontal: '가로 막대', stacked: '누적', area: '면적 채움', smooth: '곡선', donut: '도넛' };
+  const NAMES = { horizontal: '가로 막대', stacked: '누적', area: '면적 채움', smooth: '곡선', donut: '도넛',
+                  cumulative: '누적 값(경주)' };
   return `<div style="display:flex;gap:14px;flex-wrap:wrap">` + toggles.map(k => `
     <label class="opt-toggle" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-2)">
       <input type="checkbox" data-opt="${k}" ${CFG.options[k] ?? def.options[k] ? 'checked' : ''}>${NAMES[k] || k}</label>`).join('') + '</div>';
@@ -955,6 +968,8 @@ async function selftest() {
     const flowSrc = S.srcDetails['gold_license_flow_monthly'] || await API.source('gold_license_flow_monthly');
     const recoFlow = RECO.types(flowSrc);
     ok('reco prefers line for time source', recoFlow.line && recoFlow.line.score >= 3);
+    ok('reco suggests race for time source', recoFlow.race && recoFlow.race.score >= 3
+       && RECO.combos(flowSrc, 'race').length >= 1);
   } catch (err) {
     R.push('FAIL exception: ' + err.message);
   }

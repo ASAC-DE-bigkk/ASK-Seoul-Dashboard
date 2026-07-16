@@ -55,11 +55,11 @@ app/main.py(FastAPI) ──▶ /api/v1/catalog/... + / (마켓플레이스 화�
   에 바인딩된다. 소스 목록·role 은 카탈로그 스냅샷에서 자동 파생되므로 gold 테이블·컬럼이
   변해도 코드 수정 없이 흡수되고, 저장된 필드가 사라지면 같은 role 로 폴백(타일에 '재바인딩' 표기).
   필터 비교는 `cast(col as varchar)`/`try_cast(col as double)` 로 조립해 물리 타입 드리프트에도 안전.
-- **도표 13종** — 스탯/막대/선/원형/산점도/히트맵/테이블 + 지도 6종(서울 자치구·행정동·법정동,
-  대한민국 시도, 세계, 좌표 밀도). 지도 GeoJSON 은 `static/charts/geo/` 에 동봉.
+- **도표 14종** — 스탯/막대/선/원형/산점도/히트맵/테이블/**타임랩스 경주**(시간 프레임 자동 재생)
+  + 지도 6종(서울 자치구·행정동·법정동, 대한민국 시도, 세계, 좌표 밀도). GeoJSON 동봉.
 - **레이아웃 페이지** — 왼쪽 사이드탭에서 추가/전환, 우클릭으로 순서변경(위/아래)·이름변경·복제·삭제.
   오른쪽 위 **레이아웃 변경 → 드래그·리사이즈 → 레이아웃 저장**(저장 전에는 일반 화면에서 고정).
-  저장소는 `app/charts/data/layouts.json`(시드: `layouts.seed.json`, commerce gold 3페이지 기본 제공).
+  저장소는 `app/charts/data/layouts.json`(시드: `layouts.seed.json`, commerce gold 4페이지 기본 제공).
 - **데이터 경로** — `/api/v1/charts/query` 가 온톨로지 스펙을 화이트리스트 검증 후 SQL 로 조립해
   Trino gold 를 직접 집계한다(식별자=레지스트리 실재 필드만, 값=이스케이프). 결과는 디스크 캐시
   (TTL 10분)로 박제되고, Trino 다운 시 stale 캐시로 응답해 화면이 죽지 않는다(mode 표기: live/cache/stale).
