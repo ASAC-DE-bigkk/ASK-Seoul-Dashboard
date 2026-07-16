@@ -436,7 +436,8 @@ function openCfg(mode, chart) {
     $('cfg-apply').textContent = '적용';
   } else {
     Object.assign(CFG, { chartId: null, source: null, src: null, type: null, bindings: {}, agg: 'sum',
-                         title: '', titleTouched: false, filters: [], options: {}, step: 'source', search: '' });
+                         title: '', titleTouched: false, filters: [], options: {}, step: 'source', search: '',
+                         comboIdx: null });
     $('cfg-mode-label').textContent = '차트 추가';
     $('cfg-apply').textContent = '추가';
   }
@@ -536,21 +537,44 @@ function renderCfgSource(body) {
   });
 }
 
+/* 추천 이유 툴팁 — 도표 카드/조합 칩 공용 */
+function recoTip() {
+  let tip = $('reco-tip');
+  if (!tip) { tip = document.createElement('div'); tip.id = 'reco-tip'; document.body.appendChild(tip); }
+  return tip;
+}
+function bindRecoTip(el, reason) {
+  el.addEventListener('mouseenter', () => {
+    const tip = recoTip();
+    tip.innerHTML = `<b>이 소스엔 이 도표</b>${esc(reason)}`;
+    tip.classList.add('on');
+    const r = el.getBoundingClientRect();
+    tip.style.left = Math.min(r.left, innerWidth - 270) + 'px';
+    tip.style.top = (r.bottom + 6) + 'px';
+  });
+  el.addEventListener('mouseleave', () => recoTip().classList.remove('on'));
+}
+
 function renderCfgType(body) {
   const src = CFG.src;
+  const reco = RECO.types(src);   // role 기반 — 어떤 소스가 와도 그 자리에서 계산
   body.innerHTML = `
     <section><h3>도표 타입 — '${esc(src.label)}' 가 지원하는 형태</h3>
-      <div class="type-grid">${Object.entries(S.meta.chart_types).map(([t, def]) => `
-        <button class="type-card ${CFG.type === t ? 'on' : ''}" data-t="${t}" ${src.supports.includes(t) ? '' : 'disabled'}>
+      <div class="type-grid">${Object.entries(S.meta.chart_types).map(([t, def]) => {
+        const isReco = reco[t] && reco[t].score >= 2;
+        return `
+        <button class="type-card ${CFG.type === t ? 'on' : ''} ${isReco ? 'reco' : ''}" data-t="${t}"
+                ${src.supports.includes(t) ? '' : 'disabled'}>
           ${TYPE_ICONS[def.icon] || TYPE_ICONS.bar}<b>${esc(def.label)}</b>
-        </button>`).join('')}</div>
+        </button>`;
+      }).join('')}</div>
       <p class="bind-hint" style="margin-top:10px">비활성 = 이 소스에 필요한 역할(시간축/지역/측정값)이 없는 도표.
-        온톨로지 role 기반으로 자동 판별됩니다.</p>
+        <span style="color:var(--accent-deep)">추천</span> 배지에 마우스를 올리면 컬럼 형태 기반 추천 이유가 보입니다.</p>
     </section>`;
-  body.querySelectorAll('.type-card:not(:disabled)').forEach(el => el.onclick = () => {
-    CFG.type = el.dataset.t;
-    autoBind();
-    CFG.step = 'bind'; renderCfg();
+  body.querySelectorAll('.type-card:not(:disabled)').forEach(el => {
+    const t = el.dataset.t;
+    el.onclick = () => { CFG.type = t; autoBind(); CFG.step = 'bind'; renderCfg(); };
+    if (reco[t] && reco[t].score >= 2) bindRecoTip(el, reco[t].reason);
   });
 }
 
@@ -558,17 +582,23 @@ function autoBind() {
   const def = typeDef(CFG.type), src = CFG.src;
   const b = {};
   const dc = src.default_chart;
+  const curatedHit = dc && dc.type === CFG.type;
+  // 우선순위: 큐레이션 힌트 → 추천 엔진 1순위 조합 → role 첫 후보
+  const combo = !curatedHit ? (RECO.combos(src, CFG.type)[0] || null) : null;
   for (const slot of def.slots) {
-    const want = dc && dc.type === CFG.type && dc.bindings && dc.bindings[slot.name];
+    const want = (curatedHit && dc.bindings && dc.bindings[slot.name])
+              || (combo && combo.bindings[slot.name]);
     const wf = want && src.fields.find(f => f.name === want && slot.accepts.includes(f.role));
     if (wf) { b[slot.name] = wf.name; continue; }
-    if (!slot.required) continue;               // 선택 슬롯은 사용자가 명시할 때만
+    if (!slot.required) continue;               // 선택 슬롯은 명시적 제안이 있을 때만
     const cands = fieldsByRole(src, slot.accepts);
     if (cands.length) b[slot.name] = cands[0].name;
   }
   CFG.bindings = b;
-  if (dc && dc.type === CFG.type && dc.agg) CFG.agg = dc.agg;
-  if (!CFG.titleTouched) CFG.title = `${src.label} · ${def.label}`;
+  CFG.comboIdx = combo ? 0 : null;
+  if (curatedHit && dc.agg) CFG.agg = dc.agg;
+  else if (combo) { CFG.agg = combo.agg; CFG.options = { ...CFG.options, ...combo.options }; }
+  if (!CFG.titleTouched) CFG.title = combo ? combo.label : `${src.label} · ${def.label}`;
 }
 
 function renderCfgBind(body) {
@@ -612,6 +642,16 @@ function renderCfgBind(body) {
     <section><h3>필터 <button class="btn ghost" id="f-add" style="margin-left:8px;padding:2px 8px;font-size:10.5px">+ 추가</button></h3>
       <div id="f-list">${CFG.filters.map(filterRow).join('') || '<p class="bind-hint">필터 없음 — 소스 전체를 집계합니다.</p>'}</div>
     </section>
+    ${(() => {
+      const combos = RECO.combos(src, CFG.type);   // 소스×도표 형태에서 즉석 계산 — 테이블이 바뀌어도 그 모양에 맞게
+      if (!combos.length) return '';
+      return `<section><h3>추천 조합 — 누르면 위 설정에 바로 적용됩니다</h3>
+        <div class="combo-row">${combos.map((c, i) => `
+          <button class="combo-chip ${CFG.comboIdx === i ? 'on' : ''}" data-ci="${i}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M13 2L4 14h6l-1 8 9-12h-6l1-8z"/></svg>
+            ${esc(c.label)}</button>`).join('')}
+        </div></section>`;
+    })()}
     <section><h3>미리보기</h3>
       <div class="preview-box"><div class="plot"></div><div class="hint">아래 '미리보기'를 누르면 여기에 그려집니다</div></div>
     </section>`;
@@ -619,7 +659,20 @@ function renderCfgBind(body) {
   $('cfg-name').oninput = e => { CFG.title = e.target.value; CFG.titleTouched = true; renderCfgTabs(); };
   body.querySelectorAll('select[data-slot]').forEach(s => s.onchange = () => {
     if (s.value) CFG.bindings[s.dataset.slot] = s.value; else delete CFG.bindings[s.dataset.slot];
+    CFG.comboIdx = null;   // 수동으로 만졌으면 추천 조합 선택 표시 해제
+    body.querySelectorAll('.combo-chip').forEach(ch => ch.classList.remove('on'));
     renderCfgTabs();
+  });
+  body.querySelectorAll('.combo-chip').forEach(ch => ch.onclick = () => {
+    const combo = RECO.combos(src, CFG.type)[Number(ch.dataset.ci)];
+    if (!combo) return;
+    CFG.bindings = { ...combo.bindings };
+    CFG.agg = combo.agg;
+    CFG.options = { ...CFG.options, ...combo.options };
+    CFG.comboIdx = Number(ch.dataset.ci);
+    if (!CFG.titleTouched) CFG.title = combo.label;
+    renderCfgBind(body);          // 위 폼(슬롯·집계·상위 N·토글)에 반영
+    $('cfg-preview').click();     // 적용 즉시 미리보기
   });
   $('cfg-agg').onchange = e => { CFG.agg = e.target.value; };
   const topn = $('cfg-topn');
@@ -813,6 +866,7 @@ async function boot() {
     const [meta, srcs, pages] = await Promise.all([API.meta(), API.sources('all'), API.pages()]);
     S.meta = meta; S.sources = srcs.sources; S.pages = pages;
     RENDER.setMeta(meta);
+    RECO.setMeta(meta);
     initAutoRefresh();
     updateSync();
     const urlPage = new URLSearchParams(location.search).get('page');
@@ -888,6 +942,19 @@ async function selftest() {
     const fb = resolveBindings({ type: 'bar', source: src.name,
       bindings: { axis: 'gone_field', value: 'lq' } }, src);
     ok('ontology fallback rebinds', fb.b.axis === 'gu' && fb.rebound.length === 1);
+
+    // 자동 추천 — role 형태만으로 도표·조합이 나와야 한다 (테이블 무관 일반 규칙)
+    const reco = RECO.types(src);
+    ok('reco highlights bar+map', reco.bar && reco.bar.score >= 2 && reco.map_seoul && reco.map_seoul.score >= 3
+       && reco.bar.reason.length > 10);
+    const combos = RECO.combos(src, 'bar');
+    ok('reco combos bindable', combos.length >= 1 && combos.every(c => {
+      try { return !!resolveBindings({ type: 'bar', source: src.name, bindings: c.bindings }, src).b.axis; }
+      catch { return false; }
+    }));
+    const flowSrc = S.srcDetails['gold_license_flow_monthly'] || await API.source('gold_license_flow_monthly');
+    const recoFlow = RECO.types(flowSrc);
+    ok('reco prefers line for time source', recoFlow.line && recoFlow.line.score >= 3);
   } catch (err) {
     R.push('FAIL exception: ' + err.message);
   }
@@ -910,6 +977,12 @@ boot().then(async () => {
       CFG.source = 'gold_license_gu_specialization';
       CFG.src = await API.source(CFG.source);
       CFG.type = 'bar'; autoBind(); CFG.step = 'bind'; renderCfg();
+    }
+    if (q.get('uidemo') === 'type') {
+      openCfg('add');
+      CFG.source = 'gold_license_flow_monthly';
+      CFG.src = await API.source(CFG.source);
+      CFG.step = 'type'; renderCfg();
     }
   }
 });

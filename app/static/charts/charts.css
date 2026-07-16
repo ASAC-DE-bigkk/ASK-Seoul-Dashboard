@@ -249,7 +249,33 @@ button { font: inherit; cursor: pointer; }
 /* 도표 타입 선택 */
 .type-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .type-card { border: 1px solid var(--line-soft); border-radius: 9px; padding: 12px 8px 10px;
-             background: none; display: flex; flex-direction: column; align-items: center; gap: 7px; }
+             background: none; display: flex; flex-direction: column; align-items: center; gap: 7px;
+             position: relative; }
+.type-card.reco { border-color: #c3d8f2; background: #fbfdff; }
+.type-card.reco::after { content: '추천'; position: absolute; top: 6px; right: 6px;
+  font-size: 9px; font-weight: 750; letter-spacing: .05em; color: var(--accent-deep);
+  background: var(--accent-soft); border: 1px solid #c3d8f2; border-radius: 4px; padding: 1px 5px; }
+.type-card.reco svg { color: var(--accent); }
+.type-card.reco b { color: var(--accent-deep); }
+
+/* 추천 이유 툴팁 */
+#reco-tip { position: fixed; z-index: 99; max-width: 250px; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 8px 26px rgba(18,26,44,.16);
+  padding: 9px 12px; font-size: 11.5px; line-height: 1.55; color: var(--ink-2);
+  pointer-events: none; opacity: 0; transition: opacity .12s; }
+#reco-tip.on { opacity: 1; }
+#reco-tip b { color: var(--accent-deep); font-size: 10px; letter-spacing: .08em;
+  text-transform: uppercase; display: block; margin-bottom: 3px; }
+
+/* 추천 조합 칩 (연결 단계) */
+.combo-row { display: flex; flex-wrap: wrap; gap: 7px; }
+.combo-chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--panel);
+  font-size: 12px; color: var(--ink-2); }
+.combo-chip svg { width: 11px; height: 11px; color: var(--accent); flex: none; }
+.combo-chip:hover { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-deep); }
+.combo-chip.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent);
+  background: var(--accent-soft); color: var(--accent-deep); font-weight: 600; }
 .type-card svg { width: 22px; height: 22px; color: var(--ink-3); }
 .type-card b { font-size: 11px; font-weight: 600; color: var(--ink-2); }
 .type-card:hover:not(:disabled) { border-color: var(--line); background: #f8fafc; }

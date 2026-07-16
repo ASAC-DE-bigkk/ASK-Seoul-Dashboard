@@ -59,6 +59,7 @@ app/static/charts/             ← 프론트 번들 (격리)
   index.html     스튜디오 셸 (CDN: Pretendard·echarts@5.5·gridstack@10.3)
   charts.css     디자인 토큰 = 마켓플레이스 index.html 과 동일 헤리티지
   js/api.js      fetch 래퍼 (problem+json → Error)
+  js/recommend.js 자동 추천 — role·이름패턴 기반 도표/조합 제안 (테이블 하드코딩 금지)
   js/geo.js      지도 자산 로딩·등록·지역 매칭 (MOIS_GU 사전, 동명 유일화·모호 제외)
   js/render.js   도표 렌더러 — 슬롯만 보고 그린다. 팔레트·피벗·정렬·null 규칙 여기
   js/app.js      상태·그리드(gridstack)·편집모드·드로어·사이드탭·자동갱신·셀프테스트
@@ -83,7 +84,8 @@ docs/            본 문서들
 1. `ontology.CHART_TYPES` 에 슬롯 계약 추가(라벨·icon·accepts·required·options)
 2. `render.js` 에 렌더러 추가 + `render()` 분기 연결, 필요 시 `TYPE_ICONS`(app.js)에 아이콘
 3. `buildSpec()`(app.js)에 스펙 매핑 분기 추가
-4. 검증: 드로어에서 추가 → 미리보기 → 셀프테스트·스크린샷
+4. `recommend.js` 에 추천 규칙(types 의 put + combos 분기)을 추가 — role 조건으로만 쓸 것
+5. 검증: 드로어에서 추가 → 미리보기 → 셀프테스트·스크린샷
 
 ### 6-2. 새 지도 추가
 1. GeoJSON 을 `app/static/charts/geo/` 에 동봉(외부 CDN 로딩 금지 — 재현성)
@@ -130,3 +132,5 @@ open "http://127.0.0.1:8765/charts?selftest=1"
 - 2026-07-16: Charts Studio 신설(`test/commerce-charts-studio`) — 온톨로지·도표 13종·지도 6종·
   레이아웃 페이지·시드 3페이지. 멀티에이전트 리뷰 확정 14건(critical 1) 수정 반영.
 - 2026-07-17: 자동 갱신(간격 선택·캐시 우회·무깜빡임) 추가. 본 docs/ 체계 신설.
+- 2026-07-17: 자동 추천(recommend.js) — 도표 단계 추천 배지·이유 툴팁, 연결 단계 원클릭 조합.
+  셀프테스트 17항목으로 확장.
