@@ -43,6 +43,18 @@ class SchemaVersion(Base):
     applied_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
 
+class AuthControl(Base):
+    """관리자 역할/상태 전이를 RDB 전체에서 직렬화하는 단일 제어 행."""
+
+    __tablename__ = "auth_control"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+
 class User(Base):
     __tablename__ = "auth_users"
     __table_args__ = (
@@ -64,7 +76,12 @@ class User(Base):
     approved_by_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("auth_users.id", ondelete="SET NULL"), nullable=True
     )
+    terms_accepted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    terms_version: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     membership_ends_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    mfa_enabled_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    mfa_seed_salt: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    mfa_last_counter: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     failed_login_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     locked_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -99,6 +116,7 @@ class AuthSession(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    remembered: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     ip_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     user_agent_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
@@ -121,6 +139,45 @@ class AccountToken(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
     consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class MfaChallenge(Base):
+    __tablename__ = "auth_mfa_challenges"
+    __table_args__ = (
+        Index("ix_auth_mfa_challenge_lookup", "token_hash", "expires_at", "consumed_at"),
+        Index("ix_auth_mfa_challenge_user", "user_id", "purpose", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("auth_users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    purpose: Mapped[str] = mapped_column(String(20), nullable=False)
+    setup_salt: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    remember: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    ip_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    user_agent_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class MfaRecoveryCode(Base):
+    __tablename__ = "auth_mfa_recovery_codes"
+    __table_args__ = (
+        UniqueConstraint("user_id", "code_hash", name="uq_auth_mfa_recovery_code"),
+        Index("ix_auth_mfa_recovery_active", "user_id", "used_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("auth_users.id", ondelete="CASCADE"), nullable=False
+    )
+    code_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    used_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
 
 class PageResource(Base):
@@ -243,6 +300,7 @@ class PaymentRequest(Base):
     __table_args__ = (
         Index("ix_auth_payment_status_requested", "status", "requested_at"),
         Index("ix_auth_payment_user_status", "user_id", "status"),
+        Index("uq_auth_payment_pending_key", "pending_key", unique=True),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -256,6 +314,7 @@ class PaymentRequest(Base):
         ForeignKey("auth_payment_plans.id", ondelete="RESTRICT"), nullable=False
     )
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    pending_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     requested_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
     reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     reviewed_by_id: Mapped[Optional[int]] = mapped_column(
@@ -295,6 +354,12 @@ class NotificationDelivery(Base):
     __tablename__ = "auth_notification_deliveries"
     __table_args__ = (
         Index("ix_auth_notification_created", "created_at"),
+        Index("ix_auth_notification_status_attempt", "status", "last_attempt_at"),
+        Index(
+            "ix_auth_notification_request_status",
+            "payment_request_id",
+            "status",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -305,6 +370,8 @@ class NotificationDelivery(Base):
     target: Mapped[str] = mapped_column(String(120), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     error: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
 

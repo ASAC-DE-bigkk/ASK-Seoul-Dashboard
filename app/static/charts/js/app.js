@@ -435,7 +435,7 @@ function openCfg(mode, chart) {
       bindings: { ...(chart.bindings || {}) }, agg: chart.agg || 'sum',
       title: chart.title, titleTouched: true,
       filters: JSON.parse(JSON.stringify(chart.filters || [])),
-      options: { ...(chart.options || {}) }, step: 'bind',
+      options: optionsForType(chart.type, chart.options || {}), step: 'bind',
     });
     $('cfg-mode-label').textContent = '차트 편집';
     $('cfg-apply').textContent = '적용';
@@ -499,6 +499,14 @@ function currentDraft() {
   return { id: CFG.chartId || 'draft', title: CFG.title, type: CFG.type, source: CFG.source,
            bindings: CFG.bindings, agg: CFG.agg, filters: CFG.filters, options: CFG.options };
 }
+function optionsForType(type, options = {}) {
+  const contract = (typeDef(type) || {}).options || {};
+  return Object.fromEntries(
+    Object.keys(contract)
+      .filter(key => Object.hasOwn(options, key))
+      .map(key => [key, options[key]])
+  );
+}
 
 function renderCfg() {
   disposePreview();      // body 재작성 전에 미리보기 인스턴스 정리 (detached DOM 누수 방지)
@@ -524,9 +532,9 @@ function renderCfgSource(body) {
       <div class="src-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
         <input id="src-q" type="search" placeholder="소스 검색" value="${esc(CFG.search)}"></div>
       <div class="src-doms">${domains.map(d =>
-        `<button class="chip ${CFG.domain === d ? 'on' : ''}" data-d="${d}">${d}</button>`).join('')}</div>
+        `<button class="chip ${CFG.domain === d ? 'on' : ''}" data-d="${esc(d)}">${esc(d)}</button>`).join('')}</div>
       <div class="src-list">${list.map(s => `
-        <button class="src-item ${CFG.source === s.name ? 'on' : ''}" data-s="${s.name}">
+        <button class="src-item ${CFG.source === s.name ? 'on' : ''}" data-s="${esc(s.name)}">
           <div class="info"><b>${esc(s.label)}</b><span>${esc(s.name)}</span></div>
           <span class="rows num">${Number(s.row_count).toLocaleString('ko-KR')} rows</span>
         </button>`).join('') || '<div style="color:var(--ink-4);font-size:12px;padding:16px">검색 결과 없음</div>'}
@@ -537,7 +545,7 @@ function renderCfgSource(body) {
   body.querySelectorAll('.src-item').forEach(el => el.onclick = async () => {
     CFG.source = el.dataset.s;
     CFG.src = S.srcDetails[CFG.source] || (S.srcDetails[CFG.source] = await API.source(CFG.source));
-    CFG.type = null; CFG.bindings = {};
+    CFG.type = null; CFG.bindings = {}; CFG.options = {};
     CFG.step = 'type'; renderCfg();
   });
 }
@@ -578,7 +586,13 @@ function renderCfgType(body) {
     </section>`;
   body.querySelectorAll('.type-card:not(:disabled)').forEach(el => {
     const t = el.dataset.t;
-    el.onclick = () => { CFG.type = t; autoBind(); CFG.step = 'bind'; renderCfg(); };
+    el.onclick = () => {
+      CFG.type = t;
+      CFG.options = {};
+      autoBind();
+      CFG.step = 'bind';
+      renderCfg();
+    };
     if (reco[t] && reco[t].score >= 2) bindRecoTip(el, reco[t].reason);
   });
 }
@@ -613,15 +627,15 @@ function renderCfgBind(body) {
     const cur = CFG.bindings[slot.name] || '';
     return `<div class="bind-row">
       <label>${esc(slot.label)} ${slot.required ? '<span class="req">*</span>' : ''}</label>
-      <select data-slot="${slot.name}">
+      <select data-slot="${esc(slot.name)}">
         ${slot.required ? '' : '<option value="">(없음)</option>'}
-        ${cands.map(f => `<option value="${f.name}" ${f.name === cur ? 'selected' : ''}>${esc(f.label)} — ${f.name} (${f.role})</option>`).join('')}
+        ${cands.map(f => `<option value="${esc(f.name)}" ${f.name === cur ? 'selected' : ''}>${esc(f.label)} — ${esc(f.name)} (${esc(f.role)})</option>`).join('')}
       </select></div>`;
   };
   const filterRow = (f, i) => `
     <div class="bind-grid" data-fi="${i}" style="grid-template-columns: 1.2fr .7fr 1fr auto; align-items:end">
       <div class="bind-row"><label>필드</label><select class="ff">${src.fields.map(x =>
-        `<option value="${x.name}" ${x.name === f.field ? 'selected' : ''}>${esc(x.label)} — ${x.name}</option>`).join('')}</select></div>
+        `<option value="${esc(x.name)}" ${x.name === f.field ? 'selected' : ''}>${esc(x.label)} — ${esc(x.name)}</option>`).join('')}</select></div>
       <div class="bind-row"><label>조건</label><select class="fo">${['eq', 'neq', 'gte', 'lte', 'like', 'in'].map(o =>
         `<option ${o === f.op ? 'selected' : ''}>${o}</option>`).join('')}</select></div>
       <div class="bind-row"><label>값</label><input type="text" class="fv" value="${esc(f.op === 'in' && Array.isArray(f.value) ? f.value.join(',') : (f.value ?? ''))}"></div>
@@ -642,7 +656,7 @@ function renderCfgBind(body) {
             const lim = k === 'interval_ms' ? [200, 5000] : [3, 500];
             const nm = { top_n: '상위 N', interval_ms: '프레임 간격(ms)' }[k] || k;
             return `<div class="bind-row"><label>${nm}</label>
-            <input type="number" data-numopt="${k}" min="${lim[0]}" max="${lim[1]}" value="${CFG.options[k] ?? def.options[k]}"></div>`;
+            <input type="number" data-numopt="${esc(k)}" min="${lim[0]}" max="${lim[1]}" value="${esc(CFG.options[k] ?? def.options[k])}"></div>`;
           }).join('') : ''}
         </div>
         ${renderOptToggles(def)}

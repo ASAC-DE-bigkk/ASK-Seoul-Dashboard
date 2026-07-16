@@ -10,8 +10,10 @@ Internet → CloudFront(optional) → AWS WAF Web ACL → ALB → private app ta
 
 1. Web ACL을 CloudFront 또는 ALB에 연결한다.
 2. AWS Managed Rules의 common, known bad inputs, IP reputation 계열을 먼저 `Count`로 적용한다.
-3. `/api/v1/auth/login`, `/register`, `/forgot-password`에 낮은 rate-based rule을 별도로 둔다.
-4. `/api/v1/*` 전체에는 더 높은 일반 API 한도를 둔다.
+3. `/api/v1/auth/login`, `/register`, `/forgot-password`, `/resend-verification`,
+   `/auth/mfa/verify`에 낮은 rate-based rule을 별도로 둔다.
+4. `/api/v1/charts/query`는 Trino 부하를 고려해 일반 API보다 낮은 별도 한도를 두고,
+   `/api/v1/*` 전체에는 더 높은 일반 API 한도를 둔다.
 5. 3~7일 로그를 보고 정상 NAT/기업망을 확인한 후 `Block` 또는 CAPTCHA/challenge로 전환한다.
 6. ALB security group은 CloudFront를 쓰면 CloudFront origin-facing prefix list/승인 경로만,
    직접 ALB면 필요한 공개 경로만 허용한다. 앱 인스턴스는 ALB security group에서만 받는다.
@@ -26,6 +28,8 @@ AWS WAF rate-based rule은 조건에 맞는 요청을 집계하고 evaluation wi
 |---|---:|---|
 | 로그인 | IP당 5분 30회 | 초기는 Count, 이후 Block/CAPTCHA |
 | 가입·비밀번호 찾기 | IP당 5분 15회 | Block |
+| 이메일 인증·MFA | IP당 5분 30회 | Block/CAPTCHA |
+| Charts query | 사용자/IP당 5분 150회 | Block |
 | 일반 API | IP당 5분 1,500회 | Block 또는 challenge |
 | 알려진 악성 IP | managed IP reputation | Block |
 

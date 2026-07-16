@@ -31,6 +31,46 @@ def problem(status: int, title: str, detail: str) -> JSONResponse:
     )
 
 
+class RequestBodyLimitMiddleware:
+    """Content-Length가 없거나 거짓이어도 ASGI body stream에서 상한을 강제한다."""
+
+    def __init__(self, app, *, max_bytes: int):
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        received = 0
+        exceeded = False
+
+        async def limited_receive():
+            nonlocal received, exceeded
+            if exceeded:
+                return {"type": "http.request", "body": b"", "more_body": False}
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.max_bytes:
+                    exceeded = True
+                    return {
+                        "type": "http.request",
+                        "body": b"",
+                        "more_body": False,
+                    }
+            return message
+
+        async def limited_send(message):
+            if not exceeded:
+                await send(message)
+
+        await self.app(scope, limited_receive, limited_send)
+        if exceeded:
+            response = problem(413, "request too large", "요청 본문이 너무 큽니다.")
+            await response(scope, receive, send)
+
+
 class InMemoryRateLimiter:
     """단일 프로세스 보호용 fixed-window limiter.
 
@@ -57,23 +97,33 @@ class InMemoryRateLimiter:
                     },
                 )
                 self._last_cleanup = time.monotonic()
+            active_keys: list[tuple[str, str, int]] = []
             for label, seconds in WINDOWS.items():
                 limit = int(limits.get(label, 0) or 0)
                 if limit <= 0:
                     continue
                 bucket = now - (now % seconds)
                 key = (subject, label, bucket)
+                active_keys.append(key)
                 if self._counts[key] >= limit:
                     exceeded_retry = max(exceeded_retry, bucket + seconds - now)
-                else:
+            if exceeded_retry == 0:
+                for key in active_keys:
                     self._counts[key] += 1
         return exceeded_retry == 0, max(1, exceeded_retry)
 
 
 class AuthSecurityMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, *, settings):
+    def __init__(
+        self,
+        app,
+        *,
+        settings,
+        inline_script_hashes_by_path: dict[str, tuple[str, ...]] | None = None,
+    ):
         super().__init__(app)
         self.settings = settings
+        self.inline_script_hashes_by_path = inline_script_hashes_by_path or {}
         self.rate_limiter = InMemoryRateLimiter()
         self._ip_cache: tuple[float, tuple[str, ...]] = (0.0, ())
 
@@ -138,6 +188,7 @@ class AuthSecurityMiddleware(BaseHTTPMiddleware):
                             "admin_access",
                             "admin_policies",
                             "admin_payments",
+                            "admin_audit",
                         )
                     )
                 if not allowed:
@@ -181,8 +232,19 @@ class AuthSecurityMiddleware(BaseHTTPMiddleware):
             category = "login"
         elif path == "/api/v1/auth/register":
             category = "register"
+        elif path in {
+            "/api/v1/auth/verify-email",
+            "/api/v1/auth/resend-verification",
+        }:
+            category = "verify_email"
         elif path == "/api/v1/auth/forgot-password":
             category = "forgot_password"
+        elif path == "/api/v1/auth/reset-password":
+            category = "password_reset"
+        elif path == "/api/v1/auth/mfa/verify":
+            category = "mfa"
+        elif path == "/api/v1/charts/query":
+            category = "charts_query"
         limits = config.get(category, {})
         subject = f"user:{user.id}" if user else f"ip:{client_ip}"
         if category not in {"anonymous", "authenticated"}:
@@ -256,18 +318,41 @@ class AuthSecurityMiddleware(BaseHTTPMiddleware):
             "Permissions-Policy",
             "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
         )
+        inline_hashes = (
+            self.inline_script_hashes_by_path.get(request.url.path, ())
+            if response.headers.get("content-type", "").startswith("text/html")
+            else ()
+        )
+        script_sources = [
+            "'self'",
+            *(f"'sha256-{value}'" for value in inline_hashes),
+            "https://cdn.jsdelivr.net",
+        ]
         response.headers.setdefault(
             "Content-Security-Policy",
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            f"script-src {' '.join(script_sources)}; "
+            "script-src-attr 'none'; "
             "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
             "img-src 'self' data:; connect-src 'self'; font-src 'self' https://cdn.jsdelivr.net; "
             "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
         )
+        response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+        response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+        response.headers.setdefault("Origin-Agent-Cluster", "?1")
+        response.headers.setdefault("X-Permitted-Cross-Domain-Policies", "none")
         response.headers.setdefault("Vary", "Origin, Sec-Fetch-Site")
         path = request.url.path
-        if path.startswith(("/auth", "/api/v1/auth", "/profile", "/admin", "/api/v1/me", "/api/v1/admin")):
+        if path.startswith("/auth"):
+            response.headers["Referrer-Policy"] = "no-referrer"
+        protected_page = page_key_for_path(path) is not None
+        private_api = (
+            path.startswith("/api/v1/")
+            and not path.startswith("/api/v1/public/")
+        )
+        if path.startswith("/auth") or protected_page or private_api:
             response.headers["Cache-Control"] = "no-store"
+            response.headers["Pragma"] = "no-cache"
         if self.settings.cookie_secure:
             response.headers.setdefault(
                 "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
@@ -291,6 +376,8 @@ def page_key_for_path(path: str) -> str | None:
     }
     if path in exact:
         return exact[path]
+    if path.startswith("/docs/") or path.startswith("/redoc/"):
+        return "api_docs"
     prefixes = (
         ("/api/v1/catalog", "catalog"),
         ("/api/v1/charts", "charts"),
@@ -301,6 +388,7 @@ def page_key_for_path(path: str) -> str | None:
         ("/api/v1/admin/policies", "admin_policies"),
         ("/api/v1/admin/ip-blocks", "admin_policies"),
         ("/api/v1/admin/payments", "admin_payments"),
+        ("/api/v1/admin/audit", "admin_audit"),
     )
     for prefix, key in prefixes:
         if path == prefix or path.startswith(prefix + "/"):

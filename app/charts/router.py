@@ -4,6 +4,8 @@ main.py 는 이 router 를 include 만 한다. 에러는 본체와 같은 RFC 78
 """
 from __future__ import annotations
 
+import math
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -16,7 +18,7 @@ from .models import (
     PageCreate, PageDetail, PagePatch, PageSummary,
     QueryRequest, QueryResponse, ReorderRequest, SourceDetail, SourcesResponse,
 )
-from .ontology import registry
+from .ontology import CHART_TYPES, registry
 
 router = APIRouter(prefix="/api/v1/charts", tags=["charts"])
 
@@ -41,6 +43,81 @@ def _personalize_source(source: dict, ontology: dict) -> dict:
     if source["name"] in labels:
         data["label"] = str(labels[source["name"]])[:80]
     return data
+
+
+def _validate_charts(charts) -> None:
+    ids = [chart.id for chart in charts]
+    if len(ids) != len(set(ids)):
+        raise querybuilder.SpecError("한 레이아웃 안에서 차트 ID는 중복될 수 없습니다")
+    for chart in charts:
+        source = registry.get(chart.source)
+        if source is None:
+            raise querybuilder.SpecError(f"알 수 없는 차트 소스입니다: {chart.source}")
+        chart_type = CHART_TYPES.get(chart.type)
+        if chart_type is None or chart.type not in source.get("supports", []):
+            raise querybuilder.SpecError(
+                f"{chart.source} 소스에서 지원하지 않는 차트 타입입니다: {chart.type}"
+            )
+        fields = {field["name"]: field for field in source["fields"]}
+        slots = {slot["name"]: slot for slot in chart_type["slots"]}
+        unknown_slots = set(chart.bindings) - set(slots)
+        if unknown_slots:
+            raise querybuilder.SpecError(
+                f"알 수 없는 바인딩 슬롯입니다: {', '.join(sorted(unknown_slots))}"
+            )
+        for slot_name, slot in slots.items():
+            field_name = chart.bindings.get(slot_name)
+            if slot.get("required") and not field_name:
+                raise querybuilder.SpecError(f"{chart.type}의 {slot_name} 바인딩이 필요합니다")
+            if not field_name:
+                continue
+            field = fields.get(field_name)
+            if field is None:
+                raise querybuilder.SpecError(
+                    f"{chart.source}에 없는 바인딩 필드입니다: {field_name}"
+                )
+            if field["role"] not in slot["accepts"]:
+                raise querybuilder.SpecError(
+                    f"{field_name} 필드는 {slot_name} 슬롯에 사용할 수 없습니다"
+                )
+        if chart.agg not in querybuilder.AGGS:
+            raise querybuilder.SpecError(f"허용되지 않는 집계입니다: {chart.agg}")
+        option_contract = chart_type.get("options", {})
+        unknown_options = set(chart.options) - set(option_contract)
+        if unknown_options:
+            raise querybuilder.SpecError(
+                f"알 수 없는 차트 옵션입니다: {', '.join(sorted(unknown_options))}"
+            )
+        for key, value in chart.options.items():
+            default = option_contract[key]
+            if isinstance(default, bool):
+                if not isinstance(value, bool):
+                    raise querybuilder.SpecError(f"{key} 옵션은 boolean이어야 합니다")
+            elif (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+            ):
+                raise querybuilder.SpecError(f"{key} 옵션은 유한한 숫자여야 합니다")
+            elif key == "interval_ms" and not 200 <= value <= 5_000:
+                raise querybuilder.SpecError("interval_ms 옵션은 200~5000이어야 합니다")
+            elif key == "top_n" and not 1 <= value <= 5_000:
+                raise querybuilder.SpecError("top_n 옵션은 1~5000이어야 합니다")
+        for item in chart.filters:
+            if item.field not in fields or item.op not in querybuilder.OPS:
+                raise querybuilder.SpecError("차트 필터 필드 또는 연산자가 올바르지 않습니다")
+        if set(chart.grid) - {"x", "y", "w", "h"}:
+            raise querybuilder.SpecError("grid에는 x, y, w, h만 사용할 수 있습니다")
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < 0
+            or value > 1000
+            for value in chart.grid.values()
+        ):
+            raise querybuilder.SpecError("grid 값은 0~1000 정수여야 합니다")
+        if chart.grid.get("w", 1) < 1 or chart.grid.get("h", 1) < 1:
+            raise querybuilder.SpecError("grid의 w와 h는 1 이상이어야 합니다")
 
 
 @router.get("/meta", summary="온톨로지 메타 — 사용자 설정이 반영된 도표 타입·값 라벨·도메인")
@@ -131,7 +208,10 @@ def create_layout_page(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    return layouts.create_page(db, user.id, req.name)
+    try:
+        return layouts.create_page(db, user.id, req.name)
+    except layouts.LimitExceeded as exc:
+        return _problem(409, "layout limit exceeded", str(exc))
 
 
 @router.get("/layouts/{page_id}", response_model=PageDetail,
@@ -159,10 +239,13 @@ def patch_layout_page(
     try:
         charts = None
         if req.charts is not None:
+            _validate_charts(req.charts)
             charts = [c.model_dump() for c in req.charts]
         return layouts.update_page(db, user.id, page_id, name=req.name, charts=charts)
     except layouts.NotFound:
         return _problem(404, "page not found", f"레이아웃 '{page_id}' 이 없습니다.")
+    except querybuilder.SpecError as exc:
+        return _problem(400, "invalid layout", str(exc))
 
 
 @router.delete("/layouts/{page_id}", status_code=204,
@@ -189,6 +272,8 @@ def duplicate_layout_page(
         return layouts.duplicate_page(db, user.id, page_id)
     except layouts.NotFound:
         return _problem(404, "page not found", f"레이아웃 '{page_id}' 이 없습니다.")
+    except layouts.LimitExceeded as exc:
+        return _problem(409, "layout limit exceeded", str(exc))
 
 
 @router.post("/layouts-reorder", response_model=list[PageSummary],

@@ -5,7 +5,7 @@ response_model 로 선언된 스키마를 어기면 서버가 에러를 내고,
 """
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ColumnInfo(BaseModel):
@@ -30,7 +30,7 @@ class TableSummary(BaseModel):
     domain: str = "culture"
     relation: str
     description: str = ""
-    tags: list[str] = []
+    tags: list[str] = Field(default_factory=list)
     contract_enforced: bool
     materialized: str = ""
     row_count: int
@@ -49,9 +49,17 @@ class TableDetail(TableSummary):
 class CatalogResponse(BaseModel):
     generated_at: str
     domain: str
-    domains: dict[str, int] = {}
+    domains: dict[str, int] = Field(default_factory=dict)
     table_count: int
     tables: list[TableSummary]
+
+
+class CatalogSnapshotResponse(BaseModel):
+    generated_at: str
+    domain: str
+    domains: dict[str, int] = Field(default_factory=dict)
+    table_count: int
+    tables: list[TableDetail]
 
 
 class SchemaResponse(BaseModel):

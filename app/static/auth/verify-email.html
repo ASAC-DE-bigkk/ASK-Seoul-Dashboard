@@ -1,0 +1,10 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>이메일 인증 · ASK SEOUL</title><link rel="stylesheet" href="/static/auth/auth.css"></head>
+<body><div class="auth-page"><nav class="auth-nav"><a class="brand" href="/"><span class="brand-mark">AS</span>ASK SEOUL</a></nav>
+<main class="auth-main"><section class="auth-card"><div class="eyebrow">Verify email</div><h1>이메일 인증 확인</h1>
+<p class="lead">메일 보안 스캐너의 자동 열람으로 링크가 소모되지 않도록 직접 확인해야 인증이 완료됩니다.</p>
+<div id="message" class="message info">아래 버튼을 눌러 이메일 인증을 완료하세요.</div>
+<button class="btn primary" id="verify-button" type="button" style="width:100%;margin-top:20px">이메일 인증 완료</button>
+<div class="auth-links"><span></span><a href="/auth/login">로그인으로 돌아가기</a></div>
+</section></main><footer class="auth-foot">인증 토큰은 URL fragment에만 존재하며 서버 접근 로그로 전송되지 않습니다.</footer></div>
+<script src="/static/auth/session-ui.js"></script><script src="/static/auth/auth-pages.js"></script><script>setupVerify()</script></body></html>

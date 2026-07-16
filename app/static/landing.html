@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ASK SEOUL — Seoul Open-Data Lakehouse</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"
+      integrity="sha384-GIdEBaqGN9mNkDkMkzMHW8EKUqtpPIe/sLj1X7DIrnc9uPtLROJgmuDlh+3rBw0j" crossorigin="anonymous">
 <link rel="stylesheet" href="/static/auth/session-ui.css">
 <style>
   :root {
@@ -14,6 +15,7 @@
     --mono: "Cascadia Mono", Consolas, monospace;
   }
   * { box-sizing: border-box; margin: 0; }
+  :focus-visible { outline: 3px solid rgba(42,120,214,.42) !important; outline-offset: 2px; }
   html { font-size: 15px; scroll-behavior: smooth; }
   body { font-family: "Pretendard Variable", Pretendard, "Segoe UI", "Malgun Gothic", system-ui, sans-serif;
          background: var(--bg); color: var(--ink); line-height: 1.6;
@@ -116,8 +118,8 @@
   <div class="mark">AS</div><b>ASK SEOUL</b>
   <div class="links">
     <a href="#features">솔루션</a>
-    <a href="/docs" target="_blank">API Docs</a>
-    <a href="/health" target="_blank">Status</a>
+    <a href="/docs" target="_blank" rel="noopener noreferrer">API Docs</a>
+    <a href="/health" target="_blank" rel="noopener noreferrer">Status</a>
     <span id="landing-auth-slot" class="auth-landing-actions"></span>
   </div>
 </nav>
@@ -131,7 +133,7 @@
   <div class="cta-row rise d3">
     <a class="cta primary" id="use-solution" href="/catalog">사용하기
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12h14m-6-6l6 6-6 6"/></svg></a>
-    <a class="cta ghost" href="/docs" target="_blank">API 문서 보기</a>
+    <a class="cta ghost" href="/docs" target="_blank" rel="noopener noreferrer">API 문서 보기</a>
   </div>
 </header>
 
@@ -198,7 +200,7 @@
   <span>dbt · Trino · Iceberg · Airflow · R2</span>
   <div class="r">
     <a href="/catalog">Marketplace</a>
-    <a href="/docs" target="_blank">API Docs</a>
+    <a href="/docs" target="_blank" rel="noopener noreferrer">API Docs</a>
   </div>
 </footer>
 

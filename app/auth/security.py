@@ -6,10 +6,14 @@ import hmac
 import ipaddress
 import re
 import secrets
+import base64
+import struct
+import time
 import unicodedata
 from datetime import datetime
 from email.utils import parseaddr
 from typing import Iterable
+from urllib.parse import urlsplit
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerifyMismatchError
@@ -106,6 +110,53 @@ def token_digest(token: str, pepper: str) -> str:
     ).hexdigest()
 
 
+def derive_totp_secret(master_key: str, public_id: str, seed_salt: str) -> str:
+    material = hmac.new(
+        master_key.encode("utf-8"),
+        f"{public_id}:{seed_salt}".encode("utf-8"),
+        hashlib.sha256,
+    ).digest()[:20]
+    return base64.b32encode(material).decode("ascii").rstrip("=")
+
+
+def totp_code(secret: str, counter: int, digits: int = 6) -> str:
+    padded = secret + "=" * ((8 - len(secret) % 8) % 8)
+    key = base64.b32decode(padded, casefold=True)
+    digest = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    value = struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
+    return str(value % (10**digits)).zfill(digits)
+
+
+def verify_totp(
+    secret: str,
+    value: str,
+    *,
+    last_counter: int | None = None,
+    now: int | None = None,
+    window: int = 1,
+) -> int | None:
+    normalized = re.sub(r"\s+", "", value)
+    if not re.fullmatch(r"\d{6}", normalized):
+        return None
+    current = int((now if now is not None else time.time()) // 30)
+    for counter in range(current - window, current + window + 1):
+        if last_counter is not None and counter <= last_counter:
+            continue
+        if hmac.compare_digest(totp_code(secret, counter), normalized):
+            return counter
+    return None
+
+
+def normalize_recovery_code(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]", "", value).upper()
+
+
+def recovery_code() -> str:
+    raw = secrets.token_hex(8).upper()
+    return "-".join((raw[:4], raw[4:8], raw[8:12], raw[12:16]))
+
+
 def stable_digest(value: str, pepper: str) -> str:
     return hmac.new(
         pepper.encode("utf-8"), value.encode("utf-8"), hashlib.sha256
@@ -119,9 +170,19 @@ def mask_public_id(public_id: str) -> str:
 
 
 def safe_next_path(value: str | None, allowed_prefixes: Iterable[str]) -> str:
-    if not value or not value.startswith("/") or value.startswith("//"):
+    if (
+        not value
+        or not value.startswith("/")
+        or value.startswith("//")
+        or "\\" in value
+        or any(ord(char) < 0x20 for char in value)
+    ):
         return "/catalog"
-    if any(value == prefix or value.startswith(prefix + "/") for prefix in allowed_prefixes):
+    parsed = urlsplit(value)
+    if parsed.scheme or parsed.netloc:
+        return "/catalog"
+    path = parsed.path
+    if any(path == prefix or path.startswith(prefix + "/") for prefix in allowed_prefixes):
         return value
     return "/catalog"
 

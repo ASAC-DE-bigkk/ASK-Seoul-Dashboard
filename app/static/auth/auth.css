@@ -7,6 +7,10 @@
 }
 * { box-sizing:border-box; margin:0; }
 [hidden] { display:none !important; }
+:focus-visible {
+  outline:3px solid rgba(42,120,214,.42) !important;
+  outline-offset:2px;
+}
 body {
   min-height:100vh; font-family:"Pretendard Variable",Pretendard,"Segoe UI","Malgun Gothic",system-ui,sans-serif;
   color:var(--ink); background:
@@ -31,6 +35,9 @@ a { color:var(--accent-deep); }
 .auth-card .eyebrow { font-size:10px; font-weight:800; letter-spacing:.14em; color:var(--accent); text-transform:uppercase; }
 .auth-card h1 { font-size:24px; line-height:1.25; margin-top:8px; letter-spacing:-.025em; }
 .auth-card .lead { color:var(--ink-2); font-size:13px; margin-top:8px; }
+.legal-card { width:min(720px,100%); }
+.legal-card h2 { font-size:14px; margin-top:22px; }
+.legal-card p:not(.lead) { color:var(--ink-2); font-size:12px; margin-top:6px; }
 .form { margin-top:24px; display:flex; flex-direction:column; gap:15px; }
 .field label { display:block; font-size:11px; font-weight:700; color:var(--ink-2); margin-bottom:5px; }
 .field input,.field select,.field textarea {
@@ -123,11 +130,30 @@ td .btn { padding:4px 8px; font-size:10.5px; }
 .plan b { display:block; font-size:13px; }
 .plan .price { font-size:17px; font-weight:750; margin:7px 0; }
 .plan small { color:var(--ink-3); }
+.security-form { max-width:520px; }
+.security-panel {
+  border:1px solid var(--line-soft); border-radius:11px; padding:16px; margin-top:16px;
+  background:#fbfcfe;
+}
+.security-panel h3 { font-size:13px; }
+.steps { margin:14px 0 14px 20px; padding:0; color:var(--ink-2); font-size:12px; }
+.secret-box {
+  display:flex; align-items:center; gap:8px; margin:12px 0; padding:10px;
+  border:1px solid var(--line); border-radius:9px; background:#fff;
+}
+.secret-box code { min-width:0; flex:1; overflow-wrap:anywhere; font-size:13px; letter-spacing:.08em; }
+.recovery-codes {
+  display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:16px 0;
+}
+.recovery-codes code {
+  padding:9px 10px; border:1px solid var(--line); border-radius:8px; background:#f8fafc;
+  text-align:center; font-size:12px; letter-spacing:.06em;
+}
 @media(max-width:900px) {
   .console-side { width:190px; } .grid-3,.plans { grid-template-columns:repeat(2,1fr); }
 }
 @media(max-width:680px) {
   .console { display:block; } .console-side { width:auto; position:static; } .console-nav { flex-direction:row; overflow:auto; }
   .console-side .logout { margin-top:8px; } .grid-2,.grid-3,.plans { grid-template-columns:1fr; }
-  .console-body { padding:16px; }
+  .console-body { padding:16px; } .recovery-codes { grid-template-columns:1fr; }
 }

@@ -7,7 +7,8 @@ Internet → Cloudflare proxy/WAF → Tunnel 또는 잠긴 origin → app
 ```
 
 1. DNS record를 proxied로 전환하고 WAF managed rules를 적용한다.
-2. 로그인·가입·비밀번호 찾기와 일반 API를 서로 다른 rate limiting rule로 분리한다.
+2. 로그인·가입·비밀번호 찾기·이메일 인증·MFA, Charts query, 일반 API를 서로 다른 rate
+   limiting rule로 분리한다.
 3. 처음에는 Log/Managed Challenge로 오탐을 확인한 뒤 Block을 적용한다.
 4. origin은 Cloudflare Tunnel을 사용하거나 Cloudflare IP/인증된 origin pull만 허용해 우회를 막는다.
 5. 봇/credential stuffing이 보이면 Bot Management/Turnstile을 로그인·가입 흐름에 단계적으로 붙인다.
@@ -23,6 +24,8 @@ Cloudflare rate limiting rule은 표현식에 맞는 요청 수와 기간, 초�
 |---|---:|---|
 | 로그인 | IP당 1분 8회 | Managed Challenge 또는 Block |
 | 가입·비밀번호 찾기 | IP당 5분 10회 | Managed Challenge |
+| 이메일 인증·MFA | IP당 5분 30회 | Managed Challenge |
+| Charts query | 사용자/IP당 1분 30회 | Block |
 | 일반 API | IP당 1분 300회 | Block |
 
 ## 앱 설정

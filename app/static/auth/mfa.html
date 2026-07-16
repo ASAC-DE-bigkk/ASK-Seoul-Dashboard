@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>2단계 인증 · ASK SEOUL</title>
+  <link rel="stylesheet" href="/static/auth/auth.css">
+</head>
+<body>
+<div class="auth-page">
+  <nav class="auth-nav">
+    <a class="brand" href="/"><span class="brand-mark">AS</span>ASK SEOUL</a>
+    <div class="right"><a href="/auth/login">다른 계정으로 로그인</a></div>
+  </nav>
+  <main class="auth-main">
+    <section class="auth-card">
+      <div class="eyebrow">Two-factor authentication</div>
+      <h1>2단계 인증</h1>
+      <p class="lead">인증 앱의 6자리 코드 또는 아직 사용하지 않은 복구 코드를 입력하세요.</p>
+      <div id="message" class="message info" hidden role="status" aria-live="polite"></div>
+      <form id="mfa-form" class="form">
+        <div class="field">
+          <label for="mfa-code">인증 코드</label>
+          <input id="mfa-code" name="code" inputmode="numeric" autocomplete="one-time-code"
+                 minlength="6" maxlength="40" spellcheck="false" required autofocus>
+          <span class="hint">복구 코드는 하이픈을 포함하거나 제외해도 됩니다.</span>
+        </div>
+        <button class="btn primary" type="submit">인증하고 로그인</button>
+      </form>
+      <div class="auth-links"><a href="/auth/login">로그인 다시 시작</a><a href="/auth/forgot-password">계정 복구</a></div>
+    </section>
+  </main>
+  <footer class="auth-foot">일회용 코드는 한 번 승인되면 같은 시간 구간에서 재사용할 수 없습니다.</footer>
+</div>
+<script src="/static/auth/session-ui.js"></script>
+<script src="/static/auth/auth-pages.js"></script>
+<script>setupMfa()</script>
+</body>
+</html>

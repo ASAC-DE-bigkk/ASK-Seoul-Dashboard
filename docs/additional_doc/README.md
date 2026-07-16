@@ -7,6 +7,7 @@
 | 인증·보안 | [auth/security-architecture.md](auth/security-architecture.md) |
 | RDB | [database/schema.md](database/schema.md) |
 | 운영 알림 | [notifications/operations.md](notifications/operations.md) |
+| 개인정보·보존 | [legal/privacy-and-retention.md](legal/privacy-and-retention.md) |
 | AWS | [cloud/aws-waf.md](cloud/aws-waf.md) |
 | GCP | [cloud/gcp-cloud-armor.md](cloud/gcp-cloud-armor.md) |
 | Cloudflare | [cloud/cloudflare-waf.md](cloud/cloudflare-waf.md) |

@@ -43,13 +43,18 @@ curl -s http://127.0.0.1:30586/v1/info | head -c 80  # {"nodeId":...,"state":"AC
 
 ```bash
 cd sample/dashboard
-python3.12 -m venv .venv                      # macOS/Linux (Windows: py -3.12 -m venv .venv)
+python3 -m venv .venv                         # macOS/Linux (Windows: py -3 -m venv .venv)
 .venv/bin/pip install -r requirements.txt     # Windows: .venv\Scripts\pip
 cp .env.example .env
 # .env 값을 편집한 뒤:
 set -a; source .env; set +a
 python3 scripts/init_auth_db.py
 python3 scripts/create_admin.py --email admin@example.com
+# production에서 권한 계정 MFA가 강제되면 최초 관리자 MFA도 등록한다.
+python3 scripts/setup_mfa.py --email admin@example.com
+
+# 권한 계정이 인증 앱과 복구 코드를 모두 분실한 break-glass 상황에서만 사용
+python3 scripts/setup_mfa.py --email admin@example.com --reset-existing
 ```
 
 기동:
@@ -65,11 +70,12 @@ python3 scripts/create_admin.py --email admin@example.com
 |---|---|
 | http://127.0.0.1:8765/ | 랜딩 |
 | http://127.0.0.1:8765/auth/login | 로그인 |
+| http://127.0.0.1:8765/auth/resend-verification | 이메일 인증 재전송 |
 | http://127.0.0.1:8765/profile | 프로필·온톨로지·이용권 |
 | http://127.0.0.1:8765/admin | 회원·권한·정책·결제 운영 콘솔 |
 | http://127.0.0.1:8765/catalog | 데이터 마켓플레이스(카탈로그) |
 | http://127.0.0.1:8765/charts | **Charts Studio** |
-| http://127.0.0.1:8765/docs | Swagger (전체 API) |
+| http://127.0.0.1:8765/docs | Swagger (권한 계정용 읽기 전용 API 계약) |
 | http://127.0.0.1:8765/health | 헬스 체크 |
 
 기동 검증(권장): 브라우저로 `http://127.0.0.1:8765/charts?selftest=1` 접속 →
@@ -82,10 +88,19 @@ python3 scripts/create_admin.py --email admin@example.com
 | `CHARTS_TRINO_URL` | `http://127.0.0.1:30586` | Trino 주소 |
 | `CHARTS_TRINO_USER` | `charts-studio` | X-Trino-User 헤더 |
 | `CHARTS_CACHE_TTL` | `600` (초) | 질의 결과 디스크 캐시 신선 기간 |
+| `CHARTS_MAX_CONCURRENT_QUERIES` | `4` | 프로세스별 Trino live 질의 동시 실행 상한 |
 | `DATABASE_URL` | `sqlite:///./data/ask_seoul.db` | 인증·권한·레이아웃 RDB |
 | `AUTH_PUBLIC_BASE_URL` | `http://127.0.0.1:8765` | 쿠키/CSRF/이메일 링크 기준 origin |
 | `AUTH_SESSION_PEPPER` | 개발만 자동 생성 | 운영 필수 secret |
+| `AUTH_MFA_MASTER_KEY` | 개발은 pepper에서 파생 | 운영 TOTP seed 파생용 장기 secret |
+| `AUTH_REQUIRE_MFA_FOR_PRIVILEGED` | production이면 true | 운영자·최고관리자 MFA 강제 |
+| `AUTH_SESSION_IDLE_MINUTES` | `120` | 일반 세션 idle 만료 |
+| `AUTH_REMEMBER_IDLE_DAYS` | `7` | 로그인 유지 세션 idle 만료 |
+| `AUTH_MAX_SESSIONS_PER_USER` | `10` | 사용자별 활성 세션 상한 |
+| `AUTH_MAX_REQUEST_BYTES` | `262144` | 요청 body 최대 byte |
 | `AUTH_COOKIE_SECURE` | production이면 true | HTTPS 전용 세션 쿠키 |
+| `SMTP_USE_TLS` / `SMTP_USE_SSL` | true / false | SMTP 암호화 방식. 동시에 true 금지 |
+| `SMTP_ALLOW_PLAINTEXT` | false | 별도 보호된 내부 relay 예외만 명시적으로 허용 |
 
 운영 전체 설정은 [additional_doc/auth/security-architecture.md](additional_doc/auth/security-architecture.md)를 따른다.
 
@@ -116,6 +131,22 @@ docker compose down        # 컨테이너 제거(볼륨은 유지). -v 는 데�
 
 > 참고: 레이아웃은 RDB 사용자 데이터다. 전체 DB 파일 삭제로 초기화하지 말고 대상 사용자 행을 좁혀 처리한다.
 > `app/charts/data/cache/`는 계속 gitignore 대상 런타임 캐시이며, 커밋되는 기본 레이아웃은 시드뿐이다.
+
+### 3-1. 정기 유지보수
+
+```bash
+# 중단 후 남은 결제 알림 outbox 복구·전송
+python3 scripts/process_notifications.py --limit 100 --stale-minutes 5
+
+# 만료 토큰·challenge·오래된 세션·사용된 복구 코드·종료 알림·만료 IP block 대상 건수만 확인
+python3 scripts/cleanup_auth.py
+
+# 확인한 대상에 한해 실제 반영
+python3 scripts/cleanup_auth.py --apply
+```
+
+알림 처리는 1~5분 간격, 인증 임시데이터 정리는 일 1회부터 시작하고 실제 트래픽·보존 정책에 맞춰
+조정한다. cleanup은 기본 dry-run이므로 출력 건수와 백업 상태를 확인한 뒤 `--apply`를 사용한다.
 
 ---
 

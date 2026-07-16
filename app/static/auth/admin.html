@@ -16,6 +16,7 @@
       <a href="#access" data-tab="access" data-page-key="admin_access">접근 관리</a>
       <a href="#payments" data-tab="payments" data-page-key="admin_payments">결제 승인</a>
       <a href="#policies" data-tab="policies" data-page-key="admin_policies">정책·IP</a>
+      <a href="#audit" data-tab="audit" data-page-key="admin_audit">감사 로그</a>
       <a href="/catalog" data-page-key="catalog">데이터 마켓플레이스</a>
       <a href="/charts" data-page-key="charts">Charts Studio</a>
       <a href="/profile">내 프로필</a>
@@ -31,9 +32,11 @@
         <h2>회원 관리</h2><p class="desc">승인 대기 회원을 활성화하고 역할·이용권·개별 페이지 권한을 관리합니다.</p>
         <div class="toolbar">
           <select id="user-status"><option value="">전체 상태</option><option value="pending">승인 대기</option><option value="active">활성</option><option value="suspended">정지</option><option value="rejected">거절</option></select>
+          <input id="user-search" type="search" placeholder="이메일·닉네임·UUID 검색">
           <button class="btn" id="refresh-users" type="button">새로고침</button>
         </div>
         <div class="table-wrap"><table><thead><tr><th>회원</th><th>ID</th><th>역할</th><th>상태</th><th>이메일 인증</th><th>이용권 종료</th><th>관리</th></tr></thead><tbody id="users-body"></tbody></table></div>
+        <div class="toolbar"><button class="btn" id="load-more-users" type="button" hidden>회원 더 보기</button></div>
       </section>
 
       <section class="section admin-panel" id="panel-access" hidden>
@@ -69,13 +72,23 @@
           <div class="table-wrap"><table><thead><tr><th>네트워크</th><th>사유</th><th>만료</th><th>상태</th><th>관리</th></tr></thead><tbody id="ip-body"></tbody></table></div>
         </div>
       </section>
+
+      <section class="section admin-panel" id="panel-audit" hidden>
+        <h2>보안·관리 감사 로그</h2><p class="desc">로그인 실패, 세션, MFA, 회원·권한·정책·결제 변경 이벤트를 최신순으로 조회합니다.</p>
+        <div class="toolbar">
+          <input id="audit-event-type" placeholder="이벤트 유형 정확히 입력">
+          <button class="btn" id="refresh-audit" type="button">조회</button>
+        </div>
+        <div class="table-wrap"><table><thead><tr><th>시각</th><th>이벤트</th><th>행위자</th><th>대상</th><th>IP 지문</th><th>상세</th></tr></thead><tbody id="audit-body"></tbody></table></div>
+        <div class="toolbar"><button class="btn" id="load-more-audit" type="button" hidden>이전 기록 더 보기</button></div>
+      </section>
     </div>
   </main>
 </div>
 
 <div id="user-modal" class="modal-wrap" hidden>
-  <section class="modal">
-    <h3>회원 권한·상태 변경</h3>
+  <section class="modal" role="dialog" aria-modal="true" aria-labelledby="user-modal-heading">
+    <h3 id="user-modal-heading">회원 권한·상태 변경</h3>
     <p class="desc" id="user-modal-title"></p>
     <form id="user-form" class="form">
       <input name="public_id" type="hidden">
@@ -83,9 +96,30 @@
         <div class="field"><label>역할</label><select name="role"><option value="guest">게스트</option><option value="member">일반회원</option><option value="operator">운영자</option><option value="admin">최고관리자</option></select></div>
         <div class="field"><label>상태</label><select name="status"><option value="pending">승인 대기</option><option value="active">활성</option><option value="suspended">정지</option><option value="rejected">거절</option></select></div>
       </div>
-      <div class="field"><label>이용권 종료일</label><input name="membership_ends_at" type="datetime-local"><span class="hint">비워두면 기존 값을 유지합니다.</span></div>
+      <div class="field"><label>이용권 종료일</label><input name="membership_ends_at" type="datetime-local"><span class="hint">비워서 저장하면 이용권 종료일을 해제합니다.</span></div>
+      <div class="field"><label>회원 UUID</label><div class="secret-box"><code id="user-public-id"></code><button class="btn" id="copy-user-id" type="button">UUID 복사</button></div></div>
+      <div class="field" id="mfa-admin-reset" hidden>
+        <label for="mfa-admin-reset-reason">MFA 긴급 초기화</label>
+        <span class="hint" id="mfa-admin-reset-status"></span>
+        <input id="mfa-admin-reset-reason" maxlength="500" placeholder="본인 확인 방법과 초기화 사유를 10자 이상 기록">
+        <button class="btn danger" id="mfa-admin-reset-button" type="button">MFA·복구코드·세션 초기화</button>
+        <span class="hint">게스트·일반회원만 화면에서 초기화할 수 있습니다. 권한 계정은 운영 CLI break-glass 절차를 사용합니다.</span>
+      </div>
       <div class="field"><label>개별 페이지 override</label><div id="user-permissions" class="grid-2"></div><span class="hint">역할 기본값을 상속하거나 사용자별로 허용/차단할 수 있습니다.</span></div>
       <div class="actions"><button class="btn" type="button" data-close-user>취소</button><button class="btn primary" type="submit">변경 저장</button></div>
+    </form>
+  </section>
+</div>
+
+<div id="review-modal" class="modal-wrap" hidden>
+  <section class="modal" role="dialog" aria-modal="true" aria-labelledby="review-modal-heading">
+    <h3 id="review-modal-heading">결제 요청 검토</h3>
+    <p class="desc" id="review-modal-summary"></p>
+    <form id="review-form" class="form">
+      <input name="request_id" type="hidden">
+      <input name="approve" type="hidden">
+      <div class="field"><label for="review-note">검토 메모</label><textarea id="review-note" name="note" maxlength="500"></textarea><span class="hint" id="review-note-hint">거절 시 사유를 입력해야 합니다.</span></div>
+      <div class="actions"><button class="btn" type="button" data-close-review>취소</button><button class="btn primary" id="submit-review" type="submit">처리</button></div>
     </form>
   </section>
 </div>

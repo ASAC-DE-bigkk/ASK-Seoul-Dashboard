@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import math
+import re
 from typing import Any
 
 AGGS = {"sum", "avg", "min", "max", "count", "count_distinct"}
@@ -18,10 +20,24 @@ class SpecError(ValueError):
     """스펙이 온톨로지/화이트리스트에 안 맞음 — 400 으로 변환된다."""
 
 
+def _quote_ident(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
 def _ident(name: str, fields: dict[str, dict]) -> str:
     if name not in fields:
         raise SpecError(f"'{name}' 은(는) 이 소스에 없는 필드입니다")
-    return '"' + name + '"'
+    return _quote_ident(name)
+
+
+def _relation(value: str) -> str:
+    parts = value.split(".")
+    if not 1 <= len(parts) <= 3 or any(
+        not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", part)
+        for part in parts
+    ):
+        raise SpecError("소스 relation 형식이 안전하지 않습니다")
+    return ".".join(_quote_ident(part) for part in parts)
 
 
 def _lit(value: Any) -> str:
@@ -30,6 +46,8 @@ def _lit(value: Any) -> str:
     if isinstance(value, bool):
         return "TRUE" if value else "FALSE"
     if isinstance(value, (int, float)):
+        if isinstance(value, float) and not math.isfinite(value):
+            raise SpecError("필터 숫자는 유한한 값이어야 합니다")
         return repr(value)
     s = str(value)
     if any(ord(ch) < 0x20 for ch in s):
@@ -39,7 +57,7 @@ def _lit(value: Any) -> str:
 
 def _dim_expr(field: dict) -> str:
     """차원 표현식 — timestamp/date 는 JSON 안전하게 varchar 로 낸다."""
-    quoted = '"' + field["name"] + '"'
+    quoted = _quote_ident(field["name"])
     base = field.get("type", "").split("(")[0].lower()
     if base.startswith("timestamp") or base == "date":
         return f"cast({quoted} as varchar)"
@@ -127,7 +145,7 @@ def build(source: dict, spec: dict) -> str:
         f = fields.get(d)
         if f is None:
             raise SpecError(f"'{d}' 은(는) 이 소스에 없는 필드입니다")
-        select_parts.append(f'{_dim_expr(f)} as "{d}"')
+        select_parts.append(f"{_dim_expr(f)} as {_quote_ident(d)}")
         aliases.append(d)
     for m in measures:
         agg = m.get("agg", "sum")
@@ -137,10 +155,12 @@ def build(source: dict, spec: dict) -> str:
             raise SpecError(f"alias 형식이 잘못됐습니다: {alias}")
         if alias in aliases:
             alias = f"{alias}_{len(aliases)}"
-        select_parts.append(f'{_measure_expr(field_name, agg, fields)} as "{alias}"')
+        select_parts.append(
+            f"{_measure_expr(field_name, agg, fields)} as {_quote_ident(alias)}"
+        )
         aliases.append(alias)
 
-    sql = f"select {', '.join(select_parts)} from {source['relation']}"
+    sql = f"select {', '.join(select_parts)} from {_relation(source['relation'])}"
 
     conds = [_condition(f, fields) for f in (spec.get("filters") or [])]
     if conds:
@@ -157,7 +177,7 @@ def build(source: dict, spec: dict) -> str:
             if key not in aliases:
                 raise SpecError(f"order_by 는 선택된 필드만 가능합니다: {key}")
             direction = "desc" if o.get("dir", "asc") == "desc" else "asc"
-            parts.append(f'"{key}" {direction}')
+            parts.append(f"{_quote_ident(key)} {direction}")
         sql += " order by " + ", ".join(parts)
 
     limit = min(int(spec.get("limit") or 1000), MAX_LIMIT)

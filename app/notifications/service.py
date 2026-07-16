@@ -9,8 +9,14 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
+import re
 from dataclasses import dataclass, field
 from typing import Any
+
+
+def _clean_line(value: Any, limit: int) -> str:
+    text = str(value).replace("\r", " ").replace("\n", " ")
+    return "".join(ch for ch in text if ord(ch) >= 0x20)[:limit]
 
 
 @dataclass(frozen=True)
@@ -22,10 +28,17 @@ class NotificationMessage:
     target_roles: tuple[str, ...] = ("admin", "operator")
 
     def plain_text(self) -> str:
-        lines = [f"[{self.severity.upper()}] {self.title}", self.body]
-        lines.extend(f"- {key}: {value}" for key, value in self.fields.items())
-        lines.append(f"- target_roles: {', '.join(self.target_roles)}")
-        return "\n".join(lines)
+        title = _clean_line(self.title, 200)
+        severity = _clean_line(self.severity.upper(), 20)
+        body = str(self.body).replace("\r\n", "\n").replace("\r", "\n")[:4000]
+        lines = [f"[{severity}] {title}", body]
+        lines.extend(
+            f"- {_clean_line(key, 80)}: {_clean_line(value, 500)}"
+            for key, value in list(self.fields.items())[:30]
+        )
+        roles = ", ".join(_clean_line(role, 30) for role in self.target_roles[:10])
+        lines.append(f"- target_roles: {roles}")
+        return "\n".join(lines)[:35_000]
 
 
 @dataclass(frozen=True)
@@ -66,6 +79,11 @@ class NotificationResult:
         }
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def _post_json(url: str, payload: dict) -> None:
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
@@ -74,7 +92,8 @@ def _post_json(url: str, payload: dict) -> None:
         method="POST",
         headers={"content-type": "application/json", "user-agent": "ask-seoul-notifier/1"},
     )
-    with urllib.request.urlopen(request, timeout=8) as response:
+    opener = urllib.request.build_opener(_NoRedirect)
+    with opener.open(request, timeout=8) as response:
         if response.status >= 300:
             raise RuntimeError(f"HTTP {response.status}")
 
@@ -101,21 +120,130 @@ class NotificationService:
             error=f"{type(exc).__name__}: 전송 실패",
         )
 
+    @staticmethod
+    def _telegram_target(chat_id: str) -> str:
+        suffix = chat_id[-4:] if len(chat_id) >= 4 else chat_id
+        return f"chat:***{suffix}"
+
+    @staticmethod
+    def _valid_webhook(url: str, channel: str) -> bool:
+        parsed = urllib.parse.urlsplit(url)
+        if (
+            parsed.scheme != "https"
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
+            return False
+        if channel == "discord":
+            return (
+                parsed.hostname in {"discord.com", "discordapp.com"}
+                and parsed.path.startswith("/api/webhooks/")
+            )
+        return (
+            parsed.hostname in {"hooks.slack.com", "hooks.slack-gov.com"}
+            and parsed.path.startswith("/services/")
+        )
+
+    def configuration(self) -> NotificationResult:
+        """자격증명을 노출하지 않고 채널 구성 여부와 안전한 대상 표지만 반환한다."""
+        discord_valid = bool(self.discord_url) and self._valid_webhook(
+            self.discord_url, "discord"
+        )
+        slack_valid = bool(self.slack_url) and self._valid_webhook(
+            self.slack_url, "slack"
+        )
+        results = [
+            DeliveryResult(
+                "discord",
+                discord_valid,
+                False,
+                "webhook" if discord_valid else "",
+                "" if not self.discord_url or discord_valid else "ValueError: webhook URL 형식 오류",
+            ),
+            DeliveryResult(
+                "slack",
+                slack_valid,
+                False,
+                "webhook" if slack_valid else "",
+                "" if not self.slack_url or slack_valid else "ValueError: webhook URL 형식 오류",
+            ),
+        ]
+        telegram_token_valid = bool(
+            re.fullmatch(r"\d+:[A-Za-z0-9_-]{20,}", self.telegram_token)
+        )
+        if telegram_token_valid and self.telegram_chats:
+            results.extend(
+                DeliveryResult(
+                    "telegram",
+                    bool(re.fullmatch(r"-?\d+", chat_id)),
+                    False,
+                    self._telegram_target(chat_id)
+                    if re.fullmatch(r"-?\d+", chat_id)
+                    else "",
+                    ""
+                    if re.fullmatch(r"-?\d+", chat_id)
+                    else "ValueError: Telegram chat ID 형식 오류",
+                )
+                for chat_id in self.telegram_chats
+            )
+        else:
+            results.append(
+                DeliveryResult(
+                    "telegram",
+                    False,
+                    False,
+                    error=(
+                        "ValueError: Telegram token 형식 오류"
+                        if self.telegram_token and not telegram_token_valid
+                        else ""
+                    ),
+                )
+            )
+        return NotificationResult(tuple(results))
+
     def send(self, message: NotificationMessage) -> NotificationResult:
         results: list[DeliveryResult] = []
         text = message.plain_text()
 
         if not self.discord_url:
             results.append(DeliveryResult("discord", False, False))
+        elif not self._valid_webhook(self.discord_url, "discord"):
+            results.append(
+                DeliveryResult(
+                "discord",
+                False,
+                False,
+                "",
+                "ValueError: 허용되지 않은 webhook URL",
+                )
+            )
         else:
             try:
-                _post_json(self.discord_url, {"content": text[:1900]})
+                _post_json(
+                    self.discord_url,
+                    {
+                        "content": text[:1900],
+                        "allowed_mentions": {"parse": []},
+                    },
+                )
                 results.append(DeliveryResult("discord", True, True, "webhook"))
             except Exception as exc:
                 results.append(self._error("discord", True, "webhook", exc))
 
         if not self.slack_url:
             results.append(DeliveryResult("slack", False, False))
+        elif not self._valid_webhook(self.slack_url, "slack"):
+            results.append(
+                DeliveryResult(
+                "slack",
+                False,
+                False,
+                "",
+                "ValueError: 허용되지 않은 webhook URL",
+                )
+            )
         else:
             try:
                 _post_json(self.slack_url, {"text": text})
@@ -125,6 +253,16 @@ class NotificationService:
 
         if not self.telegram_token or not self.telegram_chats:
             results.append(DeliveryResult("telegram", False, False))
+        elif not re.fullmatch(r"\d+:[A-Za-z0-9_-]{20,}", self.telegram_token):
+            results.append(
+                DeliveryResult(
+                    "telegram",
+                    False,
+                    False,
+                    "",
+                    "ValueError: Telegram token 형식 오류",
+                )
+            )
         else:
             url = (
                 "https://api.telegram.org/bot"
@@ -132,10 +270,22 @@ class NotificationService:
                 + "/sendMessage"
             )
             for chat_id in self.telegram_chats:
+                safe_target = self._telegram_target(chat_id)
+                if not re.fullmatch(r"-?\d+", chat_id):
+                    results.append(
+                        DeliveryResult(
+                            "telegram",
+                            False,
+                            False,
+                            "",
+                            "ValueError: Telegram chat ID 형식 오류",
+                        )
+                    )
+                    continue
                 try:
-                    _post_json(url, {"chat_id": chat_id, "text": text})
-                    results.append(DeliveryResult("telegram", True, True, chat_id))
+                    _post_json(url, {"chat_id": chat_id, "text": text[:4000]})
+                    results.append(DeliveryResult("telegram", True, True, safe_target))
                 except Exception as exc:
-                    results.append(self._error("telegram", True, chat_id, exc))
+                    results.append(self._error("telegram", True, safe_target, exc))
 
         return NotificationResult(tuple(results))

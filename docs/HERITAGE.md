@@ -46,7 +46,8 @@ Charts Studio 가 라이브 질의를 갖는 이유: 사용자가 소스·차원
 | 결측 표기 | 지역 코드 결측은 문자열 `'UNK'` — 지도 매칭에서 제외된다 |
 | 파이썬/실행 | Python 3.9+ 호환. FastAPI·SQLAlchemy·Argon2. 포트 관례 8765(문서)·8799(개발) |
 | 인증 DB | `DATABASE_URL`, 기본 `sqlite:///./data/ask_seoul.db`. PostgreSQL/MySQL dialect DDL도 테스트 |
-| 세션 | DB에는 HMAC 해시만 저장. 운영은 `AUTH_SESSION_PEPPER`, HTTPS Secure cookie 필수 |
+| 세션 | DB에는 HMAC 해시만 저장. 절대+idle 만료와 사용자별 상한 적용. 운영은 `AUTH_SESSION_PEPPER`, HTTPS Secure cookie 필수 |
+| MFA | RFC 6238 TOTP+일회용 복구 코드. 운영자 이상 기본 강제. 하위 역할은 감사 사유 기반 관리자 초기화, 권한 계정은 CLI break-glass만 허용. `AUTH_MFA_MASTER_KEY` 장기 보관 필수 |
 
 ## 4. 파일 지도 — 무엇을 고치려면 어디를 보나
 
@@ -62,7 +63,7 @@ app/charts/                    ← 백엔드 번들 (격리)
 app/auth/                      ← 인증·회원·RBAC·정책·결제 모델/서비스/API/미들웨어
 app/notifications/             ← Discord·Slack·Telegram 운영 알림 인터페이스
 app/static/charts/             ← 프론트 번들 (격리)
-  index.html     스튜디오 셸 (CDN: Pretendard·echarts@5.5·gridstack@10.3)
+  index.html     스튜디오 셸 (버전 고정+SRI CDN: Pretendard·echarts@5.5·gridstack@10.3)
   charts.css     디자인 토큰 = 마켓플레이스 index.html 과 동일 헤리티지
   js/api.js      fetch 래퍼 (problem+json → Error)
   js/recommend.js 자동 추천 — role·이름패턴 기반 도표/조합 제안 (테이블 하드코딩 금지)
@@ -131,9 +132,10 @@ open "http://127.0.0.1:8765/charts?selftest=1"
 | 이름 기반 동 단위 그룹핑은 동명이동을 서버에서 합칠 수 있음 | dims 가 단일 필드라서. 지도는 모호 제외로 방어하지만 테이블/막대는 합산된다. 근본 해결은 코드+이름 복합 dim 지원 |
 | 행정동 지도 코드 매칭 미지원 | 자산 코드가 KOSTAT 이라 MOIS 10자리와 호환 불가 — 이름 매칭만. MOIS 경계 GeoJSON 확보 시 교체 |
 | 가중 평균 미지원 | 집계가 단일 필드 함수뿐. 비율의 정확한 재집계(ratio-of-sums)가 필요하면 파생 measure 지원을 설계할 것. 그때까지 시드는 "단순평균" 명시·표본 필터로 정직하게 |
-| MFA 미구현 | 공개 운영 전 최고관리자·운영자 MFA를 필수 보강 |
-| 앱 rate limit은 프로세스 로컬 | 운영의 정본은 AWS WAF/GCP Cloud Armor/Cloudflare, 필요 시 Redis 공용 limiter |
-| CSP에 `unsafe-inline` 잔존 | 기존 단일 HTML 헤리티지. 공개 운영 전 script/style 분리와 nonce/hash 적용 |
+| 앱 rate limit은 프로세스 로컬 | 운영의 정본은 AWS WAF/GCP Cloud Armor/Cloudflare. Trino live 질의는 별도 동시 실행 상한 적용, 필요 시 Redis 공용 limiter |
+| CSP inline style 허용 잔존 | inline script는 응답 hash, event handler는 `script-src-attr 'none'`. 기존 inline style은 공개 운영 전 CSS class로 이동 |
+| MFA master key 무중단 회전 미지원 | 키 변경 시 기존 TOTP 재등록 필요. secret manager 백업과 복구 코드를 우선 운영 |
+| 알림은 DB outbox+주기 worker | exactly-once 외부 전달은 보장하지 않음. 장기 장애에는 backoff·최대 시도·DLQ 추가 |
 | 스냅샷 신선도 수동 | `extract.py` 수동 실행. W3 본작업에서 Airflow 태스크로 승격 예정(상위 README 참조) |
 
 ## 9. 이력 요약
@@ -147,3 +149,6 @@ open "http://127.0.0.1:8765/charts?selftest=1"
   시드 4페이지(타임랩스) 추가. 셀프테스트 18항목.
 - 2026-07-17: 독립 인증·회원·RBAC·정책·사용자별 레이아웃·모의결제·운영 알림과 클라우드 WAF
   운영 문서를 추가. 레이아웃 저장소를 전역 JSON에서 사용자별 RDB로 전환.
+- 2026-07-17: 인증 hardening — TOTP MFA·복구 코드, idle/session 상한, 안전한 token 소비,
+  전역 관리자 전이 직렬화, 결제 단일 pending, 알림 outbox/복구 worker, schema v6와 개인정보 보존
+  운영 문서를 추가.

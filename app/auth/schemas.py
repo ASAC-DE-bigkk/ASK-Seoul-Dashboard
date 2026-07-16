@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 class RegisterRequest(BaseModel):
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=1, max_length=128)
+    terms_accepted: bool
 
 
 class LoginRequest(BaseModel):
@@ -18,8 +19,22 @@ class LoginRequest(BaseModel):
     next: str | None = None
 
 
+class MfaLoginRequest(BaseModel):
+    challenge: str = Field(min_length=20, max_length=300)
+    code: str = Field(min_length=6, max_length=40)
+    next: str | None = None
+
+
 class ForgotPasswordRequest(BaseModel):
     email: str = Field(min_length=3, max_length=320)
+
+
+class ResendVerificationRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+
+
+class VerifyEmailRequest(BaseModel):
+    token: str = Field(min_length=20, max_length=300)
 
 
 class ResetPasswordRequest(BaseModel):
@@ -36,6 +51,21 @@ class PasswordPatch(BaseModel):
     new_password: str = Field(min_length=1, max_length=128)
 
 
+class MfaSetupRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    current_code: str = Field(default="", max_length=40)
+
+
+class MfaConfirmRequest(BaseModel):
+    setup_token: str = Field(min_length=20, max_length=300)
+    code: str = Field(min_length=6, max_length=12)
+
+
+class MfaManageRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    code: str = Field(min_length=6, max_length=40)
+
+
 class PreferencePatch(BaseModel):
     ontology: dict[str, Any] = Field(default_factory=dict)
     ui: dict[str, Any] = Field(default_factory=dict)
@@ -45,19 +75,24 @@ class PaymentCreate(BaseModel):
     plan_code: str = Field(min_length=2, max_length=20)
 
 
+class PermissionEntry(BaseModel):
+    page_key: str = Field(min_length=1, max_length=50)
+    allowed: bool
+
+
 class UserAdminPatch(BaseModel):
     role: str | None = None
     status: str | None = None
     membership_ends_at: str | None = None
+    permissions: list[PermissionEntry] | None = Field(default=None, max_length=100)
 
 
-class PermissionEntry(BaseModel):
-    page_key: str
-    allowed: bool
+class MfaAdminResetRequest(BaseModel):
+    reason: str = Field(min_length=10, max_length=500)
 
 
 class PermissionPatch(BaseModel):
-    permissions: list[PermissionEntry]
+    permissions: list[PermissionEntry] = Field(max_length=100)
 
 
 class PolicyCreate(BaseModel):
