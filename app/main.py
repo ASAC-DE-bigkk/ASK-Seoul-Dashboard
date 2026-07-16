@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from .charts import router as charts_router
 from .models import (
     CatalogResponse, QualityResponse, SampleResponse, SchemaResponse,
     TableDetail, TableSummary,
@@ -124,6 +125,14 @@ def landing() -> FileResponse:
 @app.get("/catalog", include_in_schema=False)
 def catalog_page() -> FileResponse:
     return FileResponse(HERE / "static" / "index.html")
+
+
+@app.get("/charts", include_in_schema=False)
+def charts_page() -> FileResponse:
+    return FileResponse(HERE / "static" / "charts" / "index.html")
+
+
+app.include_router(charts_router)
 
 
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")

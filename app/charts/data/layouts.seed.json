@@ -1,0 +1,183 @@
+{
+ "version": 1,
+ "pages": [
+  {
+   "id": "seed-overview",
+   "name": "상권 개요",
+   "charts": [
+    {
+     "id": "ov-stat-open",
+     "title": "영업 중 업소",
+     "type": "stat",
+     "source": "gold_license_dong_summary",
+     "bindings": {"value": "business_open_count"},
+     "agg": "sum",
+     "filters": [],
+     "options": {},
+     "grid": {"x": 0, "y": 0, "w": 3, "h": 2}
+    },
+    {
+     "id": "ov-stat-new",
+     "title": "최근 1년 개업",
+     "type": "stat",
+     "source": "gold_license_dong_category_matrix",
+     "bindings": {"value": "opened_last_365d"},
+     "agg": "sum",
+     "filters": [],
+     "options": {},
+     "grid": {"x": 3, "y": 0, "w": 3, "h": 2}
+    },
+    {
+     "id": "ov-pie-major",
+     "title": "대분류별 영업 업소 구성",
+     "type": "pie",
+     "source": "gold_license_dong_category_matrix",
+     "bindings": {"axis": "major", "value": "active_cnt"},
+     "agg": "sum",
+     "filters": [],
+     "options": {"donut": true},
+     "grid": {"x": 6, "y": 0, "w": 6, "h": 4}
+    },
+    {
+     "id": "ov-map-gu",
+     "title": "자치구별 영업 업소",
+     "type": "map_seoul",
+     "source": "gold_license_dong_summary",
+     "bindings": {"region": "gu", "value": "business_open_count"},
+     "agg": "sum",
+     "filters": [],
+     "options": {},
+     "grid": {"x": 0, "y": 2, "w": 6, "h": 5}
+    },
+    {
+     "id": "ov-line-flow",
+     "title": "월별 개업·폐업 추이 (2016~)",
+     "type": "line",
+     "source": "gold_license_flow_monthly",
+     "bindings": {"axis": "ym", "value": "cnt", "series": "event_type"},
+     "agg": "sum",
+     "filters": [{"field": "ym", "op": "gte", "value": "2016-01"}],
+     "options": {"smooth": false},
+     "grid": {"x": 6, "y": 4, "w": 6, "h": 5}
+    },
+    {
+     "id": "ov-bar-gu-new",
+     "title": "자치구별 최근 1년 개업 TOP 15",
+     "type": "bar",
+     "source": "gold_license_dong_category_matrix",
+     "bindings": {"axis": "gu", "value": "opened_last_365d"},
+     "agg": "sum",
+     "filters": [],
+     "options": {"top_n": 15},
+     "grid": {"x": 0, "y": 7, "w": 6, "h": 4}
+    }
+   ]
+  },
+  {
+   "id": "seed-dynamics",
+   "name": "업종 동학",
+   "charts": [
+    {
+     "id": "dy-heat-season",
+     "title": "개업 계절성 — 월 × 중분류",
+     "type": "heatmap",
+     "source": "gold_license_seasonality",
+     "bindings": {"x": "month_of_year", "y": "category", "value": "cnt"},
+     "agg": "sum",
+     "filters": [{"field": "event_type", "op": "eq", "value": "opened"}],
+     "options": {"top_n": 14},
+     "grid": {"x": 0, "y": 0, "w": 6, "h": 4}
+    },
+    {
+     "id": "dy-line-cohort",
+     "title": "외식업 창업 코호트 생존율 (2017~2022)",
+     "type": "line",
+     "source": "gold_license_cohort_survival",
+     "bindings": {"axis": "years_elapsed", "value": "survival_rate", "series": "cohort_y"},
+     "agg": "avg",
+     "filters": [
+      {"field": "category", "op": "eq", "value": "food"},
+      {"field": "cohort_y", "op": "in", "value": ["2017", "2018", "2019", "2020", "2021", "2022"]}
+     ],
+     "options": {"smooth": true},
+     "grid": {"x": 6, "y": 0, "w": 6, "h": 4}
+    },
+    {
+     "id": "dy-bar-early",
+     "title": "중분류별 조기폐업률 (n≥100 · 구·업종 단순평균)",
+     "type": "bar",
+     "source": "gold_license_lifespan",
+     "bindings": {"axis": "category", "value": "early_close_ratio"},
+     "agg": "avg",
+     "filters": [{"field": "n_closed", "op": "gte", "value": 100}],
+     "options": {"top_n": 14},
+     "grid": {"x": 0, "y": 4, "w": 6, "h": 4}
+    },
+    {
+     "id": "dy-bar-age",
+     "title": "업력 밴드 × 대분류 (신상 vs 노포)",
+     "type": "bar",
+     "source": "gold_license_stock_age_band",
+     "bindings": {"axis": "age_band", "value": "active_cnt", "series": "major"},
+     "agg": "sum",
+     "filters": [],
+     "options": {"stacked": true},
+     "grid": {"x": 6, "y": 4, "w": 6, "h": 4}
+    }
+   ]
+  },
+  {
+   "id": "seed-geo",
+   "name": "지역 심층",
+   "charts": [
+    {
+     "id": "ge-points",
+     "title": "상권 밀집 격자 (500m)",
+     "type": "map_points",
+     "source": "gold_license_geo_grid",
+     "bindings": {"lat": "grid_lat", "lng": "grid_lng", "value": "active_cnt"},
+     "agg": "sum",
+     "filters": [],
+     "options": {},
+     "grid": {"x": 0, "y": 0, "w": 6, "h": 5}
+    },
+    {
+     "id": "ge-map-dong",
+     "title": "행정동별 영업 업소",
+     "type": "map_seoul_dong",
+     "source": "gold_license_dong_summary",
+     "bindings": {"region": "admin_dong", "value": "business_open_count"},
+     "agg": "sum",
+     "filters": [],
+     "options": {},
+     "grid": {"x": 6, "y": 0, "w": 6, "h": 5}
+    },
+    {
+     "id": "ge-map-legal",
+     "title": "법정동별 개업 (2025~)",
+     "type": "map_seoul_legal",
+     "source": "gold_license_flow_monthly",
+     "bindings": {"region": "legal_code", "value": "cnt"},
+     "agg": "sum",
+     "filters": [
+      {"field": "event_type", "op": "eq", "value": "opened"},
+      {"field": "ym", "op": "gte", "value": "2025-01"}
+     ],
+     "options": {},
+     "grid": {"x": 0, "y": 5, "w": 6, "h": 5}
+    },
+    {
+     "id": "ge-table-dong",
+     "title": "행정동 상권 요약 TOP 50",
+     "type": "table",
+     "source": "gold_license_dong_summary",
+     "bindings": {"axis": "admin_dong", "value": "business_open_count"},
+     "agg": "sum",
+     "filters": [],
+     "options": {"top_n": 50},
+     "grid": {"x": 6, "y": 5, "w": 6, "h": 5}
+    }
+   ]
+  }
+ ]
+}

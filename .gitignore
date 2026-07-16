@@ -1,3 +1,6 @@
 .venv/
 __pycache__/
 *.pyc
+app/charts/data/layouts.json
+app/charts/data/cache/
+app/charts/data/*.tmp
