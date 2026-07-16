@@ -44,6 +44,14 @@
     <span class="env">DEV</span>
     <div class="right">
       <span class="sync"><span class="pulse" id="pulse"></span><span id="sync-note" class="num">connecting…</span></span>
+      <select id="refresh-sel" class="sel" title="자동 갱신 간격 — gold 를 주기적으로 재질의해 화면을 갱신합니다">
+        <option value="0">자동 갱신 끔</option>
+        <option value="60">1분</option>
+        <option value="300">5분</option>
+        <option value="600" selected>10분</option>
+        <option value="1800">30분</option>
+        <option value="3600">1시간</option>
+      </select>
       <button class="btn ghost" id="btn-add-chart" hidden>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>차트 추가
       </button>

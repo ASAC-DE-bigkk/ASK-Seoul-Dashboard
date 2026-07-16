@@ -188,11 +188,12 @@ function tileState(el, html) {
   st.innerHTML = html; return st;
 }
 
-async function loadTile(chart, force) {
+async function loadTile(chart, force, quiet) {
   const rec = S.tiles[chart.id]; if (!rec) return;
   const el = rec.el;
   const plot = el.querySelector('.plot');
-  tileState(el, '<div class="spin"></div>');
+  // quiet(자동 갱신) 이고 이미 그려져 있으면 스피너로 화면을 가리지 않는다 — 무깜빡임 갱신
+  if (!quiet || !rec.inst) tileState(el, '<div class="spin"></div>');
   try {
     const src = S.srcDetails[chart.source] || (S.srcDetails[chart.source] = await API.source(chart.source));
     const { b, rebound, def } = resolveBindings(chart, src);
@@ -283,6 +284,7 @@ async function renderPage() {
   S.modes = {};
   S.grid.removeAll();
   $('crumb-page').textContent = S.page ? S.page.name : '—';
+  refreshBaseline();   // 페이지 로드 직후가 기준점 — 다음 갱신은 간격 후
   if (!S.page) { $('empty-board').hidden = false; return; }
   $('empty-board').hidden = S.page.charts.length > 0;
   S.grid.batchUpdate();
@@ -705,15 +707,61 @@ $('cfg-apply').onclick = async () => {
   closeCfg();
 };
 
-/* ── 상단 동기화 표시 ─────────────────────────────────────── */
+/* ── 상단 동기화 표시 + 자동 갱신 ─────────────────────────── */
+const REFRESH = { sec: 600, nextAt: 0, lastAt: 0, ticker: null };
+
 function updateSync() {
   const modes = Object.values(S.modes);
   const stale = modes.filter(m => m === 'stale').length;
   const live = modes.filter(m => m === 'live').length;
   const pulse = $('pulse');
   pulse.className = 'pulse' + (stale ? ' warn' : '');
-  $('sync-note').textContent = stale ? `stale 캐시 ${stale}건 — Trino 확인 필요` : 'gold 직결 · Trino';
+  let note = 'gold 직결 · Trino';
+  if (REFRESH.sec > 0 && REFRESH.nextAt) {
+    const left = Math.max(0, Math.round((REFRESH.nextAt - Date.now()) / 1000));
+    note = `갱신 ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} 후`;
+    if (REFRESH.lastAt) note = `업데이트 ${new Date(REFRESH.lastAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })} · ` + note;
+  }
+  $('sync-note').textContent = stale ? `stale 캐시 ${stale}건 — Trino 확인 필요` : note;
   $('foot-mode').textContent = stale ? 'stale cache' : (live ? 'live' : 'cache');
+}
+
+/* 특정 간격으로 gold 를 재질의해 화면 갱신 — 캐시를 우회(force)해 항상 최신을 가져온다.
+ * 편집 중이거나 탭이 백그라운드면 건너뛰고, 다시 보이면 밀린 갱신을 즉시 수행한다. */
+function refreshBaseline() {
+  REFRESH.nextAt = REFRESH.sec > 0 ? Date.now() + REFRESH.sec * 1000 : 0;
+}
+function doAutoRefresh() {
+  REFRESH.lastAt = Date.now();
+  refreshBaseline();
+  document.body.dataset.refreshCount = String(Number(document.body.dataset.refreshCount || 0) + 1);
+  if (!S.page) return;
+  S.page.charts.forEach(c => loadTile(c, true, true));
+}
+function setRefreshSec(sec, save = true) {
+  REFRESH.sec = sec;
+  if (save) localStorage.setItem('charts.refreshSec', String(sec));
+  const sel = $('refresh-sel');
+  if ([...sel.options].some(o => Number(o.value) === sec)) sel.value = String(sec);
+  refreshBaseline();
+  updateSync();
+}
+function initAutoRefresh() {
+  const urlSec = Number(new URLSearchParams(location.search).get('refresh'));   // 개발/검증용 오버라이드
+  const saved = localStorage.getItem('charts.refreshSec');
+  const sec = urlSec > 0 ? urlSec : (saved !== null ? Number(saved) : 600);
+  setRefreshSec(Number.isFinite(sec) && sec >= 0 ? sec : 600, false);
+  $('refresh-sel').onchange = e => { setRefreshSec(Number(e.target.value)); toast(Number(e.target.value) ? '자동 갱신 간격을 변경했습니다' : '자동 갱신을 껐습니다'); };
+  REFRESH.ticker = setInterval(() => {
+    if (REFRESH.sec <= 0 || !REFRESH.nextAt) return;
+    if (Date.now() >= REFRESH.nextAt) {
+      if (document.hidden || S.edit) { REFRESH.nextAt = Date.now() + 5000; return; }  // 잠시 뒤 재확인
+      doAutoRefresh();
+    } else updateSync();
+  }, 1000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && REFRESH.sec > 0 && Date.now() >= REFRESH.nextAt && !S.edit) doAutoRefresh();
+  });
 }
 
 /* ── 부트 ─────────────────────────────────────────────────── */
@@ -765,6 +813,7 @@ async function boot() {
     const [meta, srcs, pages] = await Promise.all([API.meta(), API.sources('all'), API.pages()]);
     S.meta = meta; S.sources = srcs.sources; S.pages = pages;
     RENDER.setMeta(meta);
+    initAutoRefresh();
     updateSync();
     const urlPage = new URLSearchParams(location.search).get('page');
     const saved = urlPage || localStorage.getItem('charts.pageId');

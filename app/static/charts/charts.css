@@ -88,6 +88,11 @@ button { font: inherit; cursor: pointer; }
 .btn { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
        border-radius: 7px; padding: 5px 12px; border: 1px solid var(--line);
        background: var(--panel); color: var(--ink-2); }
+.sel { font: inherit; font-size: 12px; font-weight: 600; color: var(--ink-2);
+       border: 1px solid var(--line); border-radius: 7px; padding: 4px 8px;
+       background: var(--panel); cursor: pointer; }
+.sel:hover { border-color: var(--accent); color: var(--accent-deep); }
+.sel:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
 .btn svg { width: 12px; height: 12px; }
 .btn:hover { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-deep); }
 .btn.primary { background: var(--accent-deep); border-color: var(--accent-deep); color: #fff; }
