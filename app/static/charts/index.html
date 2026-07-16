@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ASK SEOUL · Charts Studio</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
+<link rel="stylesheet" href="/static/charts/charts.css">
+</head>
+<body>
+
+<aside class="side">
+  <a class="ws" href="/" style="text-decoration:none" title="홈으로">
+    <div class="mark mark-charts" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 20V10M12 20V4M19 20v-7"/></svg>
+    </div>
+    <div class="t"><b>ASK SEOUL</b><span>Charts Studio</span></div>
+  </a>
+
+  <div class="sec">Layout Pages</div>
+  <nav class="pages" id="pages" aria-label="레이아웃 페이지 목록"></nav>
+  <button class="add-page" id="add-page">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+    레이아웃 추가
+  </button>
+
+  <div class="sec">Platform</div>
+  <a class="nav-item" href="/catalog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>Marketplace</a>
+  <a class="nav-item" href="/docs" target="_blank"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 3h8l4 4v14a1 1 0 01-1 1H7a1 1 0 01-1-1V4a1 1 0 011-1z"/><path d="M15 3v4h4M9 13h6M9 17h6"/></svg>API Reference</a>
+  <div class="foot">
+    <div class="row"><span>API</span><b>charts v1</b></div>
+    <div class="row"><span>Engine</span><b>Trino · Iceberg gold</b></div>
+    <div class="row"><span>Mode</span><b id="foot-mode">—</b></div>
+  </div>
+</aside>
+
+<main class="main">
+  <div class="topbar">
+    <div class="crumb">Charts Studio
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg>
+      <b id="crumb-page">—</b>
+    </div>
+    <span class="env">DEV</span>
+    <div class="right">
+      <span class="sync"><span class="pulse" id="pulse"></span><span id="sync-note" class="num">connecting…</span></span>
+      <select id="refresh-sel" class="sel" title="자동 갱신 간격 — gold 를 주기적으로 재질의해 화면을 갱신합니다">
+        <option value="0">자동 갱신 끔</option>
+        <option value="60">1분</option>
+        <option value="300">5분</option>
+        <option value="600" selected>10분</option>
+        <option value="1800">30분</option>
+        <option value="3600">1시간</option>
+      </select>
+      <button class="btn ghost" id="btn-add-chart" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>차트 추가
+      </button>
+      <button class="btn ghost" id="btn-cancel-edit" hidden>취소</button>
+      <button class="btn primary" id="btn-edit">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17l6-6M14 7l3-3 3 3-3 3M9 12l-5 5v3h3l5-5"/></svg>
+        <span id="btn-edit-label">레이아웃 변경</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="canvas" id="canvas">
+    <div class="edit-banner">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17l6-6M14 7l3-3 3 3-3 3M9 12l-5 5v3h3l5-5"/></svg>
+      편집 모드 — 타일을 드래그/리사이즈로 배치하고, 오른쪽 위 <b>레이아웃 저장</b>으로 확정합니다.
+    </div>
+    <div class="grid-stack" id="grid"></div>
+    <div class="empty-board" id="empty-board" hidden>
+      <div class="art">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M5 20V10M12 20V4M19 20v-7"/></svg>
+      </div>
+      <b>아직 차트가 없습니다</b>
+      <p>오른쪽 위 <b>레이아웃 변경</b>을 누른 뒤 <b>차트 추가</b>로 gold 데이터셋을 연결하세요.</p>
+    </div>
+  </div>
+</main>
+
+<!-- 차트 추가/편집 드로어 -->
+<div class="overlay" id="cfg-overlay"></div>
+<aside class="drawer" id="cfg-drawer" aria-label="차트 구성">
+  <div class="d-head">
+    <div class="d-crumb"><span class="dot" style="background:var(--accent)"></span><span id="cfg-mode-label">차트 추가</span></div>
+    <div class="top">
+      <h2 id="cfg-title">새 차트</h2>
+      <button class="close" id="cfg-close" aria-label="닫기">✕</button>
+    </div>
+    <nav class="tabs" id="cfg-tabs">
+      <button class="on" data-step="source">1 · 소스</button>
+      <button data-step="type">2 · 도표</button>
+      <button data-step="bind">3 · 연결</button>
+    </nav>
+  </div>
+  <div class="d-body" id="cfg-body"></div>
+  <div class="d-foot">
+    <span id="cfg-note" class="note"></span>
+    <span style="margin-left:auto"></span>
+    <button class="btn ghost" id="cfg-preview">미리보기</button>
+    <button class="btn primary" id="cfg-apply" disabled>추가</button>
+  </div>
+</aside>
+
+<!-- 사이드탭 우클릭 컨텍스트 메뉴 -->
+<div class="ctx" id="ctx" hidden></div>
+
+<!-- 확인 모달 -->
+<div class="modal-wrap" id="modal" hidden>
+  <div class="modal">
+    <b id="modal-title"></b>
+    <p id="modal-desc"></p>
+    <div class="modal-input" id="modal-input-wrap" hidden><input id="modal-input" type="text" maxlength="40"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="modal-cancel">취소</button>
+      <button class="btn primary" id="modal-ok">확인</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" role="status"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"></script>
+<script src="/static/charts/js/api.js"></script>
+<script src="/static/charts/js/recommend.js"></script>
+<script src="/static/charts/js/geo.js"></script>
+<script src="/static/charts/js/render.js"></script>
+<script src="/static/charts/js/app.js"></script>
+</body>
+</html>
