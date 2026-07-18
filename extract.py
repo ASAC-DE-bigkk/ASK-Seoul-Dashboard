@@ -144,10 +144,28 @@ def measure(rel: str, columns: list[dict]) -> tuple[int, dict | None, list[dict]
     return row_count, date_range, sample
 
 
+def test_gates(manifest: dict) -> dict[str, list[str]]:
+    """모델 uid → 그 모델에 걸린 dbt 테스트 라벨 목록 (예 'unique_grain', 'not_null(area_cd)').
+    실행 결과가 아니라 **정의된 게이트**다 — CI/DAG 에서 매 run 검증되는 계약의 가시화."""
+    gates: dict[str, list[str]] = {}
+    for node in manifest.get("nodes", {}).values():
+        if node.get("resource_type") != "test":
+            continue
+        attached = node.get("attached_node")
+        if not attached:
+            continue
+        tm = node.get("test_metadata") or {}
+        label = tm.get("name") or node.get("name", "test")
+        column = (tm.get("kwargs") or {}).get("column_name")
+        gates.setdefault(attached, []).append(f"{label}({column})" if column else label)
+    return {uid: sorted(set(v)) for uid, v in gates.items()}
+
+
 def load_basic_meta() -> dict:
-    """basic 도메인 모델의 description·컬럼설명·tags·contract 를 각 도메인 manifest 에서
-    병합해 name → 메타 dict 로. 모델명 전역 유일 전제(gold_citydata_*·gold_traffic_* 등).
-    manifest 는 도메인 dbt 를 `dbt deps && dbt parse` 하면 생긴다(gitignore 산출물)."""
+    """basic 도메인 모델의 description·컬럼설명·tags·contract·serving_tier·테스트게이트 를
+    각 도메인 manifest 에서 병합해 name → 메타 dict 로. 모델명 전역 유일 전제
+    (gold_citydata_*·gold_traffic_* 등). manifest 는 도메인 dbt 를
+    `dbt deps && dbt parse` 하면 생긴다(gitignore 산출물)."""
     lookup: dict[str, dict] = {}
     for proj in BASIC_MANIFEST_PROJECTS:
         path = DBT_DOMAINS_DIR / proj / "target" / "manifest.json"
@@ -156,6 +174,7 @@ def load_basic_meta() -> dict:
             continue
         manifest = json.loads(path.read_text(encoding="utf-8"))
         all_nodes = {**manifest.get("nodes", {}), **manifest.get("sources", {})}
+        gates = test_gates(manifest)
         for uid, node in manifest.get("nodes", {}).items():
             if node.get("resource_type") != "model":
                 continue
@@ -169,6 +188,9 @@ def load_basic_meta() -> dict:
                 "tags": node.get("tags", []),
                 "contract_enforced": bool(cfg.get("contract", {}).get("enforced")),
                 "materialized": cfg.get("materialized", ""),
+                # 서빙 tier — 도메인이 config.meta.serving_tier 로 선언 (citydata 규약)
+                "serving_tier": (cfg.get("meta") or {}).get("serving_tier"),
+                "tests": gates.get(uid, []),
                 # 계보 — culture rich 와 같은 upstream_layers 재사용 (도메인 manifest 내 한정)
                 "lineage": upstream_layers(uid, all_nodes),
             }
@@ -213,6 +235,8 @@ def extract_basic_domain(domain: str, schema: str, meta_lookup: dict) -> list[di
             "tags": meta.get("tags", []),
             "contract_enforced": meta.get("contract_enforced", False),
             "materialized": meta.get("materialized", ""),
+            "serving_tier": meta.get("serving_tier"),
+            "tests": meta.get("tests", []),
             "on_table_exists": None,
             "row_count": row_count,
             "date_range": date_range,
@@ -235,6 +259,7 @@ def main() -> None:
     print(f"gold models: {len(golds)}")
 
     quality_cache: dict[str, dict] = {}  # silver uid → 분포 (골드끼리 공유)
+    rich_gates = test_gates(manifest)
     tables = []
     for uid, node in sorted(golds.items(), key=lambda kv: kv[1]["name"]):
         name, rel = node["name"], node["relation_name"]
@@ -281,6 +306,8 @@ def main() -> None:
             "tags": node.get("tags", []),
             "contract_enforced": bool(node.get("config", {}).get("contract", {}).get("enforced")),
             "materialized": node.get("config", {}).get("materialized", ""),
+            "serving_tier": (node.get("config", {}).get("meta") or {}).get("serving_tier"),
+            "tests": rich_gates.get(uid, []),
             "on_table_exists": node.get("config", {}).get("on_table_exists")
                                or node.get("config", {}).get("extra", {}).get("on_table_exists"),
             "row_count": row_count,

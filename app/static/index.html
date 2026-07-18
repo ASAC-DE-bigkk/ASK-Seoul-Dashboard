@@ -571,7 +571,8 @@ function renderCards(tables) {
     const qfoot = q
       ? `<div class="qwrap">${meterHtml(q.agg, q.total)}
            <span class="qtext num"><b>${(q.precise * 100).toFixed(1)}%</b> 정밀</span></div>`
-      : `<div class="qwrap"><span class="qtext">${t.domain === 'culture' ? '검수 seed 기반' : 'quality 미계측'}</span></div>`;
+      : `<div class="qwrap"><span class="qtext">${t.domain === 'culture' ? '검수 seed 기반'
+          : ((t.tests || []).length ? `테스트 게이트 ${t.tests.length}종` : 'quality 미계측')}</span></div>`;
     return `<article class="card" style="--c:${id.c}" onclick="openDrawer('${t.name}')">
       <div class="cat"><span class="dot"></span>${esc(dmeta(t.domain).label)}${IDENT[t.name] ? ' · ' + esc(id.cat) : ''}<span class="upd num">updated ${relTime(generatedAt)}</span></div>
       <div class="nm">${esc(t.name)}</div>
@@ -582,6 +583,7 @@ function renderCards(tables) {
         <div class="f"><span>Coverage</span><b>${range}</b></div>
       </div>
       <div class="foot">${qfoot}
+        ${t.serving_tier ? `<span class="pill dim">${esc(t.serving_tier)}</span>` : ''}
         ${t.contract_enforced ? '<span class="pill ok">contract</span>' : '<span class="pill dim">—</span>'}
       </div>
     </article>`;
@@ -613,7 +615,8 @@ function renderList(tables) {
 }
 
 /* ── drawer ── */
-const TABS = t => [['개요', null], ['스키마', t.columns.length], ['품질', t.quality.length],
+const TABS = t => [['개요', null], ['스키마', t.columns.length],
+                   ['품질', t.quality.length || (t.tests || []).length || null],
                    ['샘플', t.sample.length], ['계보', null], ['API', 4]];
 
 function openDrawer(name) {
@@ -660,7 +663,9 @@ function renderTab() {
            ['Coverage', dr && dr.min ? `${dr.min} ~ ${dr.max}` : '—'],
            ['Materialized', esc(t.materialized)],
            ['Contract', t.contract_enforced ? 'enforced' : '—'],
-           ['Quality src', `silver × ${t.quality.length}`],
+           ['Serving tier', t.serving_tier ? esc(t.serving_tier) : '—'],
+           ['Quality src', t.quality.length ? `silver × ${t.quality.length}`
+                           : ((t.tests || []).length ? `test gates × ${t.tests.length}` : '—')],
            ['Layer', 'gold (published)']]
           .map(([k, v]) => `<div class="item"><span class="k">${k}</span><span class="v">${v}</span></div>`).join('')}
       </div></section>`;
@@ -684,8 +689,14 @@ function renderTab() {
         </div>`;
       }).join('') : (t.domain === 'culture'
         ? '<p class="desc">상류 quality_status 없음 — 검수된 seed 기반 테이블</p>'
-        : '<p class="desc">이 도메인은 quality_status 미계측 — 행 단위 품질 지표는 culture만 공개 중</p>')}
-    </section>`;
+        : ((t.tests || []).length ? '' :
+           '<p class="desc">이 도메인은 quality_status 미계측 — 행 단위 품질 지표는 culture만 공개 중</p>'))}
+    </section>
+    ${(t.tests || []).length ? `<section><h3>dbt 테스트 게이트 · ${t.tests.length}종</h3>
+      <p class="desc">매 run 파이프라인에서 검증되는 계약(정의 기준). unique_grain = grain 중복 0 보장.</p>
+      <div class="kv">${t.tests.map(g =>
+        `<div class="item"><span class="v mono">${esc(g)}</span></div>`).join('')}</div>
+    </section>` : ''}`;
   } else if (activeTab === 3) {
     const cols = t.sample.length ? Object.keys(t.sample[0]) : [];
     b.innerHTML = `<section><h3>Sample · 5 rows (실데이터)</h3>
