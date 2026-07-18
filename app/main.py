@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from .charts import router as charts_router
 from .models import (
     CatalogResponse, QualityResponse, SampleResponse, SchemaResponse,
     TableDetail, TableSummary,
@@ -40,6 +41,8 @@ def _summary(t: dict) -> dict:
         "domain": t.get("domain", "culture"),
         "column_count": len(t["columns"]),
         "quality_source_count": len(t["quality"]),
+        "serving_tier": t.get("serving_tier"),
+        "tests": t.get("tests", []),
     }
 
 
@@ -104,7 +107,7 @@ def table_quality(name: str):
     t = _get_or_404(name)
     if isinstance(t, JSONResponse):
         return t
-    return {"name": t["name"], "quality": t["quality"]}
+    return {"name": t["name"], "quality": t["quality"], "tests": t.get("tests", [])}
 
 
 @app.get("/api/v1/catalog/tables/{name}/sample", response_model=SampleResponse,
@@ -124,6 +127,14 @@ def landing() -> FileResponse:
 @app.get("/catalog", include_in_schema=False)
 def catalog_page() -> FileResponse:
     return FileResponse(HERE / "static" / "index.html")
+
+
+@app.get("/charts", include_in_schema=False)
+def charts_page() -> FileResponse:
+    return FileResponse(HERE / "static" / "charts" / "index.html")
+
+
+app.include_router(charts_router)
 
 
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
