@@ -415,10 +415,16 @@ const IDENT = {
   gold_culture_sports_schedule:       { c: '#e34948', cat: 'Sports · 일정' },
 };
 const Q_META = {
-  dong_precise: { label: '행정동 정밀', cls: 'g' },
+  dong_precise: { label: '행정동 정밀', cls: 'g' },   // culture — 공간 매칭 정밀도
   gu_only:      { label: '구 수준만',   cls: 'w' },
   unmatched:    { label: '매칭 실패',   cls: 's' },
+  ok:              { label: '정상',         cls: 'g' },   // basic — 행 단위 결측 품질 (extractor 즉석 분류)
+  partial:         { label: '부분 결측',     cls: 'w' },
+  partial_segment: { label: '세그먼트 결측', cls: 'w' },
+  partial_geo:     { label: '좌표 결측',     cls: 'w' },
+  missing_core:    { label: '핵심 결측',     cls: 's' },
 };
+const Q_GOOD = new Set(['dong_precise', 'ok']);  // 미터의 '좋음' 비율 분자
 /* 도메인 색 — culture 만 rich 메타(dbt 아티팩트), 나머지는 Trino 실측 basic */
 const DOMAIN_META = {
   culture:  { c: '#4a3aa7', label: 'Culture'  },
@@ -495,7 +501,8 @@ function qualityAgg(name) {
   const agg = {};
   d.quality.forEach(q => Object.entries(q.distribution).forEach(([k, v]) => agg[k] = (agg[k] || 0) + v));
   const total = Object.values(agg).reduce((a, b) => a + b, 0);
-  return total ? { agg, total, precise: (agg.dong_precise || 0) / total } : null;
+  const good = Object.entries(agg).reduce((a, [k, v]) => a + (Q_GOOD.has(k) ? v : 0), 0);
+  return total ? { agg, total, precise: good / total } : null;
 }
 
 function renderStats() {
@@ -504,7 +511,7 @@ function renderStats() {
   let pTot = 0, pPrec = 0; const seen = new Set();
   Object.values(details).forEach(d => d.quality.forEach(q => {
     if (seen.has(q.table)) return; seen.add(q.table);
-    Object.entries(q.distribution).forEach(([k, v]) => { pTot += v; if (k === 'dong_precise') pPrec += v; });
+    Object.entries(q.distribution).forEach(([k, v]) => { pTot += v; if (Q_GOOD.has(k)) pPrec += v; });
   }));
   const rate = pTot ? Math.round(pPrec / pTot * 1000) / 10 : 0;
   const domainCount = new Set(summaries.map(t => t.domain)).size;
@@ -512,7 +519,7 @@ function renderStats() {
     { label: 'Published Datasets', value: summaries.length, sub: `${domainCount}개 도메인 · gold layer` },
     { label: 'Total Rows', value: fmt(totalRows), sub: 'Trino 실측 (스냅샷)' },
     { label: 'Contract Coverage', value: `${contract}/${summaries.length}`, sub: 'dbt contract enforced (culture)' },
-    { label: 'Spatial Precision', value: rate + '<span class="unit">%</span>', sub: `행정동 정밀 · culture silver ${seen.size}개` },
+    { label: 'Row Quality', value: rate + '<span class="unit">%</span>', sub: `정밀·정상 행 비율 · silver ${seen.size}개 계측` },
   ].map(s => `<div class="stat"><div class="label">${s.label}</div>
       <div class="value num">${s.value}</div><div class="sub">${s.sub}</div></div>`).join('');
 }

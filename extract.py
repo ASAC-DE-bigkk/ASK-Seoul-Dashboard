@@ -36,6 +36,40 @@ BASIC_MANIFEST_PROJECTS = ("commerce", "citydata", "traffic_weather", "transit")
 
 MAX_SAMPLE_TEXT = 120  # 샘플 셀 문자열 절단 길이 (UI 가독성)
 
+# ── 무스키마 행 단위 품질 규칙 (basic 도메인) ─────────────────────────
+# culture 는 silver 에 quality_status 컬럼을 박지만(공간 매칭 정밀도),
+# citydata 는 공간축이 seed 사전매핑이라 그 라벨이 무의미하다. 대신 도메인이
+# 의미 있는 행 단위 품질(핵심 신호 결측·부분 결측)을 CASE 식으로 선언하면
+# extractor 가 추출 시점에 즉석 분류한다 — silver 스키마 변경 없음.
+# 라벨 어휘: ok / partial* (부분 결측) / missing_core (핵심 결측) — 화면 Q_META 와 동기.
+BASIC_QUALITY_RULES: dict[str, str] = {
+    "silver_citydata_ppltn": (
+        "CASE WHEN area_ppltn_min IS NULL OR area_ppltn_max IS NULL OR area_congest_lvl IS NULL "
+        "THEN 'missing_core' WHEN male_ppltn_rate IS NULL OR ppltn_rate_20 IS NULL "
+        "THEN 'partial_segment' ELSE 'ok' END"
+    ),
+    "silver_citydata_air": (
+        "CASE WHEN pm25 IS NULL OR pm10 IS NULL THEN 'missing_core' "
+        "WHEN air_idx IS NULL OR temperature IS NULL THEN 'partial' ELSE 'ok' END"
+    ),
+    "silver_citydata_cmrcl": (
+        "CASE WHEN payment_count IS NULL OR cmrcl_lvl IS NULL THEN 'missing_core' "
+        "WHEN rate_20 IS NULL OR male_rate IS NULL THEN 'partial_segment' ELSE 'ok' END"
+    ),
+    "silver_citydata_sbike": (
+        "CASE WHEN parking_count IS NULL OR rack_count IS NULL THEN 'missing_core' "
+        "WHEN spot_longitude IS NULL OR spot_latitude IS NULL THEN 'partial_geo' ELSE 'ok' END"
+    ),
+    "silver_citydata_charger": (
+        "CASE WHEN charger_stat IS NULL THEN 'missing_core' "
+        "WHEN output_kw IS NULL OR stat_longitude IS NULL THEN 'partial' ELSE 'ok' END"
+    ),
+    "silver_citydata_transit_ppltn": (
+        "CASE WHEN gton_30min_max IS NULL AND gtoff_30min_max IS NULL THEN 'missing_core' "
+        "WHEN station_count IS NULL OR station_count = 0 THEN 'partial' ELSE 'ok' END"
+    ),
+}
+
 # dbt 아티팩트가 없는 도메인 — Trino 실측만으로 basic 카탈로그 구성. 라벨 → dev 스키마.
 OTHER_DOMAINS = {
     "commerce": "commerce",
@@ -197,9 +231,32 @@ def load_basic_meta() -> dict:
     return lookup
 
 
+def basic_quality(silver_names: list[str], schema: str, cache: dict) -> list[dict]:
+    """계보상 상류 silver 중 품질 규칙이 선언된 것의 즉석 분포. 실패는 스킵(품질은 부가정보)."""
+    out = []
+    for name in silver_names:
+        expr = BASIC_QUALITY_RULES.get(name)
+        if not expr:
+            continue
+        if name not in cache:
+            try:
+                dist = trino_rows(
+                    f"SELECT {expr} AS quality_status, count(*) AS c "
+                    f"FROM iceberg_dev.{schema}.{name} GROUP BY 1 ORDER BY 2 DESC"
+                )
+                cache[name] = {"table": name, "distribution": {d["quality_status"]: d["c"] for d in dist}}
+            except RuntimeError as exc:
+                print(f"  ! quality skip({name}): {exc}")
+                cache[name] = None
+        if cache[name]:
+            out.append(cache[name])
+    return out
+
+
 def extract_basic_domain(domain: str, schema: str, meta_lookup: dict) -> list[dict]:
-    """dbt 계보·quality 는 아직 미추출(culture 전용)이나, 도메인 manifest 에서
-    description·컬럼설명·tags·contract 는 채운다(dbt docs 투자분 반영)."""
+    """dbt 계보 기반으로 description·컬럼설명·tags·contract·serving_tier·테스트게이트를 채우고,
+    품질 규칙이 선언된 도메인은 상류 silver 의 행 단위 품질도 즉석 계측한다."""
+    quality_cache: dict[str, dict | None] = {}
     names = sorted(
         r["Table"] for r in trino_rows(f"SHOW TABLES FROM iceberg_dev.{schema}")
         if r["Table"].startswith("gold_")
@@ -241,7 +298,7 @@ def extract_basic_domain(domain: str, schema: str, meta_lookup: dict) -> list[di
             "row_count": row_count,
             "date_range": date_range,
             "columns": columns,
-            "quality": [],
+            "quality": basic_quality(meta.get("lineage", {}).get("silver", []), schema, quality_cache),
             "lineage": meta.get("lineage", {}),
             "sample": sample,
         })
