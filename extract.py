@@ -64,8 +64,11 @@ BASIC_QUALITY_RULES: dict[str, str] = {
         "CASE WHEN charger_stat IS NULL THEN 'missing_core' "
         "WHEN output_kw IS NULL OR stat_longitude IS NULL THEN 'partial' ELSE 'ok' END"
     ),
+    # 30분 승하차 NULL 은 새벽 1~4시에 집중(2~4시 100%) = 심야 운행 중단의 정상 결측.
+    # 실측(2026-07-18): 시간대별 NULL 분포로 확인 — 수집기간 차이 아님.
     "silver_citydata_transit_ppltn": (
-        "CASE WHEN gton_30min_max IS NULL AND gtoff_30min_max IS NULL THEN 'missing_core' "
+        "CASE WHEN gton_30min_max IS NULL AND gtoff_30min_max IS NULL THEN "
+        "(CASE WHEN hour(observed_at) BETWEEN 1 AND 4 THEN 'no_service' ELSE 'missing_core' END) "
         "WHEN station_count IS NULL OR station_count = 0 THEN 'partial' ELSE 'ok' END"
     ),
 }

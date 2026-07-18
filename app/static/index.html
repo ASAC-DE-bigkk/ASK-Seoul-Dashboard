@@ -419,12 +419,13 @@ const Q_META = {
   gu_only:      { label: '구 수준만',   cls: 'w' },
   unmatched:    { label: '매칭 실패',   cls: 's' },
   ok:              { label: '정상',         cls: 'g' },   // basic — 행 단위 결측 품질 (extractor 즉석 분류)
+  no_service:      { label: '심야 무운행(정상)', cls: 'g' },
   partial:         { label: '부분 결측',     cls: 'w' },
   partial_segment: { label: '세그먼트 결측', cls: 'w' },
   partial_geo:     { label: '좌표 결측',     cls: 'w' },
   missing_core:    { label: '핵심 결측',     cls: 's' },
 };
-const Q_GOOD = new Set(['dong_precise', 'ok']);  // 미터의 '좋음' 비율 분자
+const Q_GOOD = new Set(['dong_precise', 'ok', 'no_service']);  // 미터의 '좋음' 비율 분자 (무운행=정상 결측)
 /* 도메인 색 — culture 만 rich 메타(dbt 아티팩트), 나머지는 Trino 실측 basic */
 const DOMAIN_META = {
   culture:  { c: '#4a3aa7', label: 'Culture'  },
