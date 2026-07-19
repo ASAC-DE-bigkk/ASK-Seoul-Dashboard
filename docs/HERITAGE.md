@@ -168,3 +168,5 @@ open "http://127.0.0.1:8765/charts?selftest=1"
 - 2026-07-19: 인증 DB 운영 검증 — SQLite/PostgreSQL/MySQL 실제 초기화·로그인·관리 API·레이아웃
   smoke test를 통과. DB-aware health, SQLite 비공개 권한, production MFA/CLI bootstrap fail-closed,
   쓰기 없는 maintenance dry-run과 최초 접속 운영 문서를 추가.
+- 2026-07-20: 최초 MFA CLI의 미flush challenge 오류를 수정. challenge 즉시 가시성, 사람 입력 전
+  트랜잭션 종료, 6자리 비표시·최대 5회 재시도와 seed 폐기 운영 절차를 추가.

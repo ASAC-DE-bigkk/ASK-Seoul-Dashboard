@@ -1185,6 +1185,9 @@ class AuthService:
             ip_hash=ip_hash,
             details={"purpose": purpose},
         )
+        # Some trusted callers issue and verify in one transaction. Session
+        # autoflush is disabled, so make the returned challenge query-visible.
+        self.db.flush()
         return raw
 
     def verify_login_mfa(
@@ -1205,7 +1208,7 @@ class AuthService:
         if user is None or user.status != "active" or user.mfa_enabled_at is None:
             raise DomainError(400, "invalid challenge", "유효하지 않은 MFA 요청입니다.")
         self._lock_user(user)
-        self._refresh_active_challenge(challenge)
+        challenge = self._refresh_active_challenge(challenge)
         method = self._verify_second_factor(user, code)
         if method is None:
             self._mfa_failure(challenge, user, ip_hash)
@@ -1263,6 +1266,19 @@ class AuthService:
         )
         return {"setup_token": challenge, "secret": secret, "otpauth_uri": uri}
 
+    def mfa_security_state_digest(self, user: User) -> str:
+        state = "\x1f".join(
+            (
+                user.public_id,
+                user.password_hash,
+                user.role,
+                user.status,
+                user.mfa_seed_salt or "",
+                iso_utc(user.mfa_enabled_at) or "",
+            )
+        )
+        return stable_digest(state, self.settings.session_pepper)
+
     def confirm_mfa_setup(
         self,
         user: User,
@@ -1271,6 +1287,7 @@ class AuthService:
         *,
         ip_hash: str,
         user_agent_hash: str,
+        expected_state_digest: str | None = None,
     ) -> list[str]:
         challenge = self._mfa_challenge(
             raw_challenge,
@@ -1281,7 +1298,18 @@ class AuthService:
         if challenge.user_id != user.id or not challenge.setup_salt:
             raise DomainError(403, "forbidden", "다른 계정의 MFA 설정 요청입니다.")
         self._lock_user(user)
-        self._refresh_active_challenge(challenge)
+        challenge = self._refresh_active_challenge(challenge)
+        if user.status != "active":
+            raise DomainError(403, "account inactive", "활성 계정만 MFA를 설정할 수 있습니다.")
+        if expected_state_digest and not hmac.compare_digest(
+            self.mfa_security_state_digest(user),
+            expected_state_digest,
+        ):
+            raise DomainError(
+                409,
+                "mfa state changed",
+                "보안 상태가 변경되었습니다. MFA 설정을 새로 시작하세요.",
+            )
         secret = derive_totp_secret(
             self.settings.mfa_master_key, user.public_id, challenge.setup_salt
         )
@@ -1394,6 +1422,7 @@ class AuthService:
         code: str,
         reason: str,
         ip_hash: str,
+        expected_state_digest: str,
     ) -> list[str]:
         """CLI break-glass용 원자적 재등록. 새 TOTP 검증 전에는 기존 MFA를 건드리지 않는다."""
         secret = derive_totp_secret(
@@ -1405,6 +1434,22 @@ class AuthService:
                 400,
                 "mfa mismatch",
                 "새 인증 앱의 MFA 코드가 올바르지 않습니다.",
+            )
+        self._lock_user(user)
+        if user.status != "active" or user.role not in {"operator", "admin"}:
+            raise DomainError(
+                403,
+                "privileged account required",
+                "활성 운영자 또는 최고관리자 계정만 CLI에서 재등록할 수 있습니다.",
+            )
+        if not hmac.compare_digest(
+            self.mfa_security_state_digest(user),
+            expected_state_digest,
+        ):
+            raise DomainError(
+                409,
+                "mfa state changed",
+                "보안 상태가 변경되었습니다. MFA 재등록을 새로 시작하세요.",
             )
         self.force_reset_mfa(
             user,
@@ -1525,18 +1570,25 @@ class AuthService:
             raise DomainError(400, "invalid challenge", "MFA 요청 환경이 일치하지 않습니다.")
         return row
 
-    def _refresh_active_challenge(self, row: MfaChallenge) -> None:
-        self.db.refresh(row)
+    def _refresh_active_challenge(self, row: MfaChallenge) -> MfaChallenge:
+        locked = self.db.scalar(
+            select(MfaChallenge)
+            .where(MfaChallenge.id == row.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         if (
-            row.consumed_at is not None
-            or row.expires_at <= utcnow()
-            or row.attempts >= 5
+            locked is None
+            or locked.consumed_at is not None
+            or locked.expires_at <= utcnow()
+            or locked.attempts >= 5
         ):
             raise DomainError(
                 400,
                 "invalid challenge",
                 "MFA 요청이 만료되었거나 유효하지 않습니다.",
             )
+        return locked
 
     def _mfa_failure(
         self, challenge: MfaChallenge, user: User, ip_hash: str

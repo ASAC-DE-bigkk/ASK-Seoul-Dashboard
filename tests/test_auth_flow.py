@@ -40,6 +40,7 @@ from app.auth.models import (
     AccountToken,
     AuditLog,
     AuthSession,
+    MfaChallenge,
     MfaRecoveryCode,
     NotificationDelivery,
     PaymentRequest,
@@ -61,6 +62,7 @@ from app.auth.service import (
 )
 from app.notifications.service import DeliveryResult, NotificationResult
 from app.main import app, health
+from scripts.setup_mfa import _confirm_setup
 
 
 ADMIN_PASSWORD = "Ginkgo-River-Access-2026!"
@@ -596,6 +598,7 @@ def test_mfa_break_glass_verifies_new_factor_before_reset():
         with app.state.database.Session() as db:
             user = db.get(User, user_id)
             service = AuthService(db, app.state.auth_settings)
+            expected_state_digest = service.mfa_security_state_digest(user)
             with pytest.raises(DomainError):
                 service.force_reenroll_mfa(
                     user,
@@ -604,6 +607,7 @@ def test_mfa_break_glass_verifies_new_factor_before_reset():
                     code=wrong,
                     reason="운영자 본인 확인 후 긴급 MFA 재등록 테스트",
                     ip_hash="cli",
+                    expected_state_digest=expected_state_digest,
                 )
             db.rollback()
 
@@ -619,9 +623,63 @@ def test_mfa_break_glass_verifies_new_factor_before_reset():
                 code=correct,
                 reason="운영자 본인 확인 후 긴급 MFA 재등록 테스트",
                 ip_hash="cli",
+                expected_state_digest=expected_state_digest,
             )
             assert len(recovery_codes) == 10
             assert user.mfa_seed_salt == new_salt
+
+
+def test_mfa_break_glass_rejects_stale_security_state():
+    password = "Break-Glass-State-Password-2026!"
+    with TestClient(app):
+        with app.state.database.session() as db:
+            user = User(
+                email="break-glass-stale@example.com",
+                password_hash=hash_password(password),
+                nickname="긴급복구-상태검증",
+                role="admin",
+                status="active",
+                email_verified_at=utcnow(),
+                approved_at=utcnow(),
+                mfa_enabled_at=utcnow(),
+                mfa_seed_salt="existing-stale-seed",
+            )
+            db.add(user)
+            db.flush()
+            user_id = user.id
+            service = AuthService(db, app.state.auth_settings)
+            expected_state_digest = service.mfa_security_state_digest(user)
+            public_id = user.public_id
+
+        new_salt = random_token(24)
+        secret = derive_totp_secret(
+            app.state.auth_settings.mfa_master_key,
+            public_id,
+            new_salt,
+        )
+        code = totp_code(secret, int(time.time() // 30))
+
+        with app.state.database.session() as db:
+            user = db.get(User, user_id)
+            user.password_hash = hash_password("Changed-State-Password-2026!")
+            user.password_changed_at = utcnow()
+
+        with app.state.database.session() as db:
+            user = db.get(User, user_id)
+            with pytest.raises(DomainError, match="보안 상태가 변경"):
+                AuthService(db, app.state.auth_settings).force_reenroll_mfa(
+                    user,
+                    actor=user,
+                    setup_salt=new_salt,
+                    code=code,
+                    reason="입력 대기 중 보안 상태 변경 감지 테스트",
+                    ip_hash="cli",
+                    expected_state_digest=expected_state_digest,
+                )
+
+        with app.state.database.session() as db:
+            user = db.get(User, user_id)
+            assert user.mfa_seed_salt == "existing-stale-seed"
 
 
 def test_admin_can_reset_lower_role_mfa_with_audited_reason():
@@ -859,6 +917,100 @@ def test_mfa_enrollment_login_and_recovery_code_is_single_use():
             },
         )
         assert reused.status_code == 401
+
+
+def test_mfa_enrollment_can_be_confirmed_in_same_database_session():
+    password = "Harbor-Cedar-Secure-2026!"
+    with TestClient(app):
+        with app.state.database.session() as db:
+            user = User(
+                email="mfa-cli-session@example.com",
+                password_hash=hash_password(password),
+                nickname="CLI-MFA-테스트",
+                role="admin",
+                status="active",
+                email_verified_at=utcnow(),
+                approved_at=utcnow(),
+            )
+            db.add(user)
+            db.flush()
+
+            service = AuthService(db, app.state.auth_settings)
+            setup = service.begin_mfa_setup(
+                user,
+                current_password=password,
+                current_code="",
+                ip_hash="cli",
+                user_agent_hash="setup-mfa-cli",
+            )
+            code = totp_code(setup["secret"], int(time.time() // 30))
+
+            recovery_codes = service.confirm_mfa_setup(
+                user,
+                setup["setup_token"],
+                code,
+                ip_hash="cli",
+                user_agent_hash="setup-mfa-cli",
+            )
+
+            assert user.mfa_enabled_at is not None
+            assert len(recovery_codes) == 10
+
+
+def test_cli_mfa_enrollment_commits_before_prompt_and_retries(monkeypatch):
+    password = "Maple-Quartz-Secure-2026!"
+    with TestClient(app):
+        with app.state.database.session() as db:
+            user = User(
+                email="mfa-cli-retry@example.com",
+                password_hash=hash_password(password),
+                nickname="CLI-MFA-재시도",
+                role="admin",
+                status="active",
+                email_verified_at=utcnow(),
+                approved_at=utcnow(),
+            )
+            db.add(user)
+            db.flush()
+            user_id = user.id
+            service = AuthService(db, app.state.auth_settings)
+            setup = service.begin_mfa_setup(
+                user,
+                current_password=password,
+                current_code="",
+                ip_hash="cli",
+                user_agent_hash="setup-mfa-cli",
+            )
+            expected_state_digest = service.mfa_security_state_digest(user)
+
+        current_code = totp_code(setup["secret"], int(time.time() // 30))
+        entered_codes = iter(("not-six-digits", current_code))
+        monkeypatch.setattr(
+            "scripts.setup_mfa.getpass.getpass",
+            lambda _prompt: next(entered_codes),
+        )
+
+        recovery_codes = _confirm_setup(
+            app.state.database,
+            app.state.auth_settings,
+            user_id=user_id,
+            setup=setup,
+            break_glass=False,
+            expected_state_digest=expected_state_digest,
+        )
+
+        assert len(recovery_codes) == 10
+        with app.state.database.session() as db:
+            user = db.get(User, user_id)
+            challenge = db.scalar(
+                select(MfaChallenge).where(
+                    MfaChallenge.user_id == user_id,
+                    MfaChallenge.purpose == "setup",
+                )
+            )
+            assert user.mfa_enabled_at is not None
+            assert challenge.attempts == 1
+            assert challenge.consumed_at is not None
 
 
 def test_payment_notification_outbox_claim_is_single_delivery():

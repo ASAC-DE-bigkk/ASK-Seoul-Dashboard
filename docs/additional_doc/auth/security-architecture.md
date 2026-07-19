@@ -72,6 +72,8 @@
 - 운영자·최고관리자는 화면 초기화를 허용하지 않는다. 서버 운영자가 현재 비밀번호와 대화형 확인을 거친
   `.venv/bin/python scripts/setup_mfa.py --email <계정> --reset-existing` break-glass 재등록만 사용한다.
   새 TOTP가 먼저 검증되어야 기존 요소가 원자적으로 교체된다.
+- 최종 검증 실패·중단·만료 또는 활성화 전 노출 seed는 폐기하고 새 setup으로 등록한다.
+  활성화 후 seed 노출은 자격증명 유출로 처리해 `--reset-existing`으로 회전하고 기존 세션을 폐기한다.
 - `AUTH_MFA_MASTER_KEY`를 잃거나 바꾸면 기존 TOTP seed를 복구할 수 없다. DB 백업과 분리된
   secret manager에 버전·복구 절차와 함께 보관하며 일반적인 키 회전처럼 무심코 교체하지 않는다.
 
@@ -154,7 +156,7 @@ SMTP_ALLOW_PLAINTEXT=false
   확인 문구를 사용한다. 기존 계정 승격은 `--promote-existing` 확인 절차를 따른다.
 - 최초 최고관리자를 만든 뒤 같은 TTY에서 `.venv/bin/python scripts/setup_mfa.py`로 MFA를
   등록한다. 화면에 표시되는 seed·URI·복구 코드는 녹화·로그에 남기지 않고 암호화된 운영 금고에 보관한다.
-- 권한 계정의 인증 앱과 복구 코드를 모두 분실한 경우에만 서버 콘솔에서
+- 권한 계정의 인증 요소를 모두 분실했거나 활성 seed/URI 노출이 확인된 경우에만 서버 콘솔에서
   `.venv/bin/python scripts/setup_mfa.py --reset-existing`를 실행한다.
 - 내장 blocklist는 최소 방어선이다. 공개 운영 전 정기 갱신되는 유출 비밀번호 목록을 로컬/사설
   서비스로 확장하되 비밀번호 원문을 제3자에게 전송하지 않는다.

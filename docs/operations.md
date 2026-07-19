@@ -60,9 +60,12 @@ set -a; source .env; set +a
 # production에서는 최초 관리자 MFA를 반드시 등록한다.
 .venv/bin/python scripts/setup_mfa.py
 
-# 권한 계정이 인증 앱과 복구 코드를 모두 분실한 break-glass 상황에서만 사용
+# 인증 요소를 모두 분실했거나 활성 seed/URI 노출이 확인된 break-glass 상황에서 사용
 .venv/bin/python scripts/setup_mfa.py --reset-existing
 ```
+
+인증 앱 등록과 seed 폐기 기준은
+[개발 실행·초기 최고관리자 매뉴얼](maintanance/README.md#mfa-앱-등록)을 따른다.
 
 기동:
 
