@@ -50,7 +50,7 @@ at-least-once다. 수신 채널에서 중복 알림을 허용하고, 메시지�
 scheduled job으로 주기 실행한다.
 
 ```bash
-python3 scripts/process_notifications.py --limit 100 --stale-minutes 5
+.venv/bin/python scripts/process_notifications.py --limit 100 --stale-minutes 5
 ```
 
 이 명령은 오래된 `processing`을 먼저 `queued`로 되돌리고 대기 건을 처리한다. 운영 콘솔에서는

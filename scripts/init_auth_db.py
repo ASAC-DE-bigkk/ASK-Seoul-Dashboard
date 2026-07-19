@@ -17,7 +17,10 @@ def main() -> None:
     )
     parser.parse_args()
     settings = load_settings()
-    database = Database(settings.database_url)
+    database = Database(
+        settings.database_url,
+        strict_file_permissions=settings.production,
+    )
     initialize_database(database, settings)
     print(f"initialized auth schema: {database.engine.url.render_as_string(hide_password=True)}")
 

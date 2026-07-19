@@ -22,7 +22,7 @@ from app.auth.models import (
     NotificationDelivery,
     utcnow,
 )
-from app.auth.service import initialize_database
+from app.auth.service import verify_database_schema
 
 
 def main() -> None:
@@ -35,8 +35,12 @@ def main() -> None:
     args = parser.parse_args()
 
     settings = load_settings()
-    database = Database(settings.database_url)
-    initialize_database(database, settings)
+    database = Database(
+        settings.database_url,
+        enable_sqlite_wal=args.apply,
+        strict_file_permissions=settings.production,
+    )
+    verify_database_schema(database)
     now = utcnow()
     token_cutoff = now - timedelta(days=max(1, args.token_days))
     session_cutoff = now - timedelta(days=max(1, args.session_days))

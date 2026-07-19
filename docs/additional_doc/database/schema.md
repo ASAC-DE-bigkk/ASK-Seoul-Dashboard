@@ -4,16 +4,22 @@
 
 모델은 SQLAlchemy 공통 타입과 FK/unique/index 계약으로 작성되어 특정 DB SQL에 종속되지 않는다.
 자동 테스트에서 SQLite, PostgreSQL, MySQL dialect의 모든 table/index DDL 컴파일을 검증한다.
+릴리스 전에는 각 실제 DB에서도 초기화·로그인·관리 API·레이아웃 시드 smoke test를 수행한다.
 기본 드라이버는 SQLite 내장, PostgreSQL `psycopg`, MySQL/MariaDB `PyMySQL`이다.
 
 ```dotenv
 # SQLite
 DATABASE_URL=sqlite:///./data/ask_seoul.db
 # PostgreSQL
-DATABASE_URL=postgresql+psycopg://user:password@db:5432/ask_seoul
+DATABASE_URL=postgresql+psycopg://user:password@postgres-auth:5432/ask_seoul?sslmode=verify-full&sslrootcert=/run/secrets/db-ca.pem
 # MySQL/MariaDB
-DATABASE_URL=mysql+pymysql://user:password@db:3306/ask_seoul?charset=utf8mb4
+DATABASE_URL=mysql+pymysql://user:password@mysql-auth:3306/ask_seoul?charset=utf8mb4&ssl_ca=/run/secrets/db-ca.pem&ssl_check_hostname=true
 ```
+
+호스트명은 대시보드 프로세스가 속한 네트워크에서 해석되어야 한다. 상위 Compose의 `postgres`는
+Airflow 메타데이터용이고 호스트 포트도 공개하지 않으므로 인증 DB로 묵시적으로 재사용하지 않는다.
+production의 원격 PostgreSQL은 인증서 hostname 검증(`sslmode=verify-full`), MySQL/MariaDB는
+신뢰 CA와 hostname 검증을 설정하지 않으면 기동을 거부한다.
 
 Oracle, SQL Server 등도 SQLAlchemy dialect/driver를 추가해 같은 공통 모델을 사용할 수 있지만,
 운영 채택 전 해당 DB 버전에서 DDL·FK cascade·JSON·시간대·동시성 통합 테스트를 별도로 통과시켜야 한다.
@@ -83,24 +89,29 @@ auth_users ─< auth_ip_blocks(created_by_id)
 ## 초기화·운영
 
 ```bash
-python3 scripts/init_auth_db.py
-python3 scripts/create_admin.py --email admin@example.com
-python3 scripts/setup_mfa.py --email admin@example.com
-python3 scripts/setup_mfa.py --email admin@example.com --reset-existing  # break-glass 전용
-python3 -m pytest -q tests/test_database_portability.py
+.venv/bin/python scripts/init_auth_db.py
+.venv/bin/python scripts/create_admin.py
+.venv/bin/python scripts/setup_mfa.py
+.venv/bin/python scripts/setup_mfa.py --reset-existing  # break-glass 전용
+.venv/bin/python -m pytest -q tests/test_database_portability.py
 ```
 
-현재 schema version은 `6`이다. `initialize_database()`는 알려진 v1→v6 경로만 순서대로 적용하고,
+현재 schema version은 `6`이다. `initialize_database()`는 기존 버전을 먼저 확인한 뒤 알려진
+v1→v6 경로만 순서대로 적용하고,
 앱보다 새로운 버전 또는 정의되지 않은 경로에서는 기동을 중단한다. 신규 테이블은 `create_all()`로 만들되
 기존 컬럼·인덱스 변경은 버전별 migration 코드가 담당한다. 향후 대규모 운영 변경은 Alembic 같은 전용
 도구로 expand → deploy → contract 순서를 적용한다.
 
 버전 테이블이 없는 기존 `auth_*` 테이블이나 비어 있는 버전 이력은 최신 스키마로 추정하지 않고
-기동을 중단한다. 마이그레이션과 기본 시드는 `auth_control` 단일 행 쓰기로 직렬화하지만, 운영 배포에서는
-여전히 migration job 한 개를 먼저 완료한 뒤 앱 인스턴스를 순차 기동하는 방식을 권장한다.
+기동을 중단한다. 마이그레이션과 기본 시드는 `auth_control` 단일 행 쓰기로 직렬화한다.
+production 앱 worker는 스키마를 변경하지 않고 전체 table/column/index/unique/FK 계약을 검증하므로,
+migration job 한 개를 먼저 완료한 뒤 앱 인스턴스를 순차 기동한다.
 
 백업 시 `auth_users`, 권한/정책, 결제, 감사 로그를 함께 일관된 snapshot으로 보관하고,
 DB dump와 `AUTH_SESSION_PEPPER`, `AUTH_MFA_MASTER_KEY`는 서로 다른 접근 통제 영역에 둔다.
+기본 SQLite 경로는 런타임에 디렉터리 `0700`, DB/WAL/SHM `0600`을 적용하며 production에서
+권한 제한에 실패하면 기동을 중단한다. 다른 프로세스와
+공유하는 사용자 지정 경로는 배포 계정·볼륨 권한도 별도로 제한한다.
 pepper가 유출되면 모든 세션을 폐기하고 재로그인을 요구한다. MFA master key가 유실되면 기존 사용자의
 TOTP를 복원할 수 없으므로 복구 코드를 사용해 재등록하거나 운영자 확인 절차를 거쳐야 한다.
 게스트·일반회원은 최고관리자 화면의 감사 사유 기반 초기화를 사용할 수 있고, 권한 계정은 서버

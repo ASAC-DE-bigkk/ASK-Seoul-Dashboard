@@ -48,13 +48,13 @@ python3 -m venv .venv                         # macOS/Linux (Windows: py -3 -m v
 cp .env.example .env
 # .env 값을 편집한 뒤:
 set -a; source .env; set +a
-python3 scripts/init_auth_db.py
-python3 scripts/create_admin.py --email admin@example.com
-# production에서 권한 계정 MFA가 강제되면 최초 관리자 MFA도 등록한다.
-python3 scripts/setup_mfa.py --email admin@example.com
+.venv/bin/python scripts/init_auth_db.py
+.venv/bin/python scripts/create_admin.py
+# production에서는 최초 관리자 MFA를 반드시 등록한다.
+.venv/bin/python scripts/setup_mfa.py
 
 # 권한 계정이 인증 앱과 복구 코드를 모두 분실한 break-glass 상황에서만 사용
-python3 scripts/setup_mfa.py --email admin@example.com --reset-existing
+.venv/bin/python scripts/setup_mfa.py --reset-existing
 ```
 
 기동:
@@ -76,7 +76,7 @@ python3 scripts/setup_mfa.py --email admin@example.com --reset-existing
 | http://127.0.0.1:8765/catalog | 데이터 마켓플레이스(카탈로그) |
 | http://127.0.0.1:8765/charts | **Charts Studio** |
 | http://127.0.0.1:8765/docs | Swagger (권한 계정용 읽기 전용 API 계약) |
-| http://127.0.0.1:8765/health | 헬스 체크 |
+| http://127.0.0.1:8765/health | 앱·인증 DB readiness |
 
 기동 검증(권장): 브라우저로 `http://127.0.0.1:8765/charts?selftest=1` 접속 →
 탭 제목이 `SELFTEST_ALL_PASS` 면 레이아웃 CRUD·질의·온톨로지 폴백까지 전부 정상.
@@ -103,6 +103,7 @@ python3 scripts/setup_mfa.py --email admin@example.com --reset-existing
 | `SMTP_ALLOW_PLAINTEXT` | false | 별도 보호된 내부 relay 예외만 명시적으로 허용 |
 
 운영 전체 설정은 [additional_doc/auth/security-architecture.md](additional_doc/auth/security-architecture.md)를 따른다.
+production은 `DATABASE_URL` 명시와 원격 RDB 인증서 hostname 검증을 필수로 한다.
 
 ---
 
@@ -136,13 +137,13 @@ docker compose down        # 컨테이너 제거(볼륨은 유지). -v 는 데�
 
 ```bash
 # 중단 후 남은 결제 알림 outbox 복구·전송
-python3 scripts/process_notifications.py --limit 100 --stale-minutes 5
+.venv/bin/python scripts/process_notifications.py --limit 100 --stale-minutes 5
 
 # 만료 토큰·challenge·오래된 세션·사용된 복구 코드·종료 알림·만료 IP block 대상 건수만 확인
-python3 scripts/cleanup_auth.py
+.venv/bin/python scripts/cleanup_auth.py
 
 # 확인한 대상에 한해 실제 반영
-python3 scripts/cleanup_auth.py --apply
+.venv/bin/python scripts/cleanup_auth.py --apply
 ```
 
 알림 처리는 1~5분 간격, 인증 임시데이터 정리는 일 1회부터 시작하고 실제 트래픽·보존 정책에 맞춰
@@ -152,7 +153,7 @@ python3 scripts/cleanup_auth.py --apply
 
 ## 4. 장애 시 확인 순서
 
-1. `/health` 200 인가 → 아니면 서버부터 (uvicorn 로그 확인)
+1. `/health` 200 및 `database=ok`인가 → 아니면 서버와 `DATABASE_URL` 연결부터 확인
 2. 타일 배지가 `stale` 인가 → Trino 다운. `docker compose ps` / `curl :30586/v1/info`
 3. 503 "Trino 접속 불가이고 캐시도 없습니다" → 스택 기동 후 타일의 ↻(다시 조회)
 4. "데이터가 없습니다" → 차트 필터 값 확인 (연월 형식 `YYYY-MM` 등)

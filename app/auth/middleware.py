@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import logging
 import threading
 import time
 from collections import defaultdict
@@ -12,6 +13,7 @@ from urllib.parse import urlsplit
 from fastapi import Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .models import IpBlock, User, utcnow
@@ -19,8 +21,30 @@ from .security import ip_in_networks, stable_digest, token_digest
 from .service import AccessService, AuthService
 
 
+logger = logging.getLogger(__name__)
+
+
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 WINDOWS = {"second": 1, "minute": 60, "hour": 3600, "day": 86_400}
+
+
+def rate_limit_category(path: str, *, authenticated: bool) -> str:
+    category = "authenticated" if authenticated else "anonymous"
+    exact = {
+        "/api/v1/auth/login": "login",
+        "/api/v1/auth/register": "register",
+        "/api/v1/auth/verify-email": "verify_email",
+        "/api/v1/auth/resend-verification": "verify_email",
+        "/api/v1/auth/forgot-password": "forgot_password",
+        "/api/v1/auth/reset-password": "password_reset",
+        "/api/v1/auth/mfa/verify": "mfa",
+        "/api/v1/charts/query": "charts_query",
+    }
+    if path in exact:
+        return exact[path]
+    if path.startswith("/api/v1/charts/sources/") and path.endswith("/availability"):
+        return "charts_query"
+    return category
 
 
 def problem(status: int, title: str, detail: str) -> JSONResponse:
@@ -149,52 +173,69 @@ class AuthSecurityMiddleware(BaseHTTPMiddleware):
         request.state.auth_session = None
 
         database = request.app.state.database
-        with database.session() as db:
-            if self._blocked_ip(db, client_ip):
-                return self._secure(problem(403, "request blocked", "차단된 네트워크입니다."), request)
+        try:
+            with database.session() as db:
+                if self._blocked_ip(db, client_ip):
+                    return self._secure(problem(403, "request blocked", "차단된 네트워크입니다."), request)
 
-            raw_session = request.cookies.get(settings.cookie_name)
-            auth = AuthService(db, settings)
-            current = auth.current_session(
-                raw_session,
-                ip_hash=ip_hash,
-                user_agent_hash=ua_hash,
-            )
-            if current:
-                auth_session, user = current
-                request.state.auth_session = auth_session
-                request.state.user = user
+                raw_session = request.cookies.get(settings.cookie_name)
+                auth = AuthService(db, settings)
+                current = auth.current_session(
+                    raw_session,
+                    ip_hash=ip_hash,
+                    user_agent_hash=ua_hash,
+                )
+                if current:
+                    auth_session, user = current
+                    request.state.auth_session = auth_session
+                    request.state.user = user
 
-            rate_response = await self._rate_limit(db, request, user if current else None, client_ip)
-            if rate_response:
-                return self._secure(rate_response, request)
+                rate_response = await self._rate_limit(
+                    db, request, user if current else None, client_ip
+                )
+                if rate_response:
+                    return self._secure(rate_response, request)
 
-            if request.method not in SAFE_METHODS:
-                csrf_response = self._csrf_check(request)
-                if csrf_response:
-                    return self._secure(csrf_response, request)
+                if request.method not in SAFE_METHODS:
+                    csrf_response = self._csrf_check(request)
+                    if csrf_response:
+                        return self._secure(csrf_response, request)
 
-            page_key = page_key_for_path(request.url.path)
-            if page_key:
-                if request.state.user is None:
-                    return self._secure(self._unauthenticated(request), request)
-                access = AccessService(db)
-                allowed = access.can_access(request.state.user, page_key)
-                if request.url.path in {"/admin", "/static/auth/admin.html"}:
-                    allowed = any(
-                        access.can_access(request.state.user, key)
-                        for key in (
-                            "admin_users",
-                            "admin_access",
-                            "admin_policies",
-                            "admin_payments",
-                            "admin_audit",
+                page_key = page_key_for_path(request.url.path)
+                if page_key:
+                    if request.state.user is None:
+                        return self._secure(self._unauthenticated(request), request)
+                    access = AccessService(db)
+                    allowed = access.can_access(request.state.user, page_key)
+                    if request.url.path in {"/admin", "/static/auth/admin.html"}:
+                        allowed = any(
+                            access.can_access(request.state.user, key)
+                            for key in (
+                                "admin_users",
+                                "admin_access",
+                                "admin_policies",
+                                "admin_payments",
+                                "admin_audit",
+                            )
                         )
-                    )
-                if not allowed:
-                    return self._secure(self._forbidden(request), request)
+                    if not allowed:
+                        return self._secure(self._forbidden(request), request)
 
-        response = await call_next(request)
+            response = await call_next(request)
+        except SQLAlchemyError as exc:
+            logger.error(
+                "auth database request failed path=%s error_type=%s",
+                request.url.path,
+                type(exc).__name__,
+            )
+            return self._secure(
+                problem(
+                    503,
+                    "database unavailable",
+                    "인증 데이터베이스에 연결할 수 없습니다.",
+                ),
+                request,
+            )
         return self._secure(response, request)
 
     def _client_ip(self, request: Request) -> str:
@@ -227,24 +268,7 @@ class AuthSecurityMiddleware(BaseHTTPMiddleware):
     async def _rate_limit(self, db, request: Request, user: User | None, client_ip: str):
         config = AccessService(db).effective_policy(user, "request_limit")
         path = request.url.path
-        category = "authenticated" if user else "anonymous"
-        if path == "/api/v1/auth/login":
-            category = "login"
-        elif path == "/api/v1/auth/register":
-            category = "register"
-        elif path in {
-            "/api/v1/auth/verify-email",
-            "/api/v1/auth/resend-verification",
-        }:
-            category = "verify_email"
-        elif path == "/api/v1/auth/forgot-password":
-            category = "forgot_password"
-        elif path == "/api/v1/auth/reset-password":
-            category = "password_reset"
-        elif path == "/api/v1/auth/mfa/verify":
-            category = "mfa"
-        elif path == "/api/v1/charts/query":
-            category = "charts_query"
+        category = rate_limit_category(path, authenticated=user is not None)
         limits = config.get(category, {})
         subject = f"user:{user.id}" if user else f"ip:{client_ip}"
         if category not in {"anonymous", "authenticated"}:

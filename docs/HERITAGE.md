@@ -33,6 +33,7 @@ Charts Studio 가 라이브 질의를 갖는 이유: 사용자가 소스·차원
 - **데이터 규정(상위 커머스 번들 계승)**: 원본 값을 파괴하지 않는다 — 코드값은 표시 라벨로만 번역하고,
   집계·필터는 재현 가능해야 한다(응답에 SQL 포함). 시크릿을 코드·로그·커밋에 넣지 않는다.
 - **문서 체인**: [docs/README.md](README.md)(인덱스) → [operations.md](operations.md)(기동/중지) ·
+  [maintanance/README.md](maintanance/README.md)(최초 접속·운영 원칙) ·
   [charts-user-guide.md](charts-user-guide.md)(사용법) · [charts-design-intents.md](charts-design-intents.md)(의도 A~F) · 본 문서(계승).
 
 ## 3. 환경 사실 (하드코딩된 지식 — 모르면 사고 나는 것들)
@@ -59,7 +60,7 @@ app/charts/                    ← 백엔드 번들 (격리)
   layouts.py     사용자별 RDB 레이아웃 영속 (첫 접근 시 시드 복제)
   router.py      /api/v1/charts/* (meta·sources·query·layouts CRUD) — RFC7807 에러
   models.py      요청/응답 Pydantic 계약
-  data/layouts.seed.json  기본 4페이지 (커밋 대상. cache/ 는 런타임)
+  data/layouts.seed.json  기본 5페이지(상권 4 + 전 도메인 1, 커밋 대상. cache/ 는 런타임)
 app/auth/                      ← 인증·회원·RBAC·정책·결제 모델/서비스/API/미들웨어
 app/notifications/             ← Discord·Slack·Telegram 운영 알림 인터페이스
 app/static/charts/             ← 프론트 번들 (격리)
@@ -79,12 +80,15 @@ docs/additional_doc/           ← 인증/RDB/알림/클라우드 WAF 운영 문
 
 1. **격리(A)** — 번들 밖을 만지지 않는다.
 2. **온톨로지(B)** — 도표↔소스 연결은 컬럼명이 아니라 **role**. 저장물은 바인딩 선언뿐이고
-   렌더 시점마다 재해석·폴백된다. 컬럼/값 변경에 구애받지 않는 것이 이 화면의 존재 이유다.
+   렌더 시점마다 재해석·폴백된다. 지원 판정은 필수 슬롯마다 서로 다른 실재 필드를 배정할 수
+   있어야 하며, 필드별 가산성·허용 집계도 같은 계약에 포함된다.
 3. **안전한 질의(C)** — 식별자 화이트리스트, 값 이스케이프, 프로토콜 준수, 캐시는 정직하게(mode 표기).
 4. **읽히는 도표(D)** — 검증된 8색 고정 팔레트, 색-의미 고정, 결측≠0, 비가산 집계는 접지 않음,
-   MOIS/KOSTAT 구분, 커버리지 표기.
+   원형=sum/count, 누적 가능성과 가산성 분리, MOIS/KOSTAT 구분, 커버리지 표기.
+   소스 선택 때 실데이터 `count(field)`로 전부-null 필드를 슬롯·필터에서 제거하며 1행 소스는 통계·표만 노출.
 5. **모드 분리 UX(E)** — 평시 고정, 편집 모드에서만 배치, 명시적 저장.
-6. **기계 검증(F)** — 고치면 셀프테스트와 스크린샷으로 다시 증명한다.
+6. **기계 검증(F)** — 고치면 6개 도메인 서버 계약 테스트, 3페르소나 브라우저 셀프테스트,
+   대표 Gold 실제 질의와 스크린샷으로 다시 증명한다.
 
 ## 6. 확장 레시피 — 자주 있을 작업의 표준 절차
 
@@ -114,9 +118,11 @@ docs/additional_doc/           ← 인증/RDB/알림/클라우드 WAF 운영 문
 ```bash
 # 1) 문법
 node --check app/static/charts/js/*.js
-# 2) 서버 기동 후 브라우저 셀프테스트 — 탭 제목 SELFTEST_ALL_PASS 확인
+# 2) 서버 계약(모든 Gold 지원 타입·시드·집계 제약)
+python3 -m pytest -q
+# 3) 서버 기동 후 브라우저 셀프테스트 — 탭 제목 SELFTEST_ALL_PASS 확인
 open "http://127.0.0.1:8765/charts?selftest=1"
-# 3) 화면 확인 (헤드리스 가능)
+# 4) 화면 확인 (헤드리스 가능)
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \
   --window-size=1600,1100 --virtual-time-budget=20000 \
   --screenshot=/tmp/p1.png "http://127.0.0.1:8765/charts?page=seed-overview"
@@ -152,3 +158,13 @@ open "http://127.0.0.1:8765/charts?selftest=1"
 - 2026-07-17: 인증 hardening — TOTP MFA·복구 코드, idle/session 상한, 안전한 token 소비,
   전역 관리자 전이 직렬화, 결제 단일 pending, 알림 outbox/복구 worker, schema v6와 개인정보 보존
   운영 문서를 추가.
+- 2026-07-17: Charts Studio 전 도메인화 — 문화·교통·날씨·도시데이터·대중교통 시드/실질의,
+  실제 필드 매칭·가산성 기반 온톨로지, count-only 일정, 툴팁 수명주기, 미리보기 성공 전 적용 차단,
+  페이지/소스/질의 경합 방어, null 보존, 타임랩스 프레임·속도 컨트롤과 3페르소나 셀프테스트 추가.
+  후속 재검토에서 원형/누적 수학 제약, 기술시각·풍향·비가산 농도 차단, 저장/취소 직렬화,
+  모바일 페이지 관리, 필터 값 사전과 전부-null 미리보기 거부까지 보강. 최종 회귀 검토에서
+  coverage 비가산성·누적 flow allowlist·role별 서버 필터·availability rate/singleflight와
+  사용자 레이아웃을 건드리지 않는 임시 페이지 셀프테스트를 추가.
+- 2026-07-19: 인증 DB 운영 검증 — SQLite/PostgreSQL/MySQL 실제 초기화·로그인·관리 API·레이아웃
+  smoke test를 통과. DB-aware health, SQLite 비공개 권한, production MFA/CLI bootstrap fail-closed,
+  쓰기 없는 maintenance dry-run과 최초 접속 운영 문서를 추가.

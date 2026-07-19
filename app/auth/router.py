@@ -343,7 +343,8 @@ def login(req: LoginRequest, request: Request, db: Session = Depends(get_db)):
         raise DomainError(
             403,
             "mfa enrollment required",
-            "운영자와 최고관리자는 MFA 설정 후 로그인할 수 있습니다. 운영자에게 초기 설정을 요청하세요.",
+            "운영자와 최고관리자는 MFA 설정 후 로그인할 수 있습니다. "
+            "서버 운영자에게 CLI 초기 설정을 요청하세요.",
         )
     token, csrf, expires = service.create_session(
         user,

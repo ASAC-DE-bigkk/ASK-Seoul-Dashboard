@@ -11,9 +11,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.auth.config import load_settings
 from app.auth.database import Database
 from app.auth.service import (
-    initialize_database,
     process_queued_notifications,
     recover_stale_notifications,
+    verify_database_schema,
 )
 
 
@@ -24,8 +24,11 @@ def main() -> None:
     args = parser.parse_args()
 
     settings = load_settings()
-    database = Database(settings.database_url)
-    initialize_database(database, settings)
+    database = Database(
+        settings.database_url,
+        strict_file_permissions=settings.production,
+    )
+    verify_database_schema(database)
     recovered = recover_stale_notifications(
         database, older_than_minutes=max(1, args.stale_minutes)
     )

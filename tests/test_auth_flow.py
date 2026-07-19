@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import os
 import re
 import tempfile
 import time
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -32,6 +34,7 @@ for name in (
 
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.auth.models import (
     AccountToken,
@@ -43,6 +46,7 @@ from app.auth.models import (
     User,
     utcnow,
 )
+from app.auth.database import Database
 from app.auth.security import (
     derive_totp_secret,
     hash_password,
@@ -56,7 +60,7 @@ from app.auth.service import (
     deliver_payment_notification,
 )
 from app.notifications.service import DeliveryResult, NotificationResult
-from app.main import app
+from app.main import app, health
 
 
 ADMIN_PASSWORD = "Ginkgo-River-Access-2026!"
@@ -368,6 +372,55 @@ def test_complete_auth_rbac_policy_and_payment_flow():
         assert logout.status_code == 200
         assert "clear-site-data" in logout.headers
         assert member.get("/api/v1/auth/session").json()["authenticated"] is False
+
+
+def test_health_reports_database_readiness():
+    with TestClient(app, client=("198.51.100.99", 50000)) as client:
+        response = client.get("/health")
+        assert response.status_code == 200
+        assert response.json()["database"] == "ok"
+
+
+def test_health_fails_closed_when_database_is_unavailable():
+    class UnavailableDatabase:
+        class SessionContext:
+            def __enter__(self):
+                raise SQLAlchemyError("test database unavailable")
+
+            def __exit__(self, *_args):
+                return False
+
+        def session(self):
+            return self.SessionContext()
+
+    with TestClient(
+        app,
+        client=("198.51.100.98", 50000),
+        raise_server_exceptions=False,
+    ) as client:
+        original = app.state.database
+        app.state.database = UnavailableDatabase()
+        try:
+            response = client.get("/health")
+        finally:
+            app.state.database = original
+        assert response.status_code == 503
+        assert response.json()["title"] == "database unavailable"
+
+
+def test_health_route_rejects_missing_schema(tmp_path):
+    database = Database(
+        f"sqlite:///{tmp_path / 'missing-schema.db'}",
+        enable_sqlite_wal=False,
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(database=database),
+        )
+    )
+    response = health(request)
+    assert response.status_code == 503
+    assert json.loads(response.body)["title"] == "database unavailable"
 
 
 def test_failed_logins_are_committed_and_account_is_locked():

@@ -12,6 +12,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
+
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_DIR = ROOT / "data"
@@ -147,6 +150,10 @@ def load_settings() -> AuthSettings:
             raise RuntimeError("production에서는 AUTH_ALLOWED_HOSTS=*를 사용할 수 없습니다.")
     mfa_master_key = os.environ.get("AUTH_MFA_MASTER_KEY", "").strip()
     require_mfa = _bool("AUTH_REQUIRE_MFA_FOR_PRIVILEGED", production)
+    if production and not require_mfa:
+        raise RuntimeError(
+            "production에서는 AUTH_REQUIRE_MFA_FOR_PRIVILEGED=true가 필수입니다."
+        )
     if not mfa_master_key:
         if production and require_mfa:
             raise RuntimeError(
@@ -159,11 +166,55 @@ def load_settings() -> AuthSettings:
         ).hexdigest()
     elif production and len(mfa_master_key) < 32:
         raise RuntimeError("production의 AUTH_MFA_MASTER_KEY는 32자 이상이어야 합니다.")
+    bootstrap_admin_email = os.environ.get(
+        "AUTH_BOOTSTRAP_ADMIN_EMAIL", ""
+    ).strip()
+    bootstrap_admin_password = os.environ.get(
+        "AUTH_BOOTSTRAP_ADMIN_PASSWORD", ""
+    )
+    if bool(bootstrap_admin_email) != bool(bootstrap_admin_password):
+        raise RuntimeError(
+            "AUTH_BOOTSTRAP_ADMIN_EMAIL과 AUTH_BOOTSTRAP_ADMIN_PASSWORD는 "
+            "함께 설정하거나 함께 비워야 합니다."
+        )
+    if production and bootstrap_admin_email:
+        raise RuntimeError(
+            "production에서는 bootstrap 자격증명을 환경변수에 보관하지 않습니다. "
+            "보호된 터미널에서 scripts/create_admin.py를 사용하세요."
+        )
+    database_url = os.environ.get("DATABASE_URL", "").strip()
+    if production and not database_url:
+        raise RuntimeError("production에서는 DATABASE_URL을 명시해야 합니다.")
+    if not database_url:
+        database_url = f"sqlite:///{(RUNTIME_DIR / 'ask_seoul.db').as_posix()}"
+    try:
+        parsed_database_url = make_url(database_url)
+    except ArgumentError as exc:
+        raise RuntimeError("DATABASE_URL 형식이 올바르지 않습니다.") from exc
+    if production:
+        backend = parsed_database_url.get_backend_name()
+        query = parsed_database_url.query
+        if backend == "postgresql" and query.get("sslmode") != "verify-full":
+            raise RuntimeError(
+                "production PostgreSQL은 sslmode=verify-full이 필수입니다."
+            )
+        if backend in {"mysql", "mariadb"}:
+            check_hostname = str(
+                query.get("ssl_check_hostname", "")
+            ).strip().lower()
+            if not query.get("ssl_ca") or check_hostname not in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }:
+                raise RuntimeError(
+                    "production MySQL/MariaDB는 ssl_ca와 "
+                    "ssl_check_hostname=true가 필수입니다."
+                )
     return AuthSettings(
         env=env,
-        database_url=os.environ.get(
-            "DATABASE_URL", f"sqlite:///{(RUNTIME_DIR / 'ask_seoul.db').as_posix()}"
-        ),
+        database_url=database_url,
         public_base_url=public_base_url,
         allowed_hosts=effective_allowed,
         session_pepper=pepper,
@@ -184,6 +235,6 @@ def load_settings() -> AuthSettings:
         mfa_master_key=mfa_master_key,
         require_mfa_for_privileged=require_mfa,
         max_request_bytes=max(16_384, _int("AUTH_MAX_REQUEST_BYTES", 262_144)),
-        bootstrap_admin_email=os.environ.get("AUTH_BOOTSTRAP_ADMIN_EMAIL", "").strip(),
-        bootstrap_admin_password=os.environ.get("AUTH_BOOTSTRAP_ADMIN_PASSWORD", ""),
+        bootstrap_admin_email=bootstrap_admin_email,
+        bootstrap_admin_password=bootstrap_admin_password,
     )

@@ -33,11 +33,19 @@ def main() -> None:
         help="기존 MFA를 같은 트랜잭션에서 폐기하고 즉시 재등록하는 break-glass 절차",
     )
     args = parser.parse_args()
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        raise SystemExit(
+            "MFA seed와 복구 코드는 입출력 기록이 남지 않는 보호된 대화형 TTY에서만 "
+            "처리할 수 있습니다."
+        )
     email = normalize_email(args.email or input("Account email: ").strip())
     password = getpass.getpass("Current password: ")
 
     settings = load_settings()
-    database = Database(settings.database_url)
+    database = Database(
+        settings.database_url,
+        strict_file_permissions=settings.production,
+    )
     initialize_database(database, settings)
     with database.session() as db:
         user = db.scalar(select(User).where(User.email == email))

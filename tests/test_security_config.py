@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
 
 from app.auth.config import load_settings
 from app.auth.emailer import EmailSender
-from app.auth.middleware import InMemoryRateLimiter
+from app.auth.middleware import InMemoryRateLimiter, rate_limit_category
 from app.auth.security import safe_next_path
 from app.charts import querybuilder, trino
 from app.charts.models import ChartConfig
@@ -23,7 +25,10 @@ PROJECT_ROOT = Path(__file__).parents[1]
 
 
 def _production_env(monkeypatch):
+    monkeypatch.delenv("AUTH_BOOTSTRAP_ADMIN_EMAIL", raising=False)
+    monkeypatch.delenv("AUTH_BOOTSTRAP_ADMIN_PASSWORD", raising=False)
     monkeypatch.setenv("AUTH_ENV", "production")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:////private/tmp/ask-seoul-production-test.db")
     monkeypatch.setenv("AUTH_PUBLIC_BASE_URL", "https://dashboard.example.com")
     monkeypatch.setenv("AUTH_ALLOWED_HOSTS", "dashboard.example.com")
     monkeypatch.setenv("AUTH_COOKIE_SECURE", "true")
@@ -50,6 +55,63 @@ def test_production_security_settings_fail_closed(monkeypatch):
     monkeypatch.setenv("AUTH_REQUIRE_MFA_FOR_PRIVILEGED", "treu")
     with pytest.raises(RuntimeError, match="true 또는 false"):
         load_settings()
+
+    _production_env(monkeypatch)
+    monkeypatch.setenv("AUTH_REQUIRE_MFA_FOR_PRIVILEGED", "false")
+    with pytest.raises(RuntimeError, match="MFA"):
+        load_settings()
+
+
+def test_bootstrap_credentials_fail_closed(monkeypatch):
+    monkeypatch.setenv("AUTH_ENV", "test")
+    monkeypatch.setenv("AUTH_BOOTSTRAP_ADMIN_EMAIL", "admin@example.com")
+    monkeypatch.delenv("AUTH_BOOTSTRAP_ADMIN_PASSWORD", raising=False)
+    with pytest.raises(RuntimeError, match="함께"):
+        load_settings()
+
+    _production_env(monkeypatch)
+    monkeypatch.setenv("AUTH_BOOTSTRAP_ADMIN_EMAIL", "admin@example.com")
+    monkeypatch.setenv(
+        "AUTH_BOOTSTRAP_ADMIN_PASSWORD",
+        "Production-Bootstrap-Password-2026!",
+    )
+    with pytest.raises(RuntimeError, match="production.*bootstrap"):
+        load_settings()
+
+
+def test_production_database_configuration_fails_closed(monkeypatch):
+    _production_env(monkeypatch)
+    monkeypatch.delenv("DATABASE_URL")
+    with pytest.raises(RuntimeError, match="DATABASE_URL"):
+        load_settings()
+
+    _production_env(monkeypatch)
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+psycopg://user:password@db.example/ask_seoul",
+    )
+    with pytest.raises(RuntimeError, match="sslmode=verify-full"):
+        load_settings()
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+psycopg://user:password@db.example/ask_seoul"
+        "?sslmode=verify-full&sslrootcert=/run/secrets/db-ca.pem",
+    )
+    assert load_settings().database_url.startswith("postgresql+psycopg://")
+
+    _production_env(monkeypatch)
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "mysql+pymysql://user:password@db.example/ask_seoul?charset=utf8mb4",
+    )
+    with pytest.raises(RuntimeError, match="ssl_ca"):
+        load_settings()
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "mysql+pymysql://user:password@db.example/ask_seoul"
+        "?charset=utf8mb4&ssl_ca=/run/secrets/db-ca.pem&ssl_check_hostname=true",
+    )
+    assert load_settings().database_url.startswith("mysql+pymysql://")
 
 
 def test_smtp_security_settings_fail_closed(monkeypatch):
@@ -115,6 +177,34 @@ def test_rate_limiter_rejection_does_not_consume_other_windows(monkeypatch):
     monkeypatch.setattr("app.auth.middleware.time.time", lambda: 121.0)
     # 직전 second 제한 거부가 minute bucket까지 소모하지 않아 한 번 더 허용된다.
     assert limiter.check("subject", limits)[0] is True
+
+
+def test_chart_availability_uses_the_expensive_query_rate_limit():
+    assert rate_limit_category(
+        "/api/v1/charts/sources/gold_weather_daily/availability",
+        authenticated=True,
+    ) == "charts_query"
+    assert rate_limit_category(
+        "/api/v1/charts/sources/gold_weather_daily",
+        authenticated=True,
+    ) == "authenticated"
+
+
+def test_identical_cold_trino_queries_are_singleflight(monkeypatch, tmp_path):
+    monkeypatch.setattr(trino, "CACHE_DIR", tmp_path)
+    calls = []
+
+    def fake_run(sql: str, max_rows: int):
+        calls.append(sql)
+        time.sleep(0.05)
+        return ["value"], [[1]]
+
+    monkeypatch.setattr(trino, "_run", fake_run)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _index: trino.execute("select 1"), range(2)))
+
+    assert len(calls) == 1
+    assert {result["mode"] for result in results} == {"live", "cache"}
 
 
 def test_safe_next_path_rejects_cross_origin_and_backslash_forms():
@@ -255,3 +345,22 @@ def test_operations_scripts_can_run_directly(script_name):
     )
     assert result.returncode == 0, result.stderr
     assert "usage:" in result.stdout
+
+
+@pytest.mark.parametrize("script_name", ("create_admin.py", "setup_mfa.py"))
+def test_secret_operator_scripts_require_interactive_tty(script_name):
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(PROJECT_ROOT / "scripts" / script_name),
+            "--email",
+            "operator@example.com",
+        ],
+        cwd=PROJECT_ROOT,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "TTY" in result.stderr + result.stdout

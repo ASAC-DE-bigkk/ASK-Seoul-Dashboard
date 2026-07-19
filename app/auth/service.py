@@ -12,8 +12,10 @@ from sqlalchemy import (
     DateTime,
     Integer,
     String,
+    UniqueConstraint,
     and_,
     delete,
+    func,
     inspect,
     or_,
     select,
@@ -191,6 +193,25 @@ def initialize_database(database: Database, settings: AuthSettings) -> None:
         raise RuntimeError(
             "버전 정보가 없는 기존 auth 스키마는 자동 마이그레이션하지 않습니다."
         )
+    existing_version: int | None = None
+    if "auth_schema_version" in existing_tables:
+        with database.engine.connect() as connection:
+            existing_version = connection.scalar(
+                select(SchemaVersion.version)
+                .order_by(SchemaVersion.version.desc())
+                .limit(1)
+            )
+        if existing_version is None:
+            raise RuntimeError(
+                "기존 auth 스키마의 버전 행이 비어 있어 자동 기동할 수 없습니다."
+            )
+        if existing_version < 1 or existing_version > SCHEMA_VERSION:
+            raise RuntimeError(
+                f"인증 DB schema version {existing_version}은 앱 버전 "
+                f"{SCHEMA_VERSION}과 다릅니다."
+            )
+        if existing_version == SCHEMA_VERSION:
+            verify_database_schema(database)
     Base.metadata.create_all(database.engine)
     with database.session() as db:
         _seed_control(db)
@@ -228,6 +249,114 @@ def initialize_database(database: Database, settings: AuthSettings) -> None:
         _seed_plans(db)
         _seed_policies(db)
         _bootstrap_admin(db, settings)
+
+
+def verify_database_schema(database: Database, *, deep: bool = True) -> None:
+    """worker와 dry-run에서 쓰기 없이 현재 DB 계약만 확인한다."""
+    inspector = inspect(database.engine)
+    existing_tables = set(inspector.get_table_names())
+    required_tables = set(Base.metadata.tables)
+    missing = sorted(required_tables - existing_tables)
+    if missing:
+        raise RuntimeError(
+            "인증 DB 스키마가 초기화되지 않았습니다. "
+            "scripts/init_auth_db.py를 먼저 실행하세요. "
+            f"누락 테이블: {', '.join(missing)}"
+        )
+    with database.engine.connect() as connection:
+        version = connection.scalar(
+            select(SchemaVersion.version)
+            .order_by(SchemaVersion.version.desc())
+            .limit(1)
+        )
+    if version != SCHEMA_VERSION:
+        raise RuntimeError(
+            f"인증 DB schema version {version!r}은 앱 버전 {SCHEMA_VERSION}과 다릅니다. "
+            "migration job을 먼저 실행하세요."
+        )
+    if not deep:
+        return
+
+    issues: list[str] = []
+    for table_name, expected in Base.metadata.tables.items():
+        actual_columns = {
+            item["name"] for item in inspector.get_columns(table_name)
+        }
+        missing_columns = sorted(
+            column.name for column in expected.columns if column.name not in actual_columns
+        )
+        if missing_columns:
+            issues.append(f"{table_name} columns={','.join(missing_columns)}")
+
+        expected_pk = tuple(column.name for column in expected.primary_key.columns)
+        actual_pk = tuple(
+            inspector.get_pk_constraint(table_name).get(
+                "constrained_columns", ()
+            )
+            or ()
+        )
+        if expected_pk != actual_pk:
+            issues.append(f"{table_name} primary_key")
+
+        expected_indexes = {
+            index.name for index in expected.indexes if index.name is not None
+        }
+        actual_indexes = {
+            item["name"] for item in inspector.get_indexes(table_name)
+        }
+        missing_indexes = sorted(expected_indexes - actual_indexes)
+        if missing_indexes:
+            issues.append(f"{table_name} indexes={','.join(missing_indexes)}")
+
+        expected_unique = {
+            tuple(column.name for column in constraint.columns)
+            for constraint in expected.constraints
+            if isinstance(constraint, UniqueConstraint)
+        }
+        actual_unique = {
+            tuple(item.get("column_names") or ())
+            for item in inspector.get_unique_constraints(table_name)
+        }
+        missing_unique = sorted(expected_unique - actual_unique)
+        if missing_unique:
+            formatted = "|".join(",".join(columns) for columns in missing_unique)
+            issues.append(f"{table_name} unique={formatted}")
+
+        expected_foreign_keys = {
+            (
+                tuple(element.parent.name for element in constraint.elements),
+                constraint.elements[0].column.table.name,
+                tuple(element.column.name for element in constraint.elements),
+                (constraint.ondelete or "").upper(),
+            )
+            for constraint in expected.foreign_key_constraints
+        }
+        actual_foreign_keys = {
+            (
+                tuple(item.get("constrained_columns") or ()),
+                item.get("referred_table") or "",
+                tuple(item.get("referred_columns") or ()),
+                str((item.get("options") or {}).get("ondelete") or "").upper(),
+            )
+            for item in inspector.get_foreign_keys(table_name)
+        }
+        missing_foreign_keys = expected_foreign_keys - actual_foreign_keys
+        if missing_foreign_keys:
+            issues.append(f"{table_name} foreign_keys")
+    if issues:
+        raise RuntimeError(
+            "인증 DB 스키마 계약이 손상되었습니다: " + "; ".join(issues)
+        )
+
+
+def prepare_database_for_app(
+    database: Database, settings: AuthSettings
+) -> None:
+    """운영 앱은 스키마를 변경하지 않고 배포 전 migration 결과만 검증한다."""
+    if settings.production:
+        verify_database_schema(database)
+        return
+    initialize_database(database, settings)
 
 
 def _migrate_schema(database: Database, db: Session, current_version: int) -> None:
@@ -519,8 +648,19 @@ def _bootstrap_admin(db: Session, settings: AuthSettings) -> None:
     if not settings.bootstrap_admin_email or not settings.bootstrap_admin_password:
         return
     email = normalize_email(settings.bootstrap_admin_email)
-    if db.scalar(select(User).where(User.email == email)):
-        return
+    existing = db.scalar(select(User).where(User.email == email))
+    if existing is not None:
+        if existing.role == "admin" and existing.status == "active":
+            return
+        raise RuntimeError(
+            "bootstrap 이메일이 기존 비관리자 계정과 충돌합니다. "
+            "scripts/create_admin.py의 명시적 승격 절차를 사용하세요."
+        )
+    if (db.scalar(select(func.count(User.id))) or 0) > 0:
+        raise RuntimeError(
+            "bootstrap 최고관리자는 사용자 0명인 신규 DB에서만 생성할 수 있습니다. "
+            "bootstrap 환경변수를 제거하고 scripts/create_admin.py를 사용하세요."
+        )
     validate_password(settings.bootstrap_admin_password, email=email)
     admin = User(
         email=email,

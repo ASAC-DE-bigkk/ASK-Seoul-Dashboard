@@ -65,12 +65,12 @@
 - 로그인 challenge는 세션과 분리된 짧은 수명의 해시 토큰이며 IP/UA에 결속하고 최대 5회만 시도한다.
 - 복구 코드는 HMAC 해시만 저장하며 한 번 사용하면 즉시 폐기된다. 새 코드 발급 시 이전 코드는 모두
   무효화한다.
-- 운영자·최고관리자는 운영 환경에서 기본적으로 MFA가 강제된다. MFA가 없는 사용자는 해당 역할로
+- 운영자·최고관리자는 운영 환경에서 MFA가 강제되며 비활성 설정으로 기동할 수 없다. MFA가 없는 사용자는 해당 역할로
   승격할 수 없고, 기존 권한 계정의 비-MFA 세션도 인증 시 폐기된다.
 - 게스트·일반회원이 인증 앱과 복구 코드를 모두 잃은 경우 최고관리자가 회원 관리 화면에서 본인 확인
   사유를 남기고 MFA·복구 코드·기존 세션을 함께 폐기할 수 있다.
 - 운영자·최고관리자는 화면 초기화를 허용하지 않는다. 서버 운영자가 현재 비밀번호와 대화형 확인을 거친
-  `python3 scripts/setup_mfa.py --email <계정> --reset-existing` break-glass 재등록만 사용한다.
+  `.venv/bin/python scripts/setup_mfa.py --email <계정> --reset-existing` break-glass 재등록만 사용한다.
   새 TOTP가 먼저 검증되어야 기존 요소가 원자적으로 교체된다.
 - `AUTH_MFA_MASTER_KEY`를 잃거나 바꾸면 기존 TOTP seed를 복구할 수 없다. DB 백업과 분리된
   secret manager에 버전·복구 절차와 함께 보관하며 일반적인 키 회전처럼 무심코 교체하지 않는다.
@@ -148,13 +148,18 @@ SMTP_ALLOW_PLAINTEXT=false
 
 - `AUTH_TRUST_PROXY_HEADERS=true`는 원본 서버가 승인된 LB/WAF에서만 접근 가능하고, 해당 장비가
   전달 헤더를 덮어쓴다는 것이 보장될 때만 켠다.
-- 최고관리자 bootstrap 환경변수는 최초 생성 후 제거한다.
-- 최초 최고관리자를 만든 뒤 `python3 scripts/setup_mfa.py --email admin@example.com`으로 MFA를
-  등록하고, 복구 코드는 암호화된 운영 금고에 보관한다.
+- 기본 최고관리자 자격증명은 없다. production은 `AUTH_BOOTSTRAP_ADMIN_*`를 거부하므로,
+  기록이 남지 않는 보호된 대화형 TTY에서 `.venv/bin/python scripts/create_admin.py`로 생성한다.
+- 사용자가 이미 있는 DB에 별도 최고관리자를 추가할 때만 `--create-additional`과 화면의 정확한
+  확인 문구를 사용한다. 기존 계정 승격은 `--promote-existing` 확인 절차를 따른다.
+- 최초 최고관리자를 만든 뒤 같은 TTY에서 `.venv/bin/python scripts/setup_mfa.py`로 MFA를
+  등록한다. 화면에 표시되는 seed·URI·복구 코드는 녹화·로그에 남기지 않고 암호화된 운영 금고에 보관한다.
 - 권한 계정의 인증 앱과 복구 코드를 모두 분실한 경우에만 서버 콘솔에서
-  `python3 scripts/setup_mfa.py --email admin@example.com --reset-existing`를 실행한다.
+  `.venv/bin/python scripts/setup_mfa.py --reset-existing`를 실행한다.
 - 내장 blocklist는 최소 방어선이다. 공개 운영 전 정기 갱신되는 유출 비밀번호 목록을 로컬/사설
   서비스로 확장하되 비밀번호 원문을 제3자에게 전송하지 않는다.
 - inline event handler는 제거해 `script-src-attr 'none'`을 적용했다. 일반 inline script도 응답
   body의 SHA-256 hash와 일치할 때만 실행된다. 기존 단일 HTML 화면의 inline style 때문에
   `style-src 'unsafe-inline'`은 아직 남아 있으므로 공개 운영 전 CSS class로 이동한다.
+- production 앱 worker는 DDL/migration을 실행하지 않는다. 단일
+  `.venv/bin/python scripts/init_auth_db.py` job을 먼저 완료한 뒤 worker를 기동한다.

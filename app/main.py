@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import base64
 import hashlib
+import logging
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -16,6 +17,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from sqlalchemy.exc import SQLAlchemyError
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -24,7 +26,11 @@ from .auth.config import load_settings
 from .auth.database import Database
 from .auth.emailer import EmailSender
 from .auth.middleware import AuthSecurityMiddleware, RequestBodyLimitMiddleware
-from .auth.service import DomainError, initialize_database
+from .auth.service import (
+    DomainError,
+    prepare_database_for_app,
+    verify_database_schema,
+)
 from .charts import router as charts_router
 from .models import (
     CatalogResponse, CatalogSnapshotResponse, QualityResponse, SampleResponse,
@@ -32,6 +38,7 @@ from .models import (
 )
 
 HERE = Path(__file__).parent
+logger = logging.getLogger(__name__)
 SNAPSHOT_PATH = HERE.parent / "snapshot" / "catalog_snapshot.json"
 SWAGGER_VERSION = "5.32.8"
 SWAGGER_INIT_SCRIPT = """\
@@ -48,7 +55,10 @@ window.ui = SwaggerUIBundle({
 _snapshot = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
 _by_name = {t["name"]: t for t in _snapshot["tables"]}
 _auth_settings = load_settings()
-_database = Database(_auth_settings.database_url)
+_database = Database(
+    _auth_settings.database_url,
+    strict_file_permissions=_auth_settings.production,
+)
 
 
 def _inline_script_hash_map() -> dict[str, tuple[str, ...]]:
@@ -101,7 +111,7 @@ def _inline_script_hash_map() -> dict[str, tuple[str, ...]]:
 async def lifespan(_app: FastAPI):
     # 선택 기능도 부분 설정/오타를 묵인하지 않고 기동 단계에서 검증한다.
     EmailSender()
-    initialize_database(_database, _auth_settings)
+    prepare_database_for_app(_database, _auth_settings)
     yield
 
 
@@ -177,10 +187,23 @@ def _get_or_404(name: str) -> dict | JSONResponse:
     return t
 
 
-@app.get("/health")
-def health() -> dict:
+@app.get("/health", response_model=None)
+def health(request: Request) -> dict | JSONResponse:
+    try:
+        verify_database_schema(request.app.state.database, deep=False)
+    except (RuntimeError, SQLAlchemyError) as exc:
+        logger.error(
+            "auth database readiness failed path=/health error_type=%s",
+            type(exc).__name__,
+        )
+        return _problem(
+            503,
+            "database unavailable",
+            "인증 데이터베이스에 연결할 수 없습니다.",
+        )
     return {
         "status": "ok",
+        "database": "ok",
         "generated_at": _snapshot["generated_at"],
         "table_count": _snapshot["table_count"],
         "auth": "enabled",

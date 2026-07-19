@@ -24,18 +24,22 @@ app/main.py(FastAPI) ──▶ /api/v1/catalog/... + / (마켓플레이스 화�
 ## 실행
 
 ```bash
-# 1) 스냅샷 갱신 (전제: sample/ 스택 기동 + dbt target/ 에 manifest·catalog.json)
-.venv/Scripts/python extract.py
-
-# 2) 설치·인증 DB 초기화·최초 관리자
-python3 -m pip install -r requirements.txt
+# 1) 설치
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
 cp .env.example .env  # 값을 편집한 뒤 shell에 로드. 운영 시크릿은 secret manager에서 주입
 set -a; source .env; set +a
-python3 scripts/init_auth_db.py
-python3 scripts/create_admin.py --email admin@example.com
 
-# 3) 서버
-python3 -m uvicorn app.main:app --port 8765
+# 2) 인증 DB 초기화·최초 관리자
+.venv/bin/python scripts/init_auth_db.py
+.venv/bin/python scripts/create_admin.py
+.venv/bin/python scripts/setup_mfa.py
+
+# 3) 스냅샷 갱신 (전제: sample/ 스택 기동 + dbt target/ 에 manifest·catalog.json)
+.venv/bin/python extract.py
+
+# 4) 서버
+.venv/bin/uvicorn app.main:app --port 8765
 # → http://127.0.0.1:8765  (화면) · /docs (Swagger) · /health
 ```
 
@@ -45,7 +49,8 @@ python3 -m uvicorn app.main:app --port 8765
 - 게스트/일반회원/운영자/최고관리자 역할, 역할 기본 페이지 권한, 사용자 allow/deny override를 지원한다.
 - 이메일 인증 또는 관리자 승인, Argon2id 비밀번호, DB 세션·CSRF, 계정 잠금, 요청 제한을 적용한다.
 - 사용자별 온톨로지/Charts 레이아웃, 일·주·월·연 모의결제와 운영 승인, Discord/Slack/Telegram 알림을 지원한다.
-- 운영 문서: [docs/additional_doc/README.md](docs/additional_doc/README.md)
+- 최초 접속: [docs/maintanance/README.md](docs/maintanance/README.md) ·
+  상세 운영: [docs/additional_doc/README.md](docs/additional_doc/README.md)
 
 ## 카탈로그 API (인증 후 조회 전용)
 
@@ -60,7 +65,7 @@ python3 -m uvicorn app.main:app --port 8765
 에러는 RFC 7807(problem+json). 응답 스키마는 Pydantic `response_model` 로 고정
 (= API 의 contract enforced).
 
-## Charts Studio (`/charts`) — Commerce Gold 차트 스튜디오
+## Charts Studio (`/charts`) — 전 도메인 Gold 차트 스튜디오
 
 카탈로그 옆의 **시각화 스튜디오**. 사이드바의 Charts Studio(막대 아이콘)로 진입한다.
 격리 원칙: 백엔드는 [app/charts/](app/charts/), 프론트는 [app/static/charts/](app/static/charts/)
@@ -69,19 +74,24 @@ python3 -m uvicorn app.main:app --port 8765
 - **온톨로지 바인딩** — 도표는 컬럼명이 아니라 **필드의 의미역(role: time/geo_*/category/measure)**
   에 바인딩된다. 소스 목록·role 은 카탈로그 스냅샷에서 자동 파생되므로 gold 테이블·컬럼이
   변해도 코드 수정 없이 흡수되고, 저장된 필드가 사라지면 같은 role 로 폴백(타일에 '재바인딩' 표기).
-  필터 비교는 `cast(col as varchar)`/`try_cast(col as double)` 로 조립해 물리 타입 드리프트에도 안전.
-- **도표 14종** — 스탯/막대/선/원형/산점도/히트맵/테이블/**타임랩스 경주**(시간 프레임 자동 재생)
+  필수 슬롯은 서로 다른 실제 필드를 써야 하고, 비가산 측정값에서는 합계를,
+  원형에서는 평균/최소/최대를, 시간 누적 불가 지표에서는 누적 경주를 제거한다.
+  role별 필터 연산자도 서버와 UI가 공유하며 숫자는 `try_cast(col as double)`로만 비교한다.
+- **도표 14종** — 스탯/막대/선/원형/산점도/히트맵/테이블/**타임랩스 경주**(재생·정지·프레임·속도 제어)
   + 지도 6종(서울 자치구·행정동·법정동, 대한민국 시도, 세계, 좌표 밀도). GeoJSON 동봉.
 - **레이아웃 페이지** — 왼쪽 사이드탭에서 추가/전환, 우클릭으로 순서변경(위/아래)·이름변경·복제·삭제.
   오른쪽 위 **레이아웃 변경 → 드래그·리사이즈 → 레이아웃 저장**(저장 전에는 일반 화면에서 고정).
-  저장소는 사용자별 RDB `auth_dashboard_layouts`이며, 첫 접근 때 `layouts.seed.json`의 기본 4페이지를 복제한다.
+  저장소는 사용자별 RDB `auth_dashboard_layouts`이며, 첫 접근 때 `layouts.seed.json`의 기본
+  5페이지(상권 4 + 문화·교통·날씨·도시데이터·대중교통 대표 페이지)를 복제한다.
 - **데이터 경로** — `/api/v1/charts/query` 가 온톨로지 스펙을 화이트리스트 검증 후 SQL 로 조립해
   Trino gold 를 직접 집계한다(식별자=레지스트리 실재 필드만, 값=이스케이프). 결과는 디스크 캐시
-  (TTL 10분)로 박제되고, Trino 다운 시 stale 캐시로 응답해 화면이 죽지 않는다(mode 표기: live/cache/stale).
+  (TTL 10분)로 박제되고, 같은 cold-cache SQL은 singleflight로 한 번만 실행한다. Trino 다운 시
+  stale 캐시로 응답해 화면이 죽지 않는다(mode 표기: live/cache/stale).
 - **자동 갱신** — 상단 간격 선택(끔/1분/5분/10분/30분/1시간, 기본 10분)으로 캐시를 우회(force)해
   주기 재질의하고 무깜빡임으로 화면을 갱신한다(다음 갱신 카운트다운 표시). 편집 중·백그라운드 탭은
   건너뛰고 다시 보이면 밀린 갱신을 즉시 수행. 검증용 오버라이드: `/charts?refresh=<초>`.
-- 검증: `/charts?selftest=1` 로 실브라우저 셀프테스트(이동·저장·CRUD·온톨로지 폴백 14항목) 실행.
+- 검증: `python3 -m pytest -q`로 전체 온톨로지 계약을, `/charts?selftest=1`로
+  임시 페이지 기반 3페르소나 UX·6개 도메인 드로어/실질의·레이스 컨트롤·결측 보존을 검증한다.
 - **문서**: 기동/중지 매뉴얼·사용 가이드·설계 의도(대/중/소분류)·**계승 문서(HERITAGE)** 는
   [docs/](docs/README.md) — 새 작업자(사람/AI)는 [docs/HERITAGE.md](docs/HERITAGE.md) 부터.
 
@@ -90,6 +100,7 @@ python3 -m uvicorn app.main:app --port 8765
 | `GET /api/v1/charts/meta` | 도표 타입(슬롯 계약)·값 라벨 사전 |
 | `GET /api/v1/charts/sources` | 차트 소스(gold) + role 요약 |
 | `GET /api/v1/charts/sources/{name}` | 필드·role·기본 도표 힌트 |
+| `GET /api/v1/charts/sources/{name}/availability` | 실데이터 기준 필드별 null 아닌 값 수 |
 | `POST /api/v1/charts/query` | 온톨로지 스펙 → gold 집계 (live/cache/stale) |
 | `GET·POST·PATCH·DELETE /api/v1/charts/layouts…` | 레이아웃 페이지 CRUD·복제·순서변경 |
 

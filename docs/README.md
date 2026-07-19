@@ -6,6 +6,7 @@
 
 | 문서 | 내용 | 대상 독자 |
 |---|---|---|
+| [maintanance/README.md](maintanance/README.md) | 최초 최고관리자 접속과 필수 운영 원칙 | 설치·운영 책임자 |
 | [operations.md](operations.md) | 솔루션 기동(up)/중지(down)/초기화 매뉴얼 | 운영·시연하는 사람 |
 | [charts-user-guide.md](charts-user-guide.md) | Charts Studio 화면 사용법 (레이아웃·차트 추가·자동 갱신) | 화면을 쓰는 사람 |
 | [charts-design-intents.md](charts-design-intents.md) | 개발 의도 정리 — 대분류 › 중분류 › 소분류 | 코드를 고치는 사람 |

@@ -35,7 +35,8 @@ Discord·Slack·Telegram 알림에는 승인에 필요한 최소 정보만 포�
 | 거절·탈퇴 계정 | 분쟁·법정 보존이 없으면 지체 없이 삭제 또는 비식별화 |
 | 모의 결제 기록 | 서비스 운영상 필요한 기간만 보존; 실제 결제정보는 이 시스템에 저장하지 않음 |
 
-`python3 scripts/cleanup_auth.py`는 기본 dry-run이며, 만료 token/challenge/session, 사용된 MFA
+`.venv/bin/python scripts/cleanup_auth.py`는 DB를 변경하지 않는 기본 dry-run이며,
+만료 token/challenge/session, 사용된 MFA
 복구 코드, 종료된 알림 delivery와 만료 IP block을 좁은 범위로 정리한다. 사용자 삭제·감사 로그 삭제는
 자동화되어 있지 않으므로 승인·백업·법정 보존 확인 후 별도 운영 절차로 수행한다.
 
