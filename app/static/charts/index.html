@@ -44,6 +44,9 @@
     <div class="crumb">Charts Studio
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg>
       <b id="crumb-page">—</b>
+      <select id="mobile-page" class="mobile-page" aria-label="레이아웃 페이지"></select>
+      <button type="button" id="mobile-add-page" class="mobile-page-add" aria-label="레이아웃 추가">＋</button>
+      <button type="button" id="mobile-page-menu" class="mobile-page-menu" aria-label="현재 레이아웃 관리">⋯</button>
     </div>
     <span class="env">DEV</span>
     <div class="right">
@@ -86,7 +89,8 @@
 
 <!-- 차트 추가/편집 드로어 -->
 <div class="overlay" id="cfg-overlay"></div>
-<aside class="drawer" id="cfg-drawer" aria-label="차트 구성">
+<aside class="drawer" id="cfg-drawer" role="dialog" aria-modal="true"
+       aria-label="차트 구성" aria-hidden="true" inert>
   <div class="d-head">
     <div class="d-crumb"><span class="dot" style="background:var(--accent)"></span><span id="cfg-mode-label">차트 추가</span></div>
     <div class="top">
@@ -112,7 +116,8 @@
 <div class="ctx" id="ctx" hidden></div>
 
 <!-- 확인 모달 -->
-<div class="modal-wrap" id="modal" hidden>
+<div class="modal-wrap" id="modal" role="dialog" aria-modal="true"
+     aria-labelledby="modal-title" aria-describedby="modal-desc" hidden>
   <div class="modal">
     <b id="modal-title"></b>
     <p id="modal-desc"></p>

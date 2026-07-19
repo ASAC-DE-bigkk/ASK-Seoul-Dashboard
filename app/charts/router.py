@@ -4,8 +4,6 @@ main.py 는 이 router 를 include 만 한다. 에러는 본체와 같은 RFC 78
 """
 from __future__ import annotations
 
-import math
-
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -16,7 +14,8 @@ from app.auth.service import AccessService
 from . import layouts, querybuilder, trino
 from .models import (
     PageCreate, PageDetail, PagePatch, PageSummary,
-    QueryRequest, QueryResponse, ReorderRequest, SourceDetail, SourcesResponse,
+    QueryRequest, QueryResponse, ReorderRequest, SourceAvailability,
+    SourceDetail, SourcesResponse,
 )
 from .ontology import CHART_TYPES, registry
 
@@ -65,9 +64,11 @@ def _validate_charts(charts) -> None:
             raise querybuilder.SpecError(
                 f"알 수 없는 바인딩 슬롯입니다: {', '.join(sorted(unknown_slots))}"
             )
+        used_bindings: dict[str, str] = {}
         for slot_name, slot in slots.items():
             field_name = chart.bindings.get(slot_name)
-            if slot.get("required") and not field_name:
+            count_optional = chart.agg == "count" and slot.get("count_optional")
+            if slot.get("required") and not count_optional and not field_name:
                 raise querybuilder.SpecError(f"{chart.type}의 {slot_name} 바인딩이 필요합니다")
             if not field_name:
                 continue
@@ -76,12 +77,26 @@ def _validate_charts(charts) -> None:
                 raise querybuilder.SpecError(
                     f"{chart.source}에 없는 바인딩 필드입니다: {field_name}"
                 )
+            if not field.get("chartable", True):
+                raise querybuilder.SpecError(
+                    f"{field_name} 필드는 분석 축/값으로 안전하지 않아 차트 슬롯에 사용할 수 없습니다"
+                )
             if field["role"] not in slot["accepts"]:
                 raise querybuilder.SpecError(
                     f"{field_name} 필드는 {slot_name} 슬롯에 사용할 수 없습니다"
                 )
+            previous = used_bindings.get(field_name)
+            if previous:
+                raise querybuilder.SpecError(
+                    f"{previous}와 {slot_name} 슬롯은 서로 다른 필드를 사용해야 합니다"
+                )
+            used_bindings[field_name] = slot_name
         if chart.agg not in querybuilder.AGGS:
             raise querybuilder.SpecError(f"허용되지 않는 집계입니다: {chart.agg}")
+        if chart.agg not in chart_type.get("aggs", querybuilder.AGGS):
+            raise querybuilder.SpecError(
+                f"{chart.type} 차트에는 {chart.agg} 집계를 사용할 수 없습니다"
+            )
         option_contract = chart_type.get("options", {})
         unknown_options = set(chart.options) - set(option_contract)
         if unknown_options:
@@ -95,17 +110,44 @@ def _validate_charts(charts) -> None:
                     raise querybuilder.SpecError(f"{key} 옵션은 boolean이어야 합니다")
             elif (
                 isinstance(value, bool)
-                or not isinstance(value, (int, float))
-                or not math.isfinite(value)
+                or not isinstance(value, int)
             ):
-                raise querybuilder.SpecError(f"{key} 옵션은 유한한 숫자여야 합니다")
+                raise querybuilder.SpecError(f"{key} 옵션은 유한한 숫자이며 정수여야 합니다")
             elif key == "interval_ms" and not 200 <= value <= 5_000:
                 raise querybuilder.SpecError("interval_ms 옵션은 200~5000이어야 합니다")
             elif key == "top_n" and not 1 <= value <= 5_000:
                 raise querybuilder.SpecError("top_n 옵션은 1~5000이어야 합니다")
+        effective_options = {**option_contract, **chart.options}
+        for constraint in chart_type.get("agg_constraints", []):
+            when = constraint.get("when", {})
+            if all(effective_options.get(key) == value for key, value in when.items()):
+                if chart.agg not in constraint.get("allowed", []):
+                    raise querybuilder.SpecError(
+                        f"현재 {chart.type} 옵션에는 {chart.agg} 집계를 사용할 수 없습니다"
+                    )
+        if chart.type == "race" and effective_options.get("cumulative"):
+            value_name = chart.bindings.get("value")
+            value_field = fields.get(value_name) if value_name else None
+            if chart.agg == "count" or not (
+                value_field and value_field.get("cumulative_safe", False)
+            ):
+                raise querybuilder.SpecError(
+                    "이 측정값은 시간 누적 시 중복 합산될 수 있어 누적 경주를 사용할 수 없습니다"
+                )
+        for field_name in used_bindings:
+            field = fields[field_name]
+            if field["role"] != "measure":
+                continue
+            allowed = field.get("allowed_aggs")
+            if allowed is not None and chart.agg not in allowed:
+                raise querybuilder.SpecError(
+                    f"{field_name} 필드에는 {chart.agg} 집계를 사용할 수 없습니다"
+                )
         for item in chart.filters:
             if item.field not in fields or item.op not in querybuilder.OPS:
                 raise querybuilder.SpecError("차트 필터 필드 또는 연산자가 올바르지 않습니다")
+            # 레이아웃 저장 시에도 query 단계와 같은 값 형식 검사를 수행한다.
+            querybuilder.validate_filter(item.model_dump(), fields)
         if set(chart.grid) - {"x", "y", "w", "h"}:
             raise querybuilder.SpecError("grid에는 x, y, w, h만 사용할 수 있습니다")
         if any(
@@ -156,6 +198,58 @@ def source_detail(
         return _problem(404, "source not found",
                         f"'{name}' 은 차트 소스에 없습니다. GET /api/v1/charts/sources 로 확인하세요.")
     return _personalize_source(s, _ontology(db, user))
+
+
+@router.get(
+    "/sources/{name}/availability",
+    response_model=SourceAvailability,
+    responses={404: {"description": "unknown source"},
+               502: {"description": "availability 질의 실패"},
+               503: {"description": "Trino 접속 불가"}},
+    summary="실데이터 필드 가용성 — null이 아닌 값 개수",
+)
+def source_availability(
+    name: str,
+    _user: User = Depends(current_user),
+):
+    source = registry.get(name)
+    if source is None:
+        return _problem(404, "source not found", f"'{name}' 은 차트 소스에 없습니다.")
+    aliases = {
+        field["name"]: f"field_{index}"
+        for index, field in enumerate(source["fields"])
+    }
+    try:
+        sql = querybuilder.build(
+            source,
+            {
+                "measures": [
+                    {"field": field_name, "agg": "count", "alias": alias}
+                    for field_name, alias in aliases.items()
+                ],
+                "limit": 1,
+            },
+        )
+        result = trino.execute(sql, max_rows=1)
+    except querybuilder.SpecError as exc:
+        return _problem(400, "invalid availability spec", str(exc))
+    except trino.QueryFailed as exc:
+        return _problem(502, "availability query failed", str(exc))
+    except trino.TrinoUnavailable as exc:
+        return _problem(503, "trino unavailable", str(exc))
+    row = result["rows"][0] if result["rows"] else []
+    positions = {column: index for index, column in enumerate(result["columns"])}
+    return {
+        "source": name,
+        "fields": {
+            field_name: int(row[positions[alias]] or 0)
+            if alias in positions and positions[alias] < len(row)
+            else 0
+            for field_name, alias in aliases.items()
+        },
+        "mode": result["mode"],
+        "elapsed_ms": result.get("elapsed_ms", 0),
+    }
 
 
 @router.post("/query", response_model=QueryResponse,

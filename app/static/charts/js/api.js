@@ -25,6 +25,7 @@ const API = (() => {
     meta: () => call('/meta'),
     sources: (domain = 'all') => call(`/sources?domain=${encodeURIComponent(domain)}`),
     source: name => call(`/sources/${encodeURIComponent(name)}`),
+    availability: name => call(`/sources/${encodeURIComponent(name)}/availability`),
     query,
     pages: () => call('/layouts'),
     page: id => call(`/layouts/${id}`),

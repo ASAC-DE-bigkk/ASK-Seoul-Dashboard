@@ -29,6 +29,9 @@ MAX_CONCURRENT_QUERIES = max(
 
 _lock = threading.Lock()
 _query_slots = threading.BoundedSemaphore(MAX_CONCURRENT_QUERIES)
+# 같은 SQL의 cold-cache 요청은 한 실행만 Trino로 보내고 나머지는 그 결과를 재사용한다.
+# 고정 stripe라 키별 Lock 사전의 무한 증가도 피한다.
+_flight_locks = tuple(threading.Lock() for _ in range(64))
 _TRINO_ORIGIN = urllib.parse.urlsplit(TRINO_URL)
 _TRINO_STATEMENT_PREFIX = _TRINO_ORIGIN.path.rstrip("/") + "/v1/statement"
 if (
@@ -176,28 +179,52 @@ def execute(sql: str, max_rows: int = MAX_ROWS, force: bool = False) -> dict:
     if not force and cached and time.time() - cached["cached_at"] < FRESH_TTL_S:
         return {"columns": cached["columns"], "rows": cached["rows"],
                 "mode": "cache", "cached_at": cached["cached_at"], "elapsed_ms": 0}
-    started = time.monotonic()
-    acquired = _query_slots.acquire(timeout=2)
-    if not acquired:
+    wait_started = time.time()
+    digest = hashlib.sha256(sql.encode("utf-8")).digest()
+    flight = _flight_locks[int.from_bytes(digest[:2], "big") % len(_flight_locks)]
+    waited = not flight.acquire(blocking=False)
+    if waited and not flight.acquire(timeout=125):
+        cached = _cache_read(sql)
         if cached:
-            return {
-                "columns": cached["columns"],
-                "rows": cached["rows"],
-                "mode": "stale",
-                "cached_at": cached["cached_at"],
-                "elapsed_ms": 0,
-            }
-        raise TrinoUnavailable("trino query concurrency limit reached")
+            return {"columns": cached["columns"], "rows": cached["rows"],
+                    "mode": "stale", "cached_at": cached["cached_at"], "elapsed_ms": 0}
+        raise TrinoUnavailable("identical trino query wait timed out")
     try:
+        if waited:
+            refreshed = _cache_read(sql)
+            if refreshed and refreshed["cached_at"] >= wait_started:
+                return {
+                    "columns": refreshed["columns"],
+                    "rows": refreshed["rows"],
+                    "mode": "cache",
+                    "cached_at": refreshed["cached_at"],
+                    "elapsed_ms": 0,
+                }
+        cached = _cache_read(sql)
+        started = time.monotonic()
+        acquired = _query_slots.acquire(timeout=2)
+        if not acquired:
+            if cached:
+                return {
+                    "columns": cached["columns"],
+                    "rows": cached["rows"],
+                    "mode": "stale",
+                    "cached_at": cached["cached_at"],
+                    "elapsed_ms": 0,
+                }
+            raise TrinoUnavailable("trino query concurrency limit reached")
         try:
-            columns, rows = _run(sql, max_rows)
-        except TrinoUnavailable:
-            if cached:  # 죽은 Trino 보다 낡은 데이터가 낫다 — mode 로 낡음을 정직하게 표기
-                return {"columns": cached["columns"], "rows": cached["rows"],
-                        "mode": "stale", "cached_at": cached["cached_at"], "elapsed_ms": 0}
-            raise
+            try:
+                columns, rows = _run(sql, max_rows)
+            except TrinoUnavailable:
+                if cached:  # 죽은 Trino 보다 낡은 데이터가 낫다 — mode 로 낡음을 정직하게 표기
+                    return {"columns": cached["columns"], "rows": cached["rows"],
+                            "mode": "stale", "cached_at": cached["cached_at"], "elapsed_ms": 0}
+                raise
+        finally:
+            _query_slots.release()
+        _cache_write(sql, columns, rows)
+        return {"columns": columns, "rows": rows, "mode": "live",
+                "elapsed_ms": round((time.monotonic() - started) * 1000)}
     finally:
-        _query_slots.release()
-    _cache_write(sql, columns, rows)
-    return {"columns": columns, "rows": rows, "mode": "live",
-            "elapsed_ms": round((time.monotonic() - started) * 1000)}
+        flight.release()

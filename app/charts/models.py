@@ -13,6 +13,13 @@ class FieldInfo(BaseModel):
     label: str
     desc: str = ""
     granularity: Optional[str] = None
+    preferred_agg: Optional[str] = None
+    additive: Optional[bool] = None
+    allowed_aggs: Optional[list[str]] = None
+    cumulative_safe: bool = False
+    recommendation_priority: int = 40
+    chartable: bool = True
+    allowed_filter_ops: list[str] = Field(default_factory=list)
 
 
 class SourceSummary(BaseModel):
@@ -29,6 +36,13 @@ class SourceDetail(SourceSummary):
     date_range: Optional[dict] = None
     fields: list[FieldInfo]
     default_chart: Optional[dict] = None
+
+
+class SourceAvailability(BaseModel):
+    source: str
+    fields: dict[str, int]
+    mode: str
+    elapsed_ms: int = 0
 
 
 class SourcesResponse(BaseModel):
