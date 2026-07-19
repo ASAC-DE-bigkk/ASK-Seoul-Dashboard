@@ -33,7 +33,7 @@ Charts Studio 가 라이브 질의를 갖는 이유: 사용자가 소스·차원
 - **데이터 규정(상위 커머스 번들 계승)**: 원본 값을 파괴하지 않는다 — 코드값은 표시 라벨로만 번역하고,
   집계·필터는 재현 가능해야 한다(응답에 SQL 포함). 시크릿을 코드·로그·커밋에 넣지 않는다.
 - **문서 체인**: [docs/README.md](README.md)(인덱스) → [operations.md](operations.md)(기동/중지) ·
-  [maintanance/README.md](maintanance/README.md)(최초 접속·운영 원칙) ·
+  [maintanance/README.md](maintanance/README.md)(개발 실행·최초 접속·운영 원칙) ·
   [charts-user-guide.md](charts-user-guide.md)(사용법) · [charts-design-intents.md](charts-design-intents.md)(의도 A~F) · 본 문서(계승).
 
 ## 3. 환경 사실 (하드코딩된 지식 — 모르면 사고 나는 것들)

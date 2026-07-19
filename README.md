@@ -49,8 +49,9 @@ set -a; source .env; set +a
 - 게스트/일반회원/운영자/최고관리자 역할, 역할 기본 페이지 권한, 사용자 allow/deny override를 지원한다.
 - 이메일 인증 또는 관리자 승인, Argon2id 비밀번호, DB 세션·CSRF, 계정 잠금, 요청 제한을 적용한다.
 - 사용자별 온톨로지/Charts 레이아웃, 일·주·월·연 모의결제와 운영 승인, Discord/Slack/Telegram 알림을 지원한다.
-- 최초 접속: [docs/maintanance/README.md](docs/maintanance/README.md) ·
-  상세 운영: [docs/additional_doc/README.md](docs/additional_doc/README.md)
+- 개발 실행·최초 접속: [docs/maintanance/README.md](docs/maintanance/README.md) ·
+  기동·중지: [docs/operations.md](docs/operations.md) ·
+  보안·인프라 보충: [docs/additional_doc/README.md](docs/additional_doc/README.md)
 
 ## 카탈로그 API (인증 후 조회 전용)
 

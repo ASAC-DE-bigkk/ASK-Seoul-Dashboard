@@ -1,12 +1,14 @@
 # 운영 매뉴얼 — 솔루션 기동(up) / 중지(down)
 
 대상: 이 데모(카탈로그 + Charts Studio)를 켜고 끄고 초기화하는 사람.
-구성 요소는 **① 데이터 스택(docker compose)**, **② 인증/권한 RDB**, **③ 대시보드 서버(FastAPI)**다.
+구성 요소는 **① 데이터 스택(docker compose)**, **② 인증/권한 RDB**,
+**③ 대시보드 서버(FastAPI)**다.
 
 ```
-[R2/Iceberg gold] ←질의─ Trino(:30586) ←─ ② FastAPI(:8765) ─→ 브라우저 (/charts, /catalog)
-        ▲                                        │
-   Airflow DAG(적재)                     snapshot/catalog_snapshot.json (카탈로그 메타)
+브라우저 ↔ ③ FastAPI(:8765) ↔ ② 인증/권한 RDB
+                  ├─질의→ ① Trino(:30586) → R2/Iceberg gold
+                  └─읽기→ snapshot/catalog_snapshot.json
+Airflow DAG ─적재────────────────────→ R2/Iceberg gold
 ```
 
 ---
@@ -24,18 +26,23 @@ docker compose up -d            # 전체 스택
 docker compose up -d trino
 ```
 
+Trino가 R2/Iceberg gold를 읽으려면 `sample/.env`에 허가된 catalog·object storage
+연결 설정이 주입되어 있어야 한다. 이 파일은 `dashboard/.env`와 별개이며 커밋하지 않는다.
+
 기동 확인:
 
 ```bash
 docker compose ps                                   # trino 가 healthy 인지
 curl -s http://127.0.0.1:30586/v1/info | head -c 80  # {"nodeId":...,"state":"ACTIVE"...}
+docker compose exec trino trino --execute 'SELECT 1'  # query engine 확인
 ```
 
 | 서비스 | 포트 | Charts Studio 와의 관계 |
 |---|---|---|
 | trino | 127.0.0.1:30586 | **필수** — gold 집계 질의 대상 |
 | airflow-apiserver | 127.0.0.1:30585 | 선택 — gold 를 갱신하는 적재 파이프라인 |
-| serving-postgres / marquez | 30587 / 3000 | 무관 (타 워크로드) |
+| postgres | 호스트 미노출 | Airflow 메타 DB, 대시보드 인증 DB와 별개 |
+| marquez-api / marquez-web | 5000 / 3000 | 무관 (OpenLineage 워크로드) |
 
 ### 1-2. 대시보드 서버
 
@@ -60,9 +67,17 @@ set -a; source .env; set +a
 기동:
 
 ```bash
+# 새 로컬 셸을 열 때마다 환경을 다시 로드한다.
+set -a
+source .env
+set +a
 .venv/bin/uvicorn app.main:app --port 8765            # Windows: .venv\Scripts\uvicorn
 # 개발 중이면 --reload 를 붙인다
 ```
+
+production은 `.env`를 source하지 않고 service manager/Secret Manager가 환경을 주입한다.
+포트 8765는 공개하지 않고 HTTPS LB/reverse proxy 뒤 private origin으로 배치한다.
+`AUTH_TRUST_PROXY_HEADERS=true`는 origin 직접 접근이 차단된 경우에만 사용한다.
 
 진입점:
 
@@ -78,13 +93,16 @@ set -a; source .env; set +a
 | http://127.0.0.1:8765/docs | Swagger (권한 계정용 읽기 전용 API 계약) |
 | http://127.0.0.1:8765/health | 앱·인증 DB readiness |
 
-기동 검증(권장): 브라우저로 `http://127.0.0.1:8765/charts?selftest=1` 접속 →
-탭 제목이 `SELFTEST_ALL_PASS` 면 레이아웃 CRUD·질의·온톨로지 폴백까지 전부 정상.
+기동 검증(권장): 최고관리자로 로그인한 동일 브라우저에서
+`http://127.0.0.1:8765/charts?selftest=1` 접속 → 탭 제목이 `SELFTEST_ALL_PASS`면
+레이아웃 CRUD·질의·온톨로지 폴백까지 전부 정상.
 
 ### 1-3. 환경변수
 
 | 변수 | 기본값 | 용도 |
 |---|---|---|
+| `AUTH_ENV` | `development` | production 보안 검증 활성화 기준 |
+| `AUTH_ALLOWED_HOSTS` | `127.0.0.1,localhost` | 허용 Host 헤더 목록 |
 | `CHARTS_TRINO_URL` | `http://127.0.0.1:30586` | Trino 주소 |
 | `CHARTS_TRINO_USER` | `charts-studio` | X-Trino-User 헤더 |
 | `CHARTS_CACHE_TTL` | `600` (초) | 질의 결과 디스크 캐시 신선 기간 |
@@ -110,8 +128,8 @@ production은 `DATABASE_URL` 명시와 원격 RDB 인증서 hostname 검증을 �
 ## 2. 중지 (down)
 
 ```bash
-# ② 대시보드 서버 — 포그라운드면 Ctrl+C, 백그라운드면:
-kill $(lsof -ti :8765)
+# ③ 대시보드 서버 — 포그라운드면 Ctrl+C
+# 백그라운드/production은 기동에 사용한 service manager에서 해당 unit만 중지한다.
 
 # ① 데이터 스택 — sample/ 루트에서
 docker compose stop        # 컨테이너 보존(권장 — 다음 up 이 빠르다)
@@ -127,13 +145,16 @@ docker compose down        # 컨테이너 제거(볼륨은 유지). -v 는 데�
 | 하고 싶은 것 | 방법 |
 |---|---|
 | 특정 사용자의 레이아웃을 기본 시드로 되돌리기 | 운영 승인 후 해당 사용자의 `auth_dashboard_layouts` 행만 삭제. 다음 접근 때 `layouts.seed.json`을 다시 복제 |
-| 질의 캐시 비우기 | `rm -r app/charts/data/cache/` |
+| 질의 캐시 비우기 | 앱을 중지하고 `dashboard/app/charts/data/cache/`의 대상 파일을 확인한 뒤 그 내부 캐시만 삭제 |
 | 카탈로그 메타(소스 목록·스키마) 갱신 | `python extract.py` → `snapshot/catalog_snapshot.json` 재생성 (스택 기동 + dbt manifest 전제) |
 
 > 참고: 레이아웃은 RDB 사용자 데이터다. 전체 DB 파일 삭제로 초기화하지 말고 대상 사용자 행을 좁혀 처리한다.
 > `app/charts/data/cache/`는 계속 gitignore 대상 런타임 캐시이며, 커밋되는 기본 레이아웃은 시드뿐이다.
 
 ### 3-1. 정기 유지보수
+
+로컬 셸에서는 먼저 `set -a; source .env; set +a`를 실행한다. cron/systemd와 production은
+대상 앱과 같은 환경을 service manager/Secret Manager에서 주입해야 한다.
 
 ```bash
 # 중단 후 남은 결제 알림 outbox 복구·전송
