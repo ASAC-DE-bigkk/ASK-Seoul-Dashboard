@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 
@@ -21,13 +22,18 @@ charts_router = importlib.import_module("app.charts.router")
 DOMAINS = {"culture", "commerce", "traffic", "weather", "citydata", "transit"}
 
 
+def _contract_test_id(source_name: str, chart_type: str) -> str:
+    digest = hashlib.sha256(f"{source_name}:{chart_type}".encode()).hexdigest()[:12]
+    return f"contract-{chart_type}-{digest}"
+
+
 def _config_for_supported(source: dict, chart_type: str) -> ChartConfig:
     spec = CHART_TYPES[chart_type]
     if chart_type != "scatter":
         bindings = compatible_bindings(source["fields"], spec, count_mode=True)
         if bindings is not None:
             return ChartConfig(
-                id=f"{source['name']}-{chart_type}",
+                id=_contract_test_id(source["name"], chart_type),
                 type=chart_type,
                 source=source["name"],
                 bindings=bindings,
@@ -36,7 +42,7 @@ def _config_for_supported(source: dict, chart_type: str) -> ChartConfig:
     bindings = compatible_bindings(source["fields"], spec)
     assert bindings is not None
     return ChartConfig(
-        id=f"{source['name']}-{chart_type}",
+        id=_contract_test_id(source["name"], chart_type),
         type=chart_type,
         source=source["name"],
         bindings=bindings,

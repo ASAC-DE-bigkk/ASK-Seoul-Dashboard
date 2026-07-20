@@ -149,7 +149,8 @@ docker compose down        # 컨테이너 제거(볼륨은 유지). -v 는 데�
 |---|---|
 | 특정 사용자의 레이아웃을 기본 시드로 되돌리기 | 운영 승인 후 해당 사용자의 `auth_dashboard_layouts` 행만 삭제. 다음 접근 때 `layouts.seed.json`을 다시 복제 |
 | 질의 캐시 비우기 | 앱을 중지하고 `dashboard/app/charts/data/cache/`의 대상 파일을 확인한 뒤 그 내부 캐시만 삭제 |
-| 카탈로그 메타(소스 목록·스키마) 갱신 | `python extract.py` → `snapshot/catalog_snapshot.json` 재생성 (스택 기동 + dbt manifest 전제) |
+| 카탈로그 메타 전체 갱신 | `python extract.py` → `snapshot/catalog_snapshot.json` 재생성 (스택 기동 + culture dbt manifest/catalog 전제) |
+| basic domain 부분 갱신 | `python extract.py --refresh-basic-domain commerce`처럼 지정 domain만 현재 Trino에서 재측정. 비대상 domain과 `external` 분류 보존 |
 
 > 참고: 레이아웃은 RDB 사용자 데이터다. 전체 DB 파일 삭제로 초기화하지 말고 대상 사용자 행을 좁혀 처리한다.
 > `app/charts/data/cache/`는 계속 gitignore 대상 런타임 캐시이며, 커밋되는 기본 레이아웃은 시드뿐이다.

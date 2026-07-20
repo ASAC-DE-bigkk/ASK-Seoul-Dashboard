@@ -180,3 +180,6 @@ open "http://127.0.0.1:8765/charts?selftest=1"
   Dashboard/PostgreSQL/서버 장기 `.env`에는 복제하지 않도록 고정.
 - 2026-07-21: 사람이 같은 배포를 재현할 수 있도록 접속 PC·GitHub 웹·대상 서버·GitHub
   Actions의 실행 위치를 분리한 종단간 순차 실행서를 추가.
+- 2026-07-21: 최신 snapshot에 commerce가 빠져 Docker test가 실패한 회귀를 보강. sample 하위
+  submodule 경로를 인식하고, culture artifact가 없을 때도 지정 basic domain만 현재 Trino에서
+  원자적으로 부분 갱신하면서 domain별 관측 시각과 비대상 domain을 보존하도록 수정.
