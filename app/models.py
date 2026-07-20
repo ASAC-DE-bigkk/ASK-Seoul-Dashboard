@@ -28,6 +28,7 @@ class QualityEntry(BaseModel):
 class TableSummary(BaseModel):
     name: str
     domain: str = "culture"
+    external: bool = True  # 외부 공개 대상 여부(#269). false=내부/팀 전용(예: SLO 운영 지표)
     relation: str
     description: str = ""
     tags: list[str] = []
