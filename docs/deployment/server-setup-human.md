@@ -34,11 +34,11 @@ project prefix가 붙어 `ask-seoul-dashboard-dev_auth_postgres`가 된다. R2 �
 정본은 GitHub `development` Environment이고 실행 시 Trino에만 일시 주입한다. Dashboard와
 PostgreSQL에는 복사하지 않는다.
 
-2026-07-21 최초 inventory에서는 Docker/Compose가 없었지만, 설치 후 재확인 결과 대상은
-Rocky Linux 8.10 x86_64, Docker Engine `29.6.2`, Compose `v5.3.1`이고 `exi`에 docker group이
-적용되어 있다. `flock`·`openssl`도 존재한다. 아직 Trino container와 `elt_net`은 없으므로
-첫 `dev` workflow가 [최소 Trino companion](../../deploy/trino/README.md)을 먼저 만들고
-Dashboard를 배포한다. 이 사실은 시점에 따라 바뀔 수 있으므로 첫 명령으로 다시 확인한다.
+2026-07-21 최초 inventory에서는 Docker/Compose가 없었지만, 설치 후 대상은 Rocky Linux 8.10
+x86_64, Docker Engine `29.6.2`, Compose `v5.3.1`이고 `exi`에 docker group이 적용됐다.
+`flock`·`openssl`도 존재한다. 첫 `dev` workflow 완료 후에는
+[최소 Trino companion](../../deploy/trino/README.md), `elt_net`, Dashboard, notification worker,
+PostgreSQL이 모두 실행 중이다. 이 사실은 시점에 따라 바뀔 수 있으므로 첫 명령으로 다시 확인한다.
 
 ## 1. 서버 사전 점검
 
