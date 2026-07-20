@@ -157,6 +157,7 @@
           padding: 2px 8px; border-radius: 5px; white-space: nowrap; border: 1px solid transparent; }
   .pill.ok { background: #f0f9f0; color: var(--good-deep); border-color: #d8eed8; }
   .pill.dim { background: var(--bg); color: var(--ink-2); border-color: var(--line-soft); }
+  .pill.int { background: #fbf3e2; color: #8a6a15; border-color: #efdfb8; }
 
   .meter { display: flex; height: 5px; border-radius: 3px; overflow: hidden; gap: 2px;
            background: var(--line-soft); flex: 1; min-width: 60px; }
@@ -582,6 +583,7 @@ function renderCards(tables) {
         <div class="f"><span>Coverage</span><b>${range}</b></div>
       </div>
       <div class="foot">${qfoot}
+        ${t.external === false ? '<span class="pill int" title="내부·팀 전용 — 외부 카탈로그 비공개">내부</span>' : ''}
         ${t.contract_enforced ? '<span class="pill ok">contract</span>' : '<span class="pill dim">—</span>'}
       </div>
     </article>`;

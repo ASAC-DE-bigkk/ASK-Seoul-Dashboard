@@ -39,6 +39,7 @@ def _summary(t: dict) -> dict:
         **{k: t[k] for k in ("name", "relation", "description", "tags",
                              "contract_enforced", "materialized", "row_count", "date_range")},
         "domain": t.get("domain", "culture"),
+        "external": t.get("external", True),
         "column_count": len(t["columns"]),
         "quality_source_count": len(t["quality"]),
     }
@@ -69,13 +70,17 @@ def health() -> dict:
 
 @app.get("/api/v1/catalog/tables", response_model=CatalogResponse,
          summary="published 테이블 목록 (카드용 요약)")
-def list_tables() -> dict:
+def list_tables(external: bool | None = None) -> dict:
+    """external=true 면 외부 공개 대상만(#269). 내부 마트(SLO 등)는 external=false 로 제외된다."""
+    rows = _snapshot["tables"]
+    if external is not None:
+        rows = [t for t in rows if t.get("external", True) is external]
     return {
         "generated_at": _snapshot["generated_at"],
         "domain": _snapshot["domain"],
         "domains": _snapshot.get("domains", {}),
-        "table_count": _snapshot["table_count"],
-        "tables": [_summary(t) for t in _snapshot["tables"]],
+        "table_count": len(rows),
+        "tables": [_summary(t) for t in rows],
     }
 
 

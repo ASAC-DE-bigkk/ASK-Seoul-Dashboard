@@ -30,6 +30,25 @@ TARGET_DIR = SAMPLE_DIR / "dbt" / "domains" / "culture" / "target"
 DBT_DOMAINS_DIR = SAMPLE_DIR / "dbt" / "domains"
 OUT_PATH = HERE / "snapshot" / "catalog_snapshot.json"
 
+# 외부 공개 분류(#269). 소스 오브 트루스 = dbt 모델 config.meta.external.
+#   도메인이 자기 yml 에 meta.external 을 달면 그 값이 우선한다. 없으면 아래 내부 목록으로 판정.
+#   → 외부 카탈로그는 external=true 만 노출(예: slo_daily 파이프라인 지표는 외부 비공개).
+INTERNAL_GOLD = {
+    "gold_culture_slo_daily",             # 파이프라인 SLO 운영 지표 — 외부 비공개(내부/팀 전용)
+    "gold_culture_movie_boxoffice_daily", # KOBIS 공개 API 재포장 — Q&A 메트릭만
+    "gold_culture_location_daily",        # activity_by_dong(동 스카폴드) 의 구 롤업 — 내부
+    "gold_culture_sports_schedule",       # 수동 seed(SLA 불가) — event_schedule 소스로 강등
+    "gold_culture_reservation_daily",     # 서울시 공공예약 재노출 — event_schedule 흡수
+}
+
+
+def is_external(node: dict, name: str) -> bool:
+    """외부 공개 여부: dbt meta.external 우선, 없으면 내부 목록으로 판정."""
+    meta = node.get("config", {}).get("meta", {})
+    if "external" in meta:
+        return bool(meta["external"])
+    return name not in INTERNAL_GOLD
+
 # basic 도메인 description 을 끌어올 dbt 프로젝트(모델명 전역 유일 → 병합 lookup).
 # traffic·weather 는 하나의 dbt 프로젝트(traffic_weather)로 합쳐져 있다.
 BASIC_MANIFEST_PROJECTS = ("commerce", "citydata", "traffic_weather", "transit")
@@ -208,6 +227,8 @@ def extract_basic_domain(domain: str, schema: str, meta_lookup: dict) -> list[di
         tables.append({
             "name": name,
             "domain": domain,
+            # 타 도메인 basic: 기본 외부 공개. 각 도메인이 dbt meta.external 로 내부 마트를 표시하면 반영됨.
+            "external": bool(meta.get("external", True)),
             "relation": rel,
             "description": meta.get("description", ""),
             "tags": meta.get("tags", []),
@@ -276,6 +297,7 @@ def main() -> None:
         tables.append({
             "name": name,
             "domain": "culture",
+            "external": is_external(node, name),
             "relation": rel.replace('"', ""),
             "description": node.get("description", ""),
             "tags": node.get("tags", []),
