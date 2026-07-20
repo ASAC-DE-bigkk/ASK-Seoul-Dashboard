@@ -18,14 +18,29 @@ Airflow 태스크(또는 transform 후속 스텝)가 될 부분의 데모 축소
 """
 from __future__ import annotations
 
+import argparse
 import json
+import os
 import subprocess
 import sys
+import tempfile
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 
 HERE = Path(__file__).parent
-SAMPLE_DIR = HERE.parent / "sample"
+
+
+def resolve_sample_dir(here: Path) -> Path:
+    """Dashboard standalone checkout과 sample/dashboard submodule 배치를 모두 지원한다."""
+    candidates = (here.parent, here.parent / "sample")
+    for candidate in candidates:
+        if (candidate / "docker-compose.yml").is_file() and (candidate / "dbt").is_dir():
+            return candidate
+    return here.parent / "sample"
+
+
+SAMPLE_DIR = resolve_sample_dir(HERE)
 TARGET_DIR = SAMPLE_DIR / "dbt" / "domains" / "culture" / "target"
 DBT_DOMAINS_DIR = SAMPLE_DIR / "dbt" / "domains"
 OUT_PATH = HERE / "snapshot" / "catalog_snapshot.json"
@@ -188,6 +203,7 @@ def load_basic_meta() -> dict:
                 "tags": node.get("tags", []),
                 "contract_enforced": bool(cfg.get("contract", {}).get("enforced")),
                 "materialized": cfg.get("materialized", ""),
+                "external": bool(cfg.get("meta", {}).get("external", True)),
                 # 계보 — culture rich 와 같은 upstream_layers 재사용 (도메인 manifest 내 한정)
                 "lineage": upstream_layers(uid, all_nodes),
             }
@@ -243,6 +259,124 @@ def extract_basic_domain(domain: str, schema: str, meta_lookup: dict) -> list[di
             "sample": sample,
         })
     return tables
+
+
+def write_snapshot(snapshot: dict) -> None:
+    """완성된 JSON만 원자적으로 교체해 중간 실패 시 기존 snapshot을 보존한다."""
+    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n"
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=OUT_PATH.parent,
+            prefix=f".{OUT_PATH.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+            temp_path = Path(handle.name)
+        temp_path.chmod(0o644)
+        os.replace(temp_path, OUT_PATH)
+    finally:
+        if temp_path is not None and temp_path.exists():
+            temp_path.unlink()
+
+
+def merge_basic_domains(
+    snapshot: dict,
+    replacements: dict[str, list[dict]],
+    observed_at: str,
+) -> dict:
+    """기존 snapshot의 비대상 domain을 보존하고 지정 basic domain만 교체한다."""
+    if not replacements:
+        raise ValueError("at least one basic domain replacement is required")
+    unknown = set(replacements) - set(OTHER_DOMAINS)
+    if unknown:
+        raise ValueError(f"unknown basic domains: {sorted(unknown)}")
+    for domain, tables in replacements.items():
+        if not tables:
+            raise ValueError(f"refusing to replace {domain} with an empty table set")
+        if any(table.get("domain") != domain for table in tables):
+            raise ValueError(f"replacement contains a table from another domain: {domain}")
+
+    merged = deepcopy(snapshot)
+    replaced_domains = set(replacements)
+    tables = [
+        table
+        for table in merged.get("tables", [])
+        if table.get("domain") not in replaced_domains
+    ]
+    for domain in OTHER_DOMAINS:
+        tables.extend(replacements.get(domain, []))
+
+    domain_order = {"culture": 0, **{
+        domain: index
+        for index, domain in enumerate(OTHER_DOMAINS, start=1)
+    }}
+    tables.sort(key=lambda table: (
+        domain_order.get(table.get("domain", ""), len(domain_order)),
+        table.get("name", ""),
+    ))
+
+    previous_generated_at = merged.get("generated_at", observed_at)
+    previous_domains = merged.get("domains", {})
+    domain_generated_at = {
+        domain: previous_generated_at
+        for domain in previous_domains
+    }
+    domain_generated_at.update(merged.get("domain_generated_at", {}))
+    domain_generated_at.update({
+        domain: observed_at
+        for domain in replacements
+    })
+
+    domains: dict[str, int] = {}
+    for table in tables:
+        domain = table.get("domain", "")
+        domains[domain] = domains.get(domain, 0) + 1
+
+    merged.update({
+        "generated_at": observed_at,
+        "domain_generated_at": domain_generated_at,
+        "domains": domains,
+        "table_count": len(tables),
+        "tables": tables,
+        "refresh": {
+            "mode": "partial_basic",
+            "source_system": "trino",
+            "catalog": "iceberg_dev",
+            "domains": list(replacements),
+            "observed_at": observed_at,
+        },
+    })
+    return merged
+
+
+def refresh_basic_domains(domains: list[str]) -> None:
+    """culture artifact 없이도 현재 Trino의 지정 basic domain만 안전하게 갱신한다."""
+    if not OUT_PATH.is_file():
+        raise FileNotFoundError(f"base snapshot does not exist: {OUT_PATH}")
+    unique_domains = list(dict.fromkeys(domains))
+    metadata = load_basic_meta()
+    replacements: dict[str, list[dict]] = {}
+    for domain in unique_domains:
+        tables = extract_basic_domain(domain, OTHER_DOMAINS[domain], metadata)
+        if not tables:
+            raise RuntimeError(f"no Gold tables discovered for basic domain: {domain}")
+        replacements[domain] = tables
+
+    observed_at = datetime.now(timezone.utc).isoformat()
+    current = json.loads(OUT_PATH.read_text(encoding="utf-8"))
+    snapshot = merge_basic_domains(current, replacements, observed_at)
+    write_snapshot(snapshot)
+    print(
+        f"✓ refreshed {','.join(unique_domains)} in {OUT_PATH} "
+        f"({OUT_PATH.stat().st_size:,} bytes, tables={len(snapshot['tables'])})"
+    )
 
 
 def main() -> None:
@@ -321,18 +455,38 @@ def main() -> None:
     for t in tables:
         domains[t["domain"]] = domains.get(t["domain"], 0) + 1
 
+    generated_at = datetime.now(timezone.utc).isoformat()
     snapshot = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": generated_at,
+        "domain_generated_at": {
+            domain: generated_at
+            for domain in domains
+        },
         "domain": "all",
         "domains": domains,
         "dbt_project": manifest.get("metadata", {}).get("project_name", ""),
         "table_count": len(tables),
         "tables": tables,
     }
-    OUT_PATH.parent.mkdir(exist_ok=True)
-    OUT_PATH.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_snapshot(snapshot)
     print(f"✓ wrote {OUT_PATH} ({OUT_PATH.stat().st_size:,} bytes, tables={len(tables)})")
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="ASK SEOUL catalog snapshot extractor")
+    parser.add_argument(
+        "--refresh-basic-domain",
+        action="append",
+        choices=tuple(OTHER_DOMAINS),
+        default=[],
+        help="전체 culture artifact 없이 지정 basic domain만 현재 Trino에서 갱신",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    if args.refresh_basic_domain:
+        refresh_basic_domains(args.refresh_basic_domain)
+    else:
+        main()

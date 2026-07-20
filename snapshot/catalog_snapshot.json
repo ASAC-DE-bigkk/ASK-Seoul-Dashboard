@@ -1,15 +1,16 @@
 {
-  "generated_at": "2026-07-20T02:44:55.484674+00:00",
+  "generated_at": "2026-07-20T20:00:56.597126+00:00",
   "domain": "all",
   "domains": {
     "culture": 11,
+    "commerce": 22,
     "traffic": 21,
     "weather": 25,
     "citydata": 17,
     "transit": 1
   },
   "dbt_project": "culture",
-  "table_count": 75,
+  "table_count": 97,
   "tables": [
     {
       "name": "gold_culture_activity_by_dong",
@@ -2082,6 +2083,3362 @@
           "admin_dong": "잠실2동",
           "admin_dong_code": "1171067000",
           "quality_status": "dong_precise"
+        }
+      ]
+    },
+    {
+      "name": "gold_detail_area_profile",
+      "domain": "commerce",
+      "external": true,
+      "relation": "iceberg_dev.commerce.gold_detail_area_profile",
+      "description": "",
+      "tags": [],
+      "contract_enforced": false,
+      "materialized": "",
+      "on_table_exists": null,
+      "row_count": 836,
+      "date_range": null,
+      "columns": [
+        {
+          "name": "major",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "dataset",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "n_with_area",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "avg_m2",
+          "type": "double",
+          "description": ""
+        },
+        {
+          "name": "p50_m2",
+          "type": "double",
+          "description": ""
+        },
+        {
+          "name": "p90_m2",
+          "type": "double",
+          "description": ""
+        },
+        {
+          "name": "lt_33m2",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "ge_330m2",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "major_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "dataset_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu",
+          "type": "varchar",
+          "description": ""
+        }
+      ],
+      "quality": [],
+      "lineage": {},
+      "sample": [
+        {
+          "major": "health",
+          "category": "animal",
+          "dataset": "animal_medical_device_sale",
+          "gu_code": "11560",
+          "n_with_area": 3,
+          "avg_m2": 34.7,
+          "p50_m2": 28.0,
+          "p90_m2": 60.72,
+          "lt_33m2": 2,
+          "ge_330m2": 0,
+          "major_ko": "보건",
+          "category_ko": "동물",
+          "dataset_ko": "서울시 동물용의료용구판매업 인허가 정보",
+          "gu": "영등포구"
+        },
+        {
+          "major": "health",
+          "category": "animal",
+          "dataset": "animal_medical_device_sale",
+          "gu_code": "11545",
+          "n_with_area": 1,
+          "avg_m2": 91.0,
+          "p50_m2": 91.0,
+          "p90_m2": 91.0,
+          "lt_33m2": 0,
+          "ge_330m2": 0,
+          "major_ko": "보건",
+          "category_ko": "동물",
+          "dataset_ko": "서울시 동물용의료용구판매업 인허가 정보",
+          "gu": "금천구"
+        },
+        {
+          "major": "health",
+          "category": "animal",
+          "dataset": "animal_medical_device_sale",
+          "gu_code": "11500",
+          "n_with_area": 1,
+          "avg_m2": 40.0,
+          "p50_m2": 40.0,
+          "p90_m2": 40.0,
+          "lt_33m2": 0,
+          "ge_330m2": 0,
+          "major_ko": "보건",
+          "category_ko": "동물",
+          "dataset_ko": "서울시 동물용의료용구판매업 인허가 정보",
+          "gu": "강서구"
+        },
+        {
+          "major": "health",
+          "category": "animal",
+          "dataset": "animal_medical_device_sale",
+          "gu_code": "11305",
+          "n_with_area": 1,
+          "avg_m2": 63.0,
+          "p50_m2": 63.0,
+          "p90_m2": 63.0,
+          "lt_33m2": 0,
+          "ge_330m2": 0,
+          "major_ko": "보건",
+          "category_ko": "동물",
+          "dataset_ko": "서울시 동물용의료용구판매업 인허가 정보",
+          "gu": "강북구"
+        },
+        {
+          "major": "health",
+          "category": "animal",
+          "dataset": "animal_medical_device_sale",
+          "gu_code": "11260",
+          "n_with_area": 2,
+          "avg_m2": 107.7,
+          "p50_m2": 130.34,
+          "p90_m2": 130.34,
+          "lt_33m2": 0,
+          "ge_330m2": 0,
+          "major_ko": "보건",
+          "category_ko": "동물",
+          "dataset_ko": "서울시 동물용의료용구판매업 인허가 정보",
+          "gu": "중랑구"
+        }
+      ]
+    },
+    {
+      "name": "gold_detail_uptae_mix",
+      "domain": "commerce",
+      "external": true,
+      "relation": "iceberg_dev.commerce.gold_detail_uptae_mix",
+      "description": "",
+      "tags": [],
+      "contract_enforced": false,
+      "materialized": "",
+      "on_table_exists": null,
+      "row_count": 29595,
+      "date_range": null,
+      "columns": [
+        {
+          "name": "major",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "dataset",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "uptaenm",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "active_cnt",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "total_cnt",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "opened_last_365d",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "major_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "dataset_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu",
+          "type": "varchar",
+          "description": ""
+        }
+      ],
+      "quality": [],
+      "lineage": {},
+      "sample": [
+        {
+          "major": "industry",
+          "category": "industry",
+          "dataset": "feed_manufacturing",
+          "uptaenm": "사료제조업(수입)",
+          "gu_code": "11650",
+          "active_cnt": 136,
+          "total_cnt": 150,
+          "opened_last_365d": 4,
+          "major_ko": "산업",
+          "category_ko": "산업",
+          "dataset_ko": "서울시 사료제조업 인허가 정보",
+          "gu": "서초구"
+        },
+        {
+          "major": "industry",
+          "category": "industry",
+          "dataset": "feed_manufacturing",
+          "uptaenm": "사료제조업(단미)",
+          "gu_code": "11170",
+          "active_cnt": 7,
+          "total_cnt": 9,
+          "opened_last_365d": 1,
+          "major_ko": "산업",
+          "category_ko": "산업",
+          "dataset_ko": "서울시 사료제조업 인허가 정보",
+          "gu": "용산구"
+        },
+        {
+          "major": "industry",
+          "category": "industry",
+          "dataset": "feed_manufacturing",
+          "uptaenm": "사료제조업(수입)",
+          "gu_code": "11140",
+          "active_cnt": 37,
+          "total_cnt": 43,
+          "opened_last_365d": 1,
+          "major_ko": "산업",
+          "category_ko": "산업",
+          "dataset_ko": "서울시 사료제조업 인허가 정보",
+          "gu": "중구"
+        },
+        {
+          "major": "industry",
+          "category": "industry",
+          "dataset": "feed_manufacturing",
+          "uptaenm": "단미",
+          "gu_code": "11440",
+          "active_cnt": 28,
+          "total_cnt": 51,
+          "opened_last_365d": 5,
+          "major_ko": "산업",
+          "category_ko": "산업",
+          "dataset_ko": "서울시 사료제조업 인허가 정보",
+          "gu": "마포구"
+        },
+        {
+          "major": "industry",
+          "category": "industry",
+          "dataset": "feed_manufacturing",
+          "uptaenm": "배합",
+          "gu_code": "11110",
+          "active_cnt": 1,
+          "total_cnt": 2,
+          "opened_last_365d": 0,
+          "major_ko": "산업",
+          "category_ko": "산업",
+          "dataset_ko": "서울시 사료제조업 인허가 정보",
+          "gu": "종로구"
+        }
+      ]
+    },
+    {
+      "name": "gold_env_facility_operation",
+      "domain": "commerce",
+      "external": true,
+      "relation": "iceberg_dev.commerce.gold_env_facility_operation",
+      "description": "",
+      "tags": [],
+      "contract_enforced": false,
+      "materialized": "",
+      "on_table_exists": null,
+      "row_count": 51,
+      "date_range": null,
+      "columns": [
+        {
+          "name": "dataset",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "facility_rows",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "with_operating_days",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "avg_operating_days_per_year",
+          "type": "double",
+          "description": ""
+        },
+        {
+          "name": "p50_operating_days",
+          "type": "double",
+          "description": ""
+        },
+        {
+          "name": "with_operating_hours",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "avg_operating_hours",
+          "type": "double",
+          "description": ""
+        },
+        {
+          "name": "p50_operating_hours",
+          "type": "double",
+          "description": ""
+        },
+        {
+          "name": "dataset_ko",
+          "type": "varchar",
+          "description": ""
+        }
+      ],
+      "quality": [],
+      "lineage": {},
+      "sample": [
+        {
+          "dataset": "air_pollution_facility",
+          "gu_code": "11350",
+          "gu": "노원구",
+          "facility_rows": 134,
+          "with_operating_days": 87,
+          "avg_operating_days_per_year": 282.0,
+          "p50_operating_days": 339.8125,
+          "with_operating_hours": 52,
+          "avg_operating_hours": 8.3,
+          "p50_operating_hours": 4.75,
+          "dataset_ko": "서울시 대기오염물질배출시설설치사업장 인허가 정보"
+        },
+        {
+          "dataset": "air_pollution_facility",
+          "gu_code": "11410",
+          "gu": "서대문구",
+          "facility_rows": 64,
+          "with_operating_days": 29,
+          "avg_operating_days_per_year": 191.6,
+          "p50_operating_days": 150.0,
+          "with_operating_hours": 15,
+          "avg_operating_hours": 8.5,
+          "p50_operating_hours": 6.0,
+          "dataset_ko": "서울시 대기오염물질배출시설설치사업장 인허가 정보"
+        },
+        {
+          "dataset": "air_pollution_facility",
+          "gu_code": "11440",
+          "gu": "마포구",
+          "facility_rows": 202,
+          "with_operating_days": 168,
+          "avg_operating_days_per_year": 246.6,
+          "p50_operating_days": 280.939393939394,
+          "with_operating_hours": 88,
+          "avg_operating_hours": 9.3,
+          "p50_operating_hours": 8.0,
+          "dataset_ko": "서울시 대기오염물질배출시설설치사업장 인허가 정보"
+        },
+        {
+          "dataset": "air_pollution_facility",
+          "gu_code": "11170",
+          "gu": "용산구",
+          "facility_rows": 168,
+          "with_operating_days": 78,
+          "avg_operating_days_per_year": 264.2,
+          "p50_operating_days": 300.0,
+          "with_operating_hours": 51,
+          "avg_operating_hours": 11.1,
+          "p50_operating_hours": 8.0,
+          "dataset_ko": "서울시 대기오염물질배출시설설치사업장 인허가 정보"
+        },
+        {
+          "dataset": "air_pollution_facility",
+          "gu_code": "11140",
+          "gu": "중구",
+          "facility_rows": 522,
+          "with_operating_days": 210,
+          "avg_operating_days_per_year": 227.4,
+          "p50_operating_days": 239.3181818181818,
+          "with_operating_hours": 185,
+          "avg_operating_hours": 8.8,
+          "p50_operating_hours": 8.0,
+          "dataset_ko": "서울시 대기오염물질배출시설설치사업장 인허가 정보"
+        }
+      ]
+    },
+    {
+      "name": "gold_license_address_succession",
+      "domain": "commerce",
+      "external": true,
+      "relation": "iceberg_dev.commerce.gold_license_address_succession",
+      "description": "",
+      "tags": [],
+      "contract_enforced": false,
+      "materialized": "",
+      "on_table_exists": null,
+      "row_count": 98,
+      "date_range": null,
+      "columns": [
+        {
+          "name": "closed_major",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "closed_category",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "opened_major",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "opened_category",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "successions",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "avg_gap_days",
+          "type": "double",
+          "description": ""
+        },
+        {
+          "name": "p50_gap_days",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "within_90d",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "closed_major_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "closed_category_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "opened_major_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "opened_category_ko",
+          "type": "varchar",
+          "description": ""
+        }
+      ],
+      "quality": [],
+      "lineage": {},
+      "sample": [
+        {
+          "closed_major": "industry",
+          "closed_category": "industry",
+          "opened_major": "industry",
+          "opened_category": "industry",
+          "successions": 76659,
+          "avg_gap_days": 97.3,
+          "p50_gap_days": 67,
+          "within_90d": 46027,
+          "closed_major_ko": "산업",
+          "closed_category_ko": "산업",
+          "opened_major_ko": "산업",
+          "opened_category_ko": "산업"
+        },
+        {
+          "closed_major": "industry",
+          "closed_category": "industry",
+          "opened_major": "health",
+          "opened_category": "health_medical",
+          "successions": 4160,
+          "avg_gap_days": 98.9,
+          "p50_gap_days": 68,
+          "within_90d": 2439,
+          "closed_major_ko": "산업",
+          "closed_category_ko": "산업",
+          "opened_major_ko": "보건",
+          "opened_category_ko": "의료"
+        },
+        {
+          "closed_major": "health",
+          "closed_category": "food",
+          "opened_major": "health",
+          "opened_category": "food",
+          "successions": 99650,
+          "avg_gap_days": 39.2,
+          "p50_gap_days": 8,
+          "within_90d": 85646,
+          "closed_major_ko": "보건",
+          "closed_category_ko": "식품",
+          "opened_major_ko": "보건",
+          "opened_category_ko": "식품"
+        },
+        {
+          "closed_major": "health",
+          "closed_category": "food",
+          "opened_major": "health",
+          "opened_category": "livestock",
+          "successions": 231,
+          "avg_gap_days": 95.2,
+          "p50_gap_days": 51,
+          "within_90d": 145,
+          "closed_major_ko": "보건",
+          "closed_category_ko": "식품",
+          "opened_major_ko": "보건",
+          "opened_category_ko": "축산"
+        },
+        {
+          "closed_major": "health",
+          "closed_category": "food",
+          "opened_major": "health",
+          "opened_category": "optical_dental",
+          "successions": 57,
+          "avg_gap_days": 93.5,
+          "p50_gap_days": 49,
+          "within_90d": 34,
+          "closed_major_ko": "보건",
+          "closed_category_ko": "식품",
+          "opened_major_ko": "보건",
+          "opened_category_ko": "안경·치과"
+        }
+      ]
+    },
+    {
+      "name": "gold_license_change_activity",
+      "domain": "commerce",
+      "external": true,
+      "relation": "iceberg_dev.commerce.gold_license_change_activity",
+      "description": "",
+      "tags": [],
+      "contract_enforced": false,
+      "materialized": "",
+      "on_table_exists": null,
+      "row_count": 152,
+      "date_range": null,
+      "columns": [
+        {
+          "name": "major",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "dataset",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "businesses",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "avg_versions",
+          "type": "double",
+          "description": ""
+        },
+        {
+          "name": "max_versions",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "with_rename",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "rename_ratio",
+          "type": "decimal(38,18)",
+          "description": ""
+        },
+        {
+          "name": "with_relocation",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "relocation_ratio",
+          "type": "decimal(38,18)",
+          "description": ""
+        },
+        {
+          "name": "major_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "dataset_ko",
+          "type": "varchar",
+          "description": ""
+        }
+      ],
+      "quality": [],
+      "lineage": {},
+      "sample": [
+        {
+          "major": "health",
+          "category": "health_medical",
+          "dataset": "affiliated_medical",
+          "businesses": 146,
+          "avg_versions": 1.06,
+          "max_versions": 3,
+          "with_rename": 0,
+          "rename_ratio": "0.000000000000000000",
+          "with_relocation": 0,
+          "relocation_ratio": "0.000000000000000000",
+          "major_ko": "보건",
+          "category_ko": "의료",
+          "dataset_ko": "서울시 부속의료기관 인허가 정보"
+        },
+        {
+          "major": "environment",
+          "category": "environment",
+          "dataset": "air_pollution_facility",
+          "businesses": 5567,
+          "avg_versions": 1.0,
+          "max_versions": 2,
+          "with_rename": 0,
+          "rename_ratio": "0.000000000000000000",
+          "with_relocation": 0,
+          "relocation_ratio": "0.000000000000000000",
+          "major_ko": "환경",
+          "category_ko": "환경",
+          "dataset_ko": "서울시 대기오염물질배출시설설치사업장 인허가 정보"
+        },
+        {
+          "major": "health",
+          "category": "animal",
+          "dataset": "animal_hospital",
+          "businesses": 2227,
+          "avg_versions": 1.01,
+          "max_versions": 3,
+          "with_rename": 0,
+          "rename_ratio": "0.000000000000000000",
+          "with_relocation": 0,
+          "relocation_ratio": "0.000000000000000000",
+          "major_ko": "보건",
+          "category_ko": "동물",
+          "dataset_ko": "서울시 동물병원 인허가 정보"
+        },
+        {
+          "major": "health",
+          "category": "animal",
+          "dataset": "animal_pharmacy",
+          "businesses": 4798,
+          "avg_versions": 1.0,
+          "max_versions": 2,
+          "with_rename": 0,
+          "rename_ratio": "0.000000000000000000",
+          "with_relocation": 0,
+          "relocation_ratio": "0.000000000000000000",
+          "major_ko": "보건",
+          "category_ko": "동물",
+          "dataset_ko": "서울시 동물약국 인허가 정보"
+        },
+        {
+          "major": "health",
+          "category": "hygiene_beauty",
+          "dataset": "bathhouse",
+          "businesses": 3986,
+          "avg_versions": 1.0,
+          "max_versions": 2,
+          "with_rename": 2,
+          "rename_ratio": "0.000500000000000000",
+          "with_relocation": 1,
+          "relocation_ratio": "0.000300000000000000",
+          "major_ko": "보건",
+          "category_ko": "위생·미용",
+          "dataset_ko": "서울시 목욕장업 인허가 정보"
+        }
+      ]
+    },
+    {
+      "name": "gold_license_churn_yearly",
+      "domain": "commerce",
+      "external": true,
+      "relation": "iceberg_dev.commerce.gold_license_churn_yearly",
+      "description": "",
+      "tags": [],
+      "contract_enforced": false,
+      "materialized": "",
+      "on_table_exists": null,
+      "row_count": 54545,
+      "date_range": null,
+      "columns": [
+        {
+          "name": "y",
+          "type": "integer",
+          "description": ""
+        },
+        {
+          "name": "major",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "dataset",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "opened",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "closed",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "net_change",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "stock_start",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "churn_rate",
+          "type": "decimal(38,18)",
+          "description": ""
+        },
+        {
+          "name": "birth_rate",
+          "type": "decimal(38,18)",
+          "description": ""
+        },
+        {
+          "name": "major_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "dataset_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu",
+          "type": "varchar",
+          "description": ""
+        }
+      ],
+      "quality": [],
+      "lineage": {},
+      "sample": [
+        {
+          "y": 2006,
+          "major": "industry",
+          "category": "industry",
+          "dataset": "mail_order_sale",
+          "gu_code": "11305",
+          "opened": 319,
+          "closed": 18,
+          "net_change": 301,
+          "stock_start": 323,
+          "churn_rate": "0.055700000000000000",
+          "birth_rate": "0.987600000000000000",
+          "major_ko": "산업",
+          "category_ko": "산업",
+          "dataset_ko": "서울시 통신판매업 인허가 정보",
+          "gu": "강북구"
+        },
+        {
+          "y": 2007,
+          "major": "industry",
+          "category": "industry",
+          "dataset": "mail_order_sale",
+          "gu_code": "11305",
+          "opened": 518,
+          "closed": 133,
+          "net_change": 385,
+          "stock_start": 624,
+          "churn_rate": "0.213100000000000000",
+          "birth_rate": "0.830100000000000000",
+          "major_ko": "산업",
+          "category_ko": "산업",
+          "dataset_ko": "서울시 통신판매업 인허가 정보",
+          "gu": "강북구"
+        },
+        {
+          "y": 2007,
+          "major": "industry",
+          "category": "industry",
+          "dataset": "mail_order_sale",
+          "gu_code": "11620",
+          "opened": 864,
+          "closed": 211,
+          "net_change": 653,
+          "stock_start": 1755,
+          "churn_rate": "0.120200000000000000",
+          "birth_rate": "0.492300000000000000",
+          "major_ko": "산업",
+          "category_ko": "산업",
+          "dataset_ko": "서울시 통신판매업 인허가 정보",
+          "gu": "관악구"
+        },
+        {
+          "y": 2008,
+          "major": "industry",
+          "category": "industry",
+          "dataset": "mail_order_sale",
+          "gu_code": "11305",
+          "opened": 483,
+          "closed": 203,
+          "net_change": 280,
+          "stock_start": 1009,
+          "churn_rate": "0.201200000000000000",
+          "birth_rate": "0.478700000000000000",
+          "major_ko": "산업",
+          "category_ko": "산업",
+          "dataset_ko": "서울시 통신판매업 인허가 정보",
+          "gu": "강북구"
+        },
+        {
+          "y": 2009,
+          "major": "industry",
+          "category": "industry",
+          "dataset": "mail_order_sale",
+          "gu_code": "11305",
+          "opened": 579,
+          "closed": 160,
+          "net_change": 419,
+          "stock_start": 1289,
+          "churn_rate": "0.124100000000000000",
+          "birth_rate": "0.449200000000000000",
+          "major_ko": "산업",
+          "category_ko": "산업",
+          "dataset_ko": "서울시 통신판매업 인허가 정보",
+          "gu": "강북구"
+        }
+      ]
+    },
+    {
+      "name": "gold_license_cohort_survival",
+      "domain": "commerce",
+      "external": true,
+      "relation": "iceberg_dev.commerce.gold_license_cohort_survival",
+      "description": "",
+      "tags": [],
+      "contract_enforced": false,
+      "materialized": "",
+      "on_table_exists": null,
+      "row_count": 7502,
+      "date_range": null,
+      "columns": [
+        {
+          "name": "major",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "cohort_y",
+          "type": "integer",
+          "description": ""
+        },
+        {
+          "name": "years_elapsed",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "cohort_n",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "survivors",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "survival_rate",
+          "type": "decimal(38,18)",
+          "description": ""
+        },
+        {
+          "name": "major_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category_ko",
+          "type": "varchar",
+          "description": ""
+        }
+      ],
+      "quality": [],
+      "lineage": {},
+      "sample": [
+        {
+          "major": "industry",
+          "category": "industry",
+          "cohort_y": 2024,
+          "years_elapsed": 0,
+          "cohort_n": 57259,
+          "survivors": 53091,
+          "survival_rate": "0.927200000000000000",
+          "major_ko": "산업",
+          "category_ko": "산업"
+        },
+        {
+          "major": "industry",
+          "category": "industry",
+          "cohort_y": 2024,
+          "years_elapsed": 2,
+          "cohort_n": 57259,
+          "survivors": 44457,
+          "survival_rate": "0.776400000000000000",
+          "major_ko": "산업",
+          "category_ko": "산업"
+        },
+        {
+          "major": "industry",
+          "category": "industry",
+          "cohort_y": 2020,
+          "years_elapsed": 0,
+          "cohort_n": 80367,
+          "survivors": 75176,
+          "survival_rate": "0.935400000000000000",
+          "major_ko": "산업",
+          "category_ko": "산업"
+        },
+        {
+          "major": "industry",
+          "category": "industry",
+          "cohort_y": 2020,
+          "years_elapsed": 2,
+          "cohort_n": 80367,
+          "survivors": 60305,
+          "survival_rate": "0.750400000000000000",
+          "major_ko": "산업",
+          "category_ko": "산업"
+        },
+        {
+          "major": "industry",
+          "category": "industry",
+          "cohort_y": 2020,
+          "years_elapsed": 5,
+          "cohort_n": 80367,
+          "survivors": 48720,
+          "survival_rate": "0.606200000000000000",
+          "major_ko": "산업",
+          "category_ko": "산업"
+        }
+      ]
+    },
+    {
+      "name": "gold_license_data_quality",
+      "domain": "commerce",
+      "external": true,
+      "relation": "iceberg_dev.commerce.gold_license_data_quality",
+      "description": "",
+      "tags": [],
+      "contract_enforced": false,
+      "materialized": "",
+      "on_table_exists": null,
+      "row_count": 152,
+      "date_range": null,
+      "columns": [
+        {
+          "name": "major",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "dataset",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "total_rows",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "active_rows",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "phone_coverage",
+          "type": "decimal(38,18)",
+          "description": ""
+        },
+        {
+          "name": "geo_coverage",
+          "type": "decimal(38,18)",
+          "description": ""
+        },
+        {
+          "name": "admin_dong_coverage",
+          "type": "decimal(38,18)",
+          "description": ""
+        },
+        {
+          "name": "address_coverage",
+          "type": "decimal(38,18)",
+          "description": ""
+        },
+        {
+          "name": "close_date_coverage_of_closed",
+          "type": "decimal(38,18)",
+          "description": ""
+        },
+        {
+          "name": "name_coverage",
+          "type": "decimal(38,18)",
+          "description": ""
+        },
+        {
+          "name": "major_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "dataset_ko",
+          "type": "varchar",
+          "description": ""
+        }
+      ],
+      "quality": [],
+      "lineage": {},
+      "sample": [
+        {
+          "major": "industry",
+          "category": "industry",
+          "dataset": "mail_order_sale",
+          "total_rows": 935083,
+          "active_rows": 430564,
+          "phone_coverage": "0.362800000000000000",
+          "geo_coverage": "0.686000000000000000",
+          "admin_dong_coverage": "0.000000000000000000",
+          "address_coverage": "1.000000000000000000",
+          "close_date_coverage_of_closed": "1.520500000000000000",
+          "name_coverage": "1.000000000000000000",
+          "major_ko": "산업",
+          "category_ko": "산업",
+          "dataset_ko": "서울시 통신판매업 인허가 정보"
+        },
+        {
+          "major": "health",
+          "category": "food",
+          "dataset": "rest_restaurant",
+          "total_rows": 146032,
+          "active_rows": 36915,
+          "phone_coverage": "0.386500000000000000",
+          "geo_coverage": "0.955400000000000000",
+          "admin_dong_coverage": "0.999200000000000000",
+          "address_coverage": "1.000000000000000000",
+          "close_date_coverage_of_closed": "1.000000000000000000",
+          "name_coverage": "1.000000000000000000",
+          "major_ko": "보건",
+          "category_ko": "식품",
+          "dataset_ko": "서울시 휴게음식점 인허가 정보"
+        },
+        {
+          "major": "health",
+          "category": "health_medical",
+          "dataset": "safety_otc_drug_sale",
+          "total_rows": 17954,
+          "active_rows": 6882,
+          "phone_coverage": "0.278900000000000000",
+          "geo_coverage": "0.986400000000000000",
+          "admin_dong_coverage": "0.993300000000000000",
+          "address_coverage": "1.000000000000000000",
+          "close_date_coverage_of_closed": "1.020900000000000000",
+          "name_coverage": "1.000000000000000000",
+          "major_ko": "보건",
+          "category_ko": "의료",
+          "dataset_ko": "서울시 안전상비의약품 판매업소 인허가 정보"
+        },
+        {
+          "major": "environment",
+          "category": "environment",
+          "dataset": "septic_tank_construction",
+          "total_rows": 746,
+          "active_rows": 201,
+          "phone_coverage": "0.391400000000000000",
+          "geo_coverage": "0.781500000000000000",
+          "admin_dong_coverage": "0.986600000000000000",
+          "address_coverage": "1.000000000000000000",
+          "close_date_coverage_of_closed": "0.970300000000000000",
+          "name_coverage": "1.000000000000000000",
+          "major_ko": "환경",
+          "category_ko": "환경",
+          "dataset_ko": "서울시 단독정화조오수처리시설설계시공업 인허가 정보"
+        },
+        {
+          "major": "culture",
+          "category": "culture",
+          "dataset": "sled_park",
+          "total_rows": 44,
+          "active_rows": 6,
+          "phone_coverage": "0.431800000000000000",
+          "geo_coverage": "0.818200000000000000",
+          "admin_dong_coverage": "1.000000000000000000",
+          "address_coverage": "1.000000000000000000",
+          "close_date_coverage_of_closed": "1.055600000000000000",
+          "name_coverage": "1.000000000000000000",
+          "major_ko": "문화",
+          "category_ko": "문화",
+          "dataset_ko": "서울시 썰매장업 인허가 정보"
+        }
+      ]
+    },
+    {
+      "name": "gold_license_dong_category_matrix",
+      "domain": "commerce",
+      "external": true,
+      "relation": "iceberg_dev.commerce.gold_license_dong_category_matrix",
+      "description": "",
+      "tags": [],
+      "contract_enforced": false,
+      "materialized": "",
+      "on_table_exists": null,
+      "row_count": 3444,
+      "date_range": null,
+      "columns": [
+        {
+          "name": "admin_dong_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "admin_dong",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "major",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "active_cnt",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "total_cnt",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "opened_last_365d",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "major_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category_ko",
+          "type": "varchar",
+          "description": ""
+        }
+      ],
+      "quality": [],
+      "lineage": {},
+      "sample": [
+        {
+          "admin_dong_code": "1111051500",
+          "admin_dong": "청운효자동",
+          "gu_code": "11110",
+          "gu": "종로구",
+          "major": "health",
+          "category": "food",
+          "active_cnt": 439,
+          "total_cnt": 1189,
+          "opened_last_365d": 41,
+          "major_ko": "보건",
+          "category_ko": "식품"
+        },
+        {
+          "admin_dong_code": "1111051500",
+          "admin_dong": "청운효자동",
+          "gu_code": "11110",
+          "gu": "종로구",
+          "major": "health",
+          "category": "animal",
+          "active_cnt": 3,
+          "total_cnt": 11,
+          "opened_last_365d": 0,
+          "major_ko": "보건",
+          "category_ko": "동물"
+        },
+        {
+          "admin_dong_code": "1111051500",
+          "admin_dong": "청운효자동",
+          "gu_code": "11110",
+          "gu": "종로구",
+          "major": "health",
+          "category": "health_medical",
+          "active_cnt": 16,
+          "total_cnt": 45,
+          "opened_last_365d": 1,
+          "major_ko": "보건",
+          "category_ko": "의료"
+        },
+        {
+          "admin_dong_code": "1111051500",
+          "admin_dong": "청운효자동",
+          "gu_code": "11110",
+          "gu": "종로구",
+          "major": "health",
+          "category": "livestock",
+          "active_cnt": 22,
+          "total_cnt": 54,
+          "opened_last_365d": 0,
+          "major_ko": "보건",
+          "category_ko": "축산"
+        },
+        {
+          "admin_dong_code": "1111051500",
+          "admin_dong": "청운효자동",
+          "gu_code": "11110",
+          "gu": "종로구",
+          "major": "health",
+          "category": "optical_dental",
+          "active_cnt": 2,
+          "total_cnt": 4,
+          "opened_last_365d": 0,
+          "major_ko": "보건",
+          "category_ko": "안경·치과"
+        }
+      ]
+    },
+    {
+      "name": "gold_license_dong_summary",
+      "domain": "commerce",
+      "external": true,
+      "relation": "iceberg_dev.commerce.gold_license_dong_summary",
+      "description": "",
+      "tags": [],
+      "contract_enforced": false,
+      "materialized": "",
+      "on_table_exists": null,
+      "row_count": 414,
+      "date_range": {
+        "column": "latest_collected_at",
+        "min": "2026-06-30 16:05:06.976676",
+        "max": "2026-07-20 13:11:03.350877"
+      },
+      "columns": [
+        {
+          "name": "admin_dong_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "admin_dong",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "business_count",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "business_open_count",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "business_closed_count",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "dataset_count",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "geocoded_count",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "latest_collected_at",
+          "type": "timestamp(6)",
+          "description": ""
+        }
+      ],
+      "quality": [],
+      "lineage": {},
+      "sample": [
+        {
+          "admin_dong_code": "1114055000",
+          "admin_dong": "명동",
+          "gu_code": "11140",
+          "gu": "중구",
+          "business_count": 12614,
+          "business_open_count": 3451,
+          "business_closed_count": 7922,
+          "dataset_count": 75,
+          "geocoded_count": 10861,
+          "latest_collected_at": "2026-07-18 00:02:33.395784"
+        },
+        {
+          "admin_dong_code": "1114057000",
+          "admin_dong": "필동",
+          "gu_code": "11140",
+          "gu": "중구",
+          "business_count": 5386,
+          "business_open_count": 1712,
+          "business_closed_count": 3462,
+          "dataset_count": 69,
+          "geocoded_count": 4786,
+          "latest_collected_at": "2026-07-19 00:11:54.172619"
+        },
+        {
+          "admin_dong_code": "1114059000",
+          "admin_dong": "광희동",
+          "gu_code": "11140",
+          "gu": "중구",
+          "business_count": 6423,
+          "business_open_count": 1560,
+          "business_closed_count": 4677,
+          "dataset_count": 71,
+          "geocoded_count": 5780,
+          "latest_collected_at": "2026-07-19 00:04:42.497069"
+        },
+        {
+          "admin_dong_code": "1114060500",
+          "admin_dong": "을지로동",
+          "gu_code": "11140",
+          "gu": "중구",
+          "business_count": 5147,
+          "business_open_count": 1674,
+          "business_closed_count": 3311,
+          "dataset_count": 70,
+          "geocoded_count": 4466,
+          "latest_collected_at": "2026-07-19 00:11:54.172619"
+        },
+        {
+          "admin_dong_code": "1114061500",
+          "admin_dong": "신당동",
+          "gu_code": "11140",
+          "gu": "중구",
+          "business_count": 10998,
+          "business_open_count": 3030,
+          "business_closed_count": 7713,
+          "dataset_count": 74,
+          "geocoded_count": 9355,
+          "latest_collected_at": "2026-07-19 00:11:54.172619"
+        }
+      ]
+    },
+    {
+      "name": "gold_license_flow_daily",
+      "domain": "commerce",
+      "external": true,
+      "relation": "iceberg_dev.commerce.gold_license_flow_daily",
+      "description": "",
+      "tags": [],
+      "contract_enforced": false,
+      "materialized": "",
+      "on_table_exists": null,
+      "row_count": 2761455,
+      "date_range": {
+        "column": "event_date",
+        "min": "1900-01-01",
+        "max": "2026-07-20"
+      },
+      "columns": [
+        {
+          "name": "event_date",
+          "type": "date",
+          "description": ""
+        },
+        {
+          "name": "event_type",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "dataset",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "admin_dong_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "legal_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "major",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "cnt",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "event_type_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "dataset_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "admin_dong",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "legal_dong",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "major_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category_ko",
+          "type": "varchar",
+          "description": ""
+        }
+      ],
+      "quality": [],
+      "lineage": {},
+      "sample": [
+        {
+          "event_date": "2026-07-20",
+          "event_type": "closed",
+          "dataset": "mail_order_sale",
+          "gu_code": "11140",
+          "admin_dong_code": "UNK",
+          "legal_code": "UNK",
+          "major": "industry",
+          "category": "industry",
+          "cnt": 1,
+          "event_type_ko": "폐업",
+          "dataset_ko": "서울시 통신판매업 인허가 정보",
+          "gu": "중구",
+          "admin_dong": null,
+          "legal_dong": null,
+          "major_ko": "산업",
+          "category_ko": "산업"
+        },
+        {
+          "event_date": "2026-07-20",
+          "event_type": "opened",
+          "dataset": "mail_order_sale",
+          "gu_code": "11140",
+          "admin_dong_code": "UNK",
+          "legal_code": "UNK",
+          "major": "industry",
+          "category": "industry",
+          "cnt": 6,
+          "event_type_ko": "개업",
+          "dataset_ko": "서울시 통신판매업 인허가 정보",
+          "gu": "중구",
+          "admin_dong": null,
+          "legal_dong": null,
+          "major_ko": "산업",
+          "category_ko": "산업"
+        },
+        {
+          "event_date": "1900-08-12",
+          "event_type": "opened",
+          "dataset": "rest_restaurant",
+          "gu_code": "11530",
+          "admin_dong_code": "1153052000",
+          "legal_code": "1153010200",
+          "major": "health",
+          "category": "food",
+          "cnt": 1,
+          "event_type_ko": "개업",
+          "dataset_ko": "서울시 휴게음식점 인허가 정보",
+          "gu": "구로구",
+          "admin_dong": "구로1동",
+          "legal_dong": "구로동",
+          "major_ko": "보건",
+          "category_ko": "식품"
+        },
+        {
+          "event_date": "1903-05-11",
+          "event_type": "opened",
+          "dataset": "publisher",
+          "gu_code": "11170",
+          "admin_dong_code": "UNK",
+          "legal_code": "UNK",
+          "major": "culture",
+          "category": "culture",
+          "cnt": 1,
+          "event_type_ko": "개업",
+          "dataset_ko": "서울시 출판사 인허가 정보",
+          "gu": "용산구",
+          "admin_dong": null,
+          "legal_dong": null,
+          "major_ko": "문화",
+          "category_ko": "문화"
+        },
+        {
+          "event_date": "1904-08-08",
+          "event_type": "opened",
+          "dataset": "rest_restaurant",
+          "gu_code": "11710",
+          "admin_dong_code": "1171067000",
+          "legal_code": "1171010100",
+          "major": "health",
+          "category": "food",
+          "cnt": 1,
+          "event_type_ko": "개업",
+          "dataset_ko": "서울시 휴게음식점 인허가 정보",
+          "gu": "송파구",
+          "admin_dong": "잠실2동",
+          "legal_dong": "잠실동",
+          "major_ko": "보건",
+          "category_ko": "식품"
+        }
+      ]
+    },
+    {
+      "name": "gold_license_flow_monthly",
+      "domain": "commerce",
+      "external": true,
+      "relation": "iceberg_dev.commerce.gold_license_flow_monthly",
+      "description": "",
+      "tags": [],
+      "contract_enforced": false,
+      "materialized": "",
+      "on_table_exists": null,
+      "row_count": 1237579,
+      "date_range": null,
+      "columns": [
+        {
+          "name": "ym",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "y",
+          "type": "integer",
+          "description": ""
+        },
+        {
+          "name": "event_type",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "dataset",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "admin_dong_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "legal_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "major",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "cnt",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "event_type_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "dataset_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "admin_dong",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "legal_dong",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "major_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category_ko",
+          "type": "varchar",
+          "description": ""
+        }
+      ],
+      "quality": [],
+      "lineage": {},
+      "sample": [
+        {
+          "ym": "1900-01",
+          "y": 1900,
+          "event_type": "opened",
+          "dataset": "hospital",
+          "gu_code": "11260",
+          "admin_dong_code": "1126052000",
+          "legal_code": "1126010100",
+          "major": "health",
+          "category": "health_medical",
+          "cnt": 1,
+          "event_type_ko": "개업",
+          "dataset_ko": "서울시 병원 인허가 정보",
+          "gu": "중랑구",
+          "admin_dong": "면목2동",
+          "legal_dong": "면목동",
+          "major_ko": "보건",
+          "category_ko": "의료"
+        },
+        {
+          "ym": "1900-01",
+          "y": 1900,
+          "event_type": "opened",
+          "dataset": "hospital",
+          "gu_code": "UNK",
+          "admin_dong_code": "UNK",
+          "legal_code": "UNK",
+          "major": "health",
+          "category": "health_medical",
+          "cnt": 6,
+          "event_type_ko": "개업",
+          "dataset_ko": "서울시 병원 인허가 정보",
+          "gu": null,
+          "admin_dong": null,
+          "legal_dong": null,
+          "major_ko": "보건",
+          "category_ko": "의료"
+        },
+        {
+          "ym": "1900-11",
+          "y": 1900,
+          "event_type": "opened",
+          "dataset": "video_viewing_service",
+          "gu_code": "11530",
+          "admin_dong_code": "1153077000",
+          "legal_code": "1153010800",
+          "major": "culture",
+          "category": "culture",
+          "cnt": 1,
+          "event_type_ko": "개업",
+          "dataset_ko": "서울시 비디오물시청제공업 인허가 정보",
+          "gu": "구로구",
+          "admin_dong": "오류1동",
+          "legal_dong": "오류동",
+          "major_ko": "문화",
+          "category_ko": "문화"
+        },
+        {
+          "ym": "1904-08",
+          "y": 1904,
+          "event_type": "opened",
+          "dataset": "general_restaurant",
+          "gu_code": "11230",
+          "admin_dong_code": "1123053600",
+          "legal_code": "1123010200",
+          "major": "health",
+          "category": "food",
+          "cnt": 1,
+          "event_type_ko": "개업",
+          "dataset_ko": "서울시 일반음식점 인허가 정보",
+          "gu": "동대문구",
+          "admin_dong": "용신동",
+          "legal_dong": "용두동",
+          "major_ko": "보건",
+          "category_ko": "식품"
+        },
+        {
+          "ym": "1920-01",
+          "y": 1920,
+          "event_type": "opened",
+          "dataset": "general_restaurant",
+          "gu_code": "11230",
+          "admin_dong_code": "1123071000",
+          "legal_code": "1123010800",
+          "major": "health",
+          "category": "food",
+          "cnt": 1,
+          "event_type_ko": "개업",
+          "dataset_ko": "서울시 일반음식점 인허가 정보",
+          "gu": "동대문구",
+          "admin_dong": "회기동",
+          "legal_dong": "회기동",
+          "major_ko": "보건",
+          "category_ko": "식품"
+        }
+      ]
+    },
+    {
+      "name": "gold_license_flow_yearly",
+      "domain": "commerce",
+      "external": true,
+      "relation": "iceberg_dev.commerce.gold_license_flow_yearly",
+      "description": "",
+      "tags": [],
+      "contract_enforced": false,
+      "materialized": "",
+      "on_table_exists": null,
+      "row_count": 414785,
+      "date_range": null,
+      "columns": [
+        {
+          "name": "y",
+          "type": "integer",
+          "description": ""
+        },
+        {
+          "name": "event_type",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "dataset",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "admin_dong_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "legal_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "major",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "cnt",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "event_type_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "dataset_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "admin_dong",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "legal_dong",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "major_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category_ko",
+          "type": "varchar",
+          "description": ""
+        }
+      ],
+      "quality": [],
+      "lineage": {},
+      "sample": [
+        {
+          "y": 1900,
+          "event_type": "opened",
+          "dataset": "mail_order_sale",
+          "gu_code": "11215",
+          "admin_dong_code": "UNK",
+          "legal_code": "UNK",
+          "major": "industry",
+          "category": "industry",
+          "cnt": 2,
+          "event_type_ko": "개업",
+          "dataset_ko": "서울시 통신판매업 인허가 정보",
+          "gu": "광진구",
+          "admin_dong": null,
+          "legal_dong": null,
+          "major_ko": "산업",
+          "category_ko": "산업"
+        },
+        {
+          "y": 1900,
+          "event_type": "opened",
+          "dataset": "publisher",
+          "gu_code": "11410",
+          "admin_dong_code": "UNK",
+          "legal_code": "UNK",
+          "major": "culture",
+          "category": "culture",
+          "cnt": 1,
+          "event_type_ko": "개업",
+          "dataset_ko": "서울시 출판사 인허가 정보",
+          "gu": "서대문구",
+          "admin_dong": null,
+          "legal_dong": null,
+          "major_ko": "문화",
+          "category_ko": "문화"
+        },
+        {
+          "y": 1900,
+          "event_type": "opened",
+          "dataset": "medical_device_sale",
+          "gu_code": "11560",
+          "admin_dong_code": "UNK",
+          "legal_code": "UNK",
+          "major": "health",
+          "category": "health_medical",
+          "cnt": 1,
+          "event_type_ko": "개업",
+          "dataset_ko": "서울시 의료기기판매(임대)업 인허가 정보",
+          "gu": "영등포구",
+          "admin_dong": null,
+          "legal_dong": null,
+          "major_ko": "보건",
+          "category_ko": "의료"
+        },
+        {
+          "y": 1900,
+          "event_type": "opened",
+          "dataset": "video_viewing_service",
+          "gu_code": "11530",
+          "admin_dong_code": "1153077000",
+          "legal_code": "1153010800",
+          "major": "culture",
+          "category": "culture",
+          "cnt": 1,
+          "event_type_ko": "개업",
+          "dataset_ko": "서울시 비디오물시청제공업 인허가 정보",
+          "gu": "구로구",
+          "admin_dong": "오류1동",
+          "legal_dong": "오류동",
+          "major_ko": "문화",
+          "category_ko": "문화"
+        },
+        {
+          "y": 1900,
+          "event_type": "opened",
+          "dataset": "pharmacy",
+          "gu_code": "11560",
+          "admin_dong_code": "1156053500",
+          "legal_code": "1156010600",
+          "major": "health",
+          "category": "pharmacy",
+          "cnt": 1,
+          "event_type_ko": "개업",
+          "dataset_ko": "서울시 약국 인허가 정보",
+          "gu": "영등포구",
+          "admin_dong": "영등포동",
+          "legal_dong": "영등포동5가",
+          "major_ko": "보건",
+          "category_ko": "약국"
+        }
+      ]
+    },
+    {
+      "name": "gold_license_geo_grid",
+      "domain": "commerce",
+      "external": true,
+      "relation": "iceberg_dev.commerce.gold_license_geo_grid",
+      "description": "",
+      "tags": [],
+      "contract_enforced": false,
+      "materialized": "",
+      "on_table_exists": null,
+      "row_count": 16243,
+      "date_range": null,
+      "columns": [
+        {
+          "name": "grid_lat",
+          "type": "double",
+          "description": ""
+        },
+        {
+          "name": "grid_lng",
+          "type": "double",
+          "description": ""
+        },
+        {
+          "name": "major",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "active_cnt",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "opened_last_365d_active",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "major_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category_ko",
+          "type": "varchar",
+          "description": ""
+        }
+      ],
+      "quality": [],
+      "lineage": {},
+      "sample": [
+        {
+          "grid_lat": 37.435,
+          "grid_lng": 126.905,
+          "major": "industry",
+          "category": "industry",
+          "active_cnt": 22,
+          "opened_last_365d_active": 3,
+          "major_ko": "산업",
+          "category_ko": "산업"
+        },
+        {
+          "grid_lat": 37.485,
+          "grid_lng": 126.88000000000001,
+          "major": "industry",
+          "category": "industry",
+          "active_cnt": 1357,
+          "opened_last_365d_active": 263,
+          "major_ko": "산업",
+          "category_ko": "산업"
+        },
+        {
+          "grid_lat": 37.46,
+          "grid_lng": 126.905,
+          "major": "industry",
+          "category": "industry",
+          "active_cnt": 102,
+          "opened_last_365d_active": 16,
+          "major_ko": "산업",
+          "category_ko": "산업"
+        },
+        {
+          "grid_lat": 37.480000000000004,
+          "grid_lng": 126.885,
+          "major": "industry",
+          "category": "industry",
+          "active_cnt": 1844,
+          "opened_last_365d_active": 189,
+          "major_ko": "산업",
+          "category_ko": "산업"
+        },
+        {
+          "grid_lat": 37.475,
+          "grid_lng": 126.88000000000001,
+          "major": "industry",
+          "category": "industry",
+          "active_cnt": 855,
+          "opened_last_365d_active": 54,
+          "major_ko": "산업",
+          "category_ko": "산업"
+        }
+      ]
+    },
+    {
+      "name": "gold_license_gu_specialization",
+      "domain": "commerce",
+      "external": true,
+      "relation": "iceberg_dev.commerce.gold_license_gu_specialization",
+      "description": "",
+      "tags": [],
+      "contract_enforced": false,
+      "materialized": "",
+      "on_table_exists": null,
+      "row_count": 283,
+      "date_range": null,
+      "columns": [
+        {
+          "name": "gu_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "major",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "active_cnt",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "share_in_gu",
+          "type": "decimal(38,18)",
+          "description": ""
+        },
+        {
+          "name": "lq",
+          "type": "decimal(38,6)",
+          "description": ""
+        },
+        {
+          "name": "major_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category_ko",
+          "type": "varchar",
+          "description": ""
+        }
+      ],
+      "quality": [],
+      "lineage": {},
+      "sample": [
+        {
+          "gu_code": "11440",
+          "gu": "마포구",
+          "major": "industry",
+          "category": "industry",
+          "active_cnt": 28563,
+          "share_in_gu": "0.482100000000000000",
+          "lq": "0.997000",
+          "major_ko": "산업",
+          "category_ko": "산업"
+        },
+        {
+          "gu_code": "11140",
+          "gu": "중구",
+          "major": "industry",
+          "category": "industry",
+          "active_cnt": 19007,
+          "share_in_gu": "0.424300000000000000",
+          "lq": "0.878000",
+          "major_ko": "산업",
+          "category_ko": "산업"
+        },
+        {
+          "gu_code": "UNK",
+          "gu": "압구",
+          "major": "industry",
+          "category": "industry",
+          "active_cnt": 1343,
+          "share_in_gu": "0.822900000000000000",
+          "lq": "1.702000",
+          "major_ko": "산업",
+          "category_ko": "산업"
+        },
+        {
+          "gu_code": "11740",
+          "gu": "강동구",
+          "major": "industry",
+          "category": "industry",
+          "active_cnt": 16511,
+          "share_in_gu": "0.491300000000000000",
+          "lq": "1.016000",
+          "major_ko": "산업",
+          "category_ko": "산업"
+        },
+        {
+          "gu_code": "11380",
+          "gu": "은평구",
+          "major": "industry",
+          "category": "industry",
+          "active_cnt": 9641,
+          "share_in_gu": "0.403200000000000000",
+          "lq": "0.834000",
+          "major_ko": "산업",
+          "category_ko": "산업"
+        }
+      ]
+    },
+    {
+      "name": "gold_license_lifespan",
+      "domain": "commerce",
+      "external": true,
+      "relation": "iceberg_dev.commerce.gold_license_lifespan",
+      "description": "",
+      "tags": [],
+      "contract_enforced": false,
+      "materialized": "",
+      "on_table_exists": null,
+      "row_count": 2624,
+      "date_range": null,
+      "columns": [
+        {
+          "name": "major",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "dataset",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "n_closed",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "avg_days",
+          "type": "double",
+          "description": ""
+        },
+        {
+          "name": "p50_days",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "p90_days",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "closed_within_1y",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "early_close_ratio",
+          "type": "decimal(38,18)",
+          "description": ""
+        },
+        {
+          "name": "survived_10y_then_closed",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "major_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "dataset_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu",
+          "type": "varchar",
+          "description": ""
+        }
+      ],
+      "quality": [],
+      "lineage": {},
+      "sample": [
+        {
+          "major": "industry",
+          "category": "industry",
+          "dataset": "mail_order_sale",
+          "gu_code": "11305",
+          "n_closed": 6617,
+          "avg_days": 960.0,
+          "p50_days": 635,
+          "p90_days": 2214,
+          "closed_within_1y": 2102,
+          "early_close_ratio": "0.317700000000000000",
+          "survived_10y_then_closed": 207,
+          "major_ko": "산업",
+          "category_ko": "산업",
+          "dataset_ko": "서울시 통신판매업 인허가 정보",
+          "gu": "강북구"
+        },
+        {
+          "major": "industry",
+          "category": "industry",
+          "dataset": "mail_order_sale",
+          "gu_code": "11620",
+          "n_closed": 14218,
+          "avg_days": 932.5,
+          "p50_days": 631,
+          "p90_days": 2174,
+          "closed_within_1y": 4786,
+          "early_close_ratio": "0.336600000000000000",
+          "survived_10y_then_closed": 332,
+          "major_ko": "산업",
+          "category_ko": "산업",
+          "dataset_ko": "서울시 통신판매업 인허가 정보",
+          "gu": "관악구"
+        },
+        {
+          "major": "industry",
+          "category": "industry",
+          "dataset": "mail_order_sale",
+          "gu_code": "UNK",
+          "n_closed": 4866,
+          "avg_days": 1070.5,
+          "p50_days": 681,
+          "p90_days": 2481,
+          "closed_within_1y": 1522,
+          "early_close_ratio": "0.312800000000000000",
+          "survived_10y_then_closed": 231,
+          "major_ko": "산업",
+          "category_ko": "산업",
+          "dataset_ko": "서울시 통신판매업 인허가 정보",
+          "gu": "압구"
+        },
+        {
+          "major": "industry",
+          "category": "industry",
+          "dataset": "mail_order_sale",
+          "gu_code": "11230",
+          "n_closed": 11487,
+          "avg_days": 1048.2,
+          "p50_days": 644,
+          "p90_days": 2534,
+          "closed_within_1y": 3663,
+          "early_close_ratio": "0.318900000000000000",
+          "survived_10y_then_closed": 512,
+          "major_ko": "산업",
+          "category_ko": "산업",
+          "dataset_ko": "서울시 통신판매업 인허가 정보",
+          "gu": "동대문구"
+        },
+        {
+          "major": "industry",
+          "category": "industry",
+          "dataset": "mail_order_sale",
+          "gu_code": "11215",
+          "n_closed": 12018,
+          "avg_days": 1020.8,
+          "p50_days": 667,
+          "p90_days": 2315,
+          "closed_within_1y": 3631,
+          "early_close_ratio": "0.302100000000000000",
+          "survived_10y_then_closed": 421,
+          "major_ko": "산업",
+          "category_ko": "산업",
+          "dataset_ko": "서울시 통신판매업 인허가 정보",
+          "gu": "광진구"
+        }
+      ]
+    },
+    {
+      "name": "gold_license_multi_site",
+      "domain": "commerce",
+      "external": true,
+      "relation": "iceberg_dev.commerce.gold_license_multi_site",
+      "description": "",
+      "tags": [],
+      "contract_enforced": false,
+      "materialized": "",
+      "on_table_exists": null,
+      "row_count": 135,
+      "date_range": null,
+      "columns": [
+        {
+          "name": "major",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "dataset",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "sites_with_phone",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "multi_site_locations",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "multi_site_ratio",
+          "type": "decimal(38,18)",
+          "description": ""
+        },
+        {
+          "name": "multi_site_operators",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "max_sites_per_operator",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "major_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "dataset_ko",
+          "type": "varchar",
+          "description": ""
+        }
+      ],
+      "quality": [],
+      "lineage": {},
+      "sample": [
+        {
+          "major": "culture",
+          "category": "culture",
+          "dataset": "internet_game_cafe",
+          "sites_with_phone": 61,
+          "multi_site_locations": 6,
+          "multi_site_ratio": "0.098400000000000000",
+          "multi_site_operators": 6,
+          "max_sites_per_operator": 3,
+          "major_ko": "문화",
+          "category_ko": "문화",
+          "dataset_ko": "서울시 인터넷컴퓨터게임시설제공업 인허가 정보"
+        },
+        {
+          "major": "health",
+          "category": "food",
+          "dataset": "general_restaurant",
+          "sites_with_phone": 41610,
+          "multi_site_locations": 3427,
+          "multi_site_ratio": "0.082400000000000000",
+          "multi_site_operators": 2290,
+          "max_sites_per_operator": 19,
+          "major_ko": "보건",
+          "category_ko": "식품",
+          "dataset_ko": "서울시 일반음식점 인허가 정보"
+        },
+        {
+          "major": "environment",
+          "category": "environment",
+          "dataset": "manure_facility_mgmt",
+          "sites_with_phone": 8,
+          "multi_site_locations": 5,
+          "multi_site_ratio": "0.625000000000000000",
+          "multi_site_operators": 3,
+          "max_sites_per_operator": 7,
+          "major_ko": "환경",
+          "category_ko": "환경",
+          "dataset_ko": "서울시 가축분뇨배출시설관리업(사업장) 인허가 정보"
+        },
+        {
+          "major": "health",
+          "category": "livestock",
+          "dataset": "meat_packaging",
+          "sites_with_phone": 95,
+          "multi_site_locations": 55,
+          "multi_site_ratio": "0.578900000000000000",
+          "multi_site_operators": 53,
+          "max_sites_per_operator": 12,
+          "major_ko": "보건",
+          "category_ko": "축산",
+          "dataset_ko": "서울시 식육포장처리업 인허가 정보"
+        },
+        {
+          "major": "health",
+          "category": "health_medical",
+          "dataset": "medical_corporation",
+          "sites_with_phone": 20,
+          "multi_site_locations": 8,
+          "multi_site_ratio": "0.400000000000000000",
+          "multi_site_operators": 8,
+          "max_sites_per_operator": 6,
+          "major_ko": "보건",
+          "category_ko": "의료",
+          "dataset_ko": "서울시 의료법인 인허가 정보"
+        }
+      ]
+    },
+    {
+      "name": "gold_license_phone_succession",
+      "domain": "commerce",
+      "external": true,
+      "relation": "iceberg_dev.commerce.gold_license_phone_succession",
+      "description": "",
+      "tags": [],
+      "contract_enforced": false,
+      "materialized": "",
+      "on_table_exists": null,
+      "row_count": 91,
+      "date_range": null,
+      "columns": [
+        {
+          "name": "closed_major",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "closed_category",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "opened_major",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "opened_category",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "successions",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "avg_gap_days",
+          "type": "double",
+          "description": ""
+        },
+        {
+          "name": "p50_gap_days",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "within_1y",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "closed_major_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "closed_category_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "opened_major_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "opened_category_ko",
+          "type": "varchar",
+          "description": ""
+        }
+      ],
+      "quality": [],
+      "lineage": {},
+      "sample": [
+        {
+          "closed_major": "industry",
+          "closed_category": "industry",
+          "opened_major": "industry",
+          "opened_category": "industry",
+          "successions": 6821,
+          "avg_gap_days": 322.1,
+          "p50_gap_days": 220,
+          "within_1y": 4250,
+          "closed_major_ko": "산업",
+          "closed_category_ko": "산업",
+          "opened_major_ko": "산업",
+          "opened_category_ko": "산업"
+        },
+        {
+          "closed_major": "industry",
+          "closed_category": "industry",
+          "opened_major": "health",
+          "opened_category": "health_medical",
+          "successions": 431,
+          "avg_gap_days": 374.7,
+          "p50_gap_days": 308,
+          "within_1y": 235,
+          "closed_major_ko": "산업",
+          "closed_category_ko": "산업",
+          "opened_major_ko": "보건",
+          "opened_category_ko": "의료"
+        },
+        {
+          "closed_major": "industry",
+          "closed_category": "industry",
+          "opened_major": "environment",
+          "opened_category": "environment",
+          "successions": 65,
+          "avg_gap_days": 433.3,
+          "p50_gap_days": 393,
+          "within_1y": 30,
+          "closed_major_ko": "산업",
+          "closed_category_ko": "산업",
+          "opened_major_ko": "환경",
+          "opened_category_ko": "환경"
+        },
+        {
+          "closed_major": "industry",
+          "closed_category": "industry",
+          "opened_major": "health",
+          "opened_category": "pharmacy",
+          "successions": 26,
+          "avg_gap_days": 440.1,
+          "p50_gap_days": 446,
+          "within_1y": 12,
+          "closed_major_ko": "산업",
+          "closed_category_ko": "산업",
+          "opened_major_ko": "보건",
+          "opened_category_ko": "약국"
+        },
+        {
+          "closed_major": "culture",
+          "closed_category": "culture",
+          "opened_major": "industry",
+          "opened_category": "industry",
+          "successions": 817,
+          "avg_gap_days": 371.2,
+          "p50_gap_days": 304,
+          "within_1y": 462,
+          "closed_major_ko": "문화",
+          "closed_category_ko": "문화",
+          "opened_major_ko": "산업",
+          "opened_category_ko": "산업"
+        }
+      ]
+    },
+    {
+      "name": "gold_license_seasonality",
+      "domain": "commerce",
+      "external": true,
+      "relation": "iceberg_dev.commerce.gold_license_seasonality",
+      "description": "",
+      "tags": [],
+      "contract_enforced": false,
+      "materialized": "",
+      "on_table_exists": null,
+      "row_count": 2629,
+      "date_range": null,
+      "columns": [
+        {
+          "name": "event_type",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "month_of_year",
+          "type": "integer",
+          "description": ""
+        },
+        {
+          "name": "major",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "dataset",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "cnt",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "event_type_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "major_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "dataset_ko",
+          "type": "varchar",
+          "description": ""
+        }
+      ],
+      "quality": [],
+      "lineage": {},
+      "sample": [
+        {
+          "event_type": "opened",
+          "month_of_year": 1,
+          "major": "health",
+          "category": "food",
+          "dataset": "general_restaurant",
+          "cnt": 9109,
+          "event_type_ko": "개업",
+          "major_ko": "보건",
+          "category_ko": "식품",
+          "dataset_ko": "서울시 일반음식점 인허가 정보"
+        },
+        {
+          "event_type": "opened",
+          "month_of_year": 6,
+          "major": "health",
+          "category": "food",
+          "dataset": "general_restaurant",
+          "cnt": 11825,
+          "event_type_ko": "개업",
+          "major_ko": "보건",
+          "category_ko": "식품",
+          "dataset_ko": "서울시 일반음식점 인허가 정보"
+        },
+        {
+          "event_type": "opened",
+          "month_of_year": 4,
+          "major": "health",
+          "category": "food",
+          "dataset": "general_restaurant",
+          "cnt": 12268,
+          "event_type_ko": "개업",
+          "major_ko": "보건",
+          "category_ko": "식품",
+          "dataset_ko": "서울시 일반음식점 인허가 정보"
+        },
+        {
+          "event_type": "opened",
+          "month_of_year": 11,
+          "major": "health",
+          "category": "food",
+          "dataset": "general_restaurant",
+          "cnt": 11890,
+          "event_type_ko": "개업",
+          "major_ko": "보건",
+          "category_ko": "식품",
+          "dataset_ko": "서울시 일반음식점 인허가 정보"
+        },
+        {
+          "event_type": "opened",
+          "month_of_year": 3,
+          "major": "health",
+          "category": "food",
+          "dataset": "general_restaurant",
+          "cnt": 12033,
+          "event_type_ko": "개업",
+          "major_ko": "보건",
+          "category_ko": "식품",
+          "dataset_ko": "서울시 일반음식점 인허가 정보"
+        }
+      ]
+    },
+    {
+      "name": "gold_license_status_duration",
+      "domain": "commerce",
+      "external": true,
+      "relation": "iceberg_dev.commerce.gold_license_status_duration",
+      "description": "",
+      "tags": [],
+      "contract_enforced": false,
+      "materialized": "",
+      "on_table_exists": null,
+      "row_count": 567,
+      "date_range": null,
+      "columns": [
+        {
+          "name": "dataset",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "major",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "status_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "status_group",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "is_ongoing",
+          "type": "boolean",
+          "description": ""
+        },
+        {
+          "name": "n_segments",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "avg_days",
+          "type": "double",
+          "description": ""
+        },
+        {
+          "name": "p50_days",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "p90_days",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "max_days",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "dataset_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "major_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category_ko",
+          "type": "varchar",
+          "description": ""
+        }
+      ],
+      "quality": [],
+      "lineage": {},
+      "sample": [
+        {
+          "dataset": "affiliated_medical",
+          "major": "health",
+          "category": "health_medical",
+          "status_code": "03",
+          "status_group": "폐업",
+          "is_ongoing": true,
+          "n_segments": 58,
+          "avg_days": 114.7,
+          "p50_days": 78,
+          "p90_days": 217,
+          "max_days": 217,
+          "dataset_ko": "서울시 부속의료기관 인허가 정보",
+          "major_ko": "보건",
+          "category_ko": "의료"
+        },
+        {
+          "dataset": "affiliated_medical",
+          "major": "health",
+          "category": "health_medical",
+          "status_code": "05",
+          "status_group": "제외/전출",
+          "is_ongoing": true,
+          "n_segments": 3,
+          "avg_days": 123.7,
+          "p50_days": 84,
+          "p90_days": 217,
+          "max_days": 217,
+          "dataset_ko": "서울시 부속의료기관 인허가 정보",
+          "major_ko": "보건",
+          "category_ko": "의료"
+        },
+        {
+          "dataset": "air_pollution_facility",
+          "major": "environment",
+          "category": "environment",
+          "status_code": "05",
+          "status_group": "제외/전출",
+          "is_ongoing": true,
+          "n_segments": 373,
+          "avg_days": 162.0,
+          "p50_days": 213,
+          "p90_days": 217,
+          "max_days": 217,
+          "dataset_ko": "서울시 대기오염물질배출시설설치사업장 인허가 정보",
+          "major_ko": "환경",
+          "category_ko": "환경"
+        },
+        {
+          "dataset": "air_pollution_facility",
+          "major": "environment",
+          "category": "environment",
+          "status_code": "02",
+          "status_group": "휴업",
+          "is_ongoing": true,
+          "n_segments": 24,
+          "avg_days": 174.0,
+          "p50_days": 187,
+          "p90_days": 217,
+          "max_days": 217,
+          "dataset_ko": "서울시 대기오염물질배출시설설치사업장 인허가 정보",
+          "major_ko": "환경",
+          "category_ko": "환경"
+        },
+        {
+          "dataset": "amusement_etc",
+          "major": "culture",
+          "category": "culture",
+          "status_code": "03",
+          "status_group": "폐업",
+          "is_ongoing": true,
+          "n_segments": 456,
+          "avg_days": 94.1,
+          "p50_days": 71,
+          "p90_days": 152,
+          "max_days": 217,
+          "dataset_ko": "서울시 유원시설업(기타) 인허가 정보",
+          "major_ko": "문화",
+          "category_ko": "문화"
+        }
+      ]
+    },
+    {
+      "name": "gold_license_status_transition",
+      "domain": "commerce",
+      "external": true,
+      "relation": "iceberg_dev.commerce.gold_license_status_transition",
+      "description": "",
+      "tags": [],
+      "contract_enforced": false,
+      "materialized": "",
+      "on_table_exists": null,
+      "row_count": 115,
+      "date_range": null,
+      "columns": [
+        {
+          "name": "major",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "dataset",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "from_status",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "to_status",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "from_group",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "to_group",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "transitions",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "major_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "dataset_ko",
+          "type": "varchar",
+          "description": ""
+        }
+      ],
+      "quality": [],
+      "lineage": {},
+      "sample": [
+        {
+          "major": "health",
+          "category": "animal",
+          "dataset": "animal_hospital",
+          "from_status": "01",
+          "to_status": "03",
+          "from_group": "영업",
+          "to_group": "폐업",
+          "transitions": 1,
+          "major_ko": "보건",
+          "category_ko": "동물",
+          "dataset_ko": "서울시 동물병원 인허가 정보"
+        },
+        {
+          "major": "health",
+          "category": "animal",
+          "dataset": "animal_medical_device_sale",
+          "from_status": "02",
+          "to_status": "03",
+          "from_group": "휴업",
+          "to_group": "폐업",
+          "transitions": 1,
+          "major_ko": "보건",
+          "category_ko": "동물",
+          "dataset_ko": "서울시 동물용의료용구판매업 인허가 정보"
+        },
+        {
+          "major": "health",
+          "category": "food",
+          "dataset": "bakery",
+          "from_status": "01",
+          "to_status": "03",
+          "from_group": "영업",
+          "to_group": "폐업",
+          "transitions": 34,
+          "major_ko": "보건",
+          "category_ko": "식품",
+          "dataset_ko": "서울시 제과점영업 인허가 정보"
+        },
+        {
+          "major": "health",
+          "category": "hygiene_beauty",
+          "dataset": "beauty_shop",
+          "from_status": "01",
+          "to_status": "03",
+          "from_group": "영업",
+          "to_group": "폐업",
+          "transitions": 139,
+          "major_ko": "보건",
+          "category_ko": "위생·미용",
+          "dataset_ko": "서울시 미용업 인허가 정보"
+        },
+        {
+          "major": "culture",
+          "category": "culture",
+          "dataset": "billiard_hall",
+          "from_status": "02",
+          "to_status": "01",
+          "from_group": "휴업",
+          "to_group": "영업",
+          "transitions": 1,
+          "major_ko": "문화",
+          "category_ko": "문화",
+          "dataset_ko": "서울시 당구장업 인허가 정보"
+        }
+      ]
+    },
+    {
+      "name": "gold_license_stock_age_band",
+      "domain": "commerce",
+      "external": true,
+      "relation": "iceberg_dev.commerce.gold_license_stock_age_band",
+      "description": "",
+      "tags": [],
+      "contract_enforced": false,
+      "materialized": "",
+      "on_table_exists": null,
+      "row_count": 11855,
+      "date_range": null,
+      "columns": [
+        {
+          "name": "major",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "dataset",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu_code",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "age_band",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "active_cnt",
+          "type": "bigint",
+          "description": ""
+        },
+        {
+          "name": "major_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "category_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "dataset_ko",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "gu",
+          "type": "varchar",
+          "description": ""
+        },
+        {
+          "name": "age_band_ko",
+          "type": "varchar",
+          "description": ""
+        }
+      ],
+      "quality": [],
+      "lineage": {},
+      "sample": [
+        {
+          "major": "health",
+          "category": "food",
+          "dataset": "general_restaurant",
+          "gu_code": "11215",
+          "age_band": "4_10to20y",
+          "active_cnt": 932,
+          "major_ko": "보건",
+          "category_ko": "식품",
+          "dataset_ko": "서울시 일반음식점 인허가 정보",
+          "gu": "광진구",
+          "age_band_ko": "10~20년"
+        },
+        {
+          "major": "health",
+          "category": "food",
+          "dataset": "general_restaurant",
+          "gu_code": "11215",
+          "age_band": "0_lt1y",
+          "active_cnt": 383,
+          "major_ko": "보건",
+          "category_ko": "식품",
+          "dataset_ko": "서울시 일반음식점 인허가 정보",
+          "gu": "광진구",
+          "age_band_ko": "1년 미만"
+        },
+        {
+          "major": "health",
+          "category": "food",
+          "dataset": "general_restaurant",
+          "gu_code": "11230",
+          "age_band": "5_ge20y",
+          "active_cnt": 999,
+          "major_ko": "보건",
+          "category_ko": "식품",
+          "dataset_ko": "서울시 일반음식점 인허가 정보",
+          "gu": "동대문구",
+          "age_band_ko": "20년+"
+        },
+        {
+          "major": "health",
+          "category": "food",
+          "dataset": "general_restaurant",
+          "gu_code": "11230",
+          "age_band": "3_5to10y",
+          "active_cnt": 693,
+          "major_ko": "보건",
+          "category_ko": "식품",
+          "dataset_ko": "서울시 일반음식점 인허가 정보",
+          "gu": "동대문구",
+          "age_band_ko": "5~10년"
+        },
+        {
+          "major": "health",
+          "category": "food",
+          "dataset": "general_restaurant",
+          "gu_code": "11260",
+          "age_band": "4_10to20y",
+          "active_cnt": 794,
+          "major_ko": "보건",
+          "category_ko": "식품",
+          "dataset_ko": "서울시 일반음식점 인허가 정보",
+          "gu": "중랑구",
+          "age_band_ko": "10~20년"
         }
       ]
     },
@@ -17335,5 +20692,22 @@
         }
       ]
     }
-  ]
+  ],
+  "domain_generated_at": {
+    "culture": "2026-07-20T02:44:55.484674+00:00",
+    "traffic": "2026-07-20T02:44:55.484674+00:00",
+    "weather": "2026-07-20T02:44:55.484674+00:00",
+    "citydata": "2026-07-20T02:44:55.484674+00:00",
+    "transit": "2026-07-20T02:44:55.484674+00:00",
+    "commerce": "2026-07-20T20:00:56.597126+00:00"
+  },
+  "refresh": {
+    "mode": "partial_basic",
+    "source_system": "trino",
+    "catalog": "iceberg_dev",
+    "domains": [
+      "commerce"
+    ],
+    "observed_at": "2026-07-20T20:00:56.597126+00:00"
+  }
 }
