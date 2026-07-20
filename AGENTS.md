@@ -19,6 +19,10 @@ FastAPI로 서빙한다.
 4. 작업 종류에 따라:
    - Charts Studio 코드/UX: [docs/charts-design-intents.md](docs/charts-design-intents.md)
    - 실행·장애·환경: [docs/operations.md](docs/operations.md)
+   - 서버 배포 전체 순서(사람): [docs/deployment/end-to-end-human-runbook.md](docs/deployment/end-to-end-human-runbook.md)
+   - 서버 배포(사람): [docs/deployment/server-setup-human.md](docs/deployment/server-setup-human.md)
+   - 서버 배포(AI): [docs/deployment/server-agent-runbook.md](docs/deployment/server-agent-runbook.md)
+   - R2/Trino secret: [docs/deployment/r2-secret-management.md](docs/deployment/r2-secret-management.md)
    - 사용자 흐름: [docs/charts-user-guide.md](docs/charts-user-guide.md)
    - 카탈로그/API 전반: [README.md](README.md)
 5. 실제 구현 파일과 테스트/검증 경로
@@ -181,6 +185,7 @@ dashboard/
 └─ docs/
    ├─ HERITAGE.md                  # 역사·불변식·확장법 정본
    ├─ README.md                    # 문서 인덱스
+   ├─ deployment/                  # 사람용 서버 준비 + 서버 AI용 안전 runbook
    ├─ charts-design-intents.md     # 설계 의도 A~F
    ├─ charts-user-guide.md
    ├─ additional_doc/              # 인증·RDB·알림·클라우드 WAF

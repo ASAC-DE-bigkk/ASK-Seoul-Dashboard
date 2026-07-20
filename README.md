@@ -43,6 +43,29 @@ set -a; source .env; set +a
 # → http://127.0.0.1:8765  (화면) · /docs (Swagger) · /health
 ```
 
+## 서버 배포
+
+`dev` push 시 GitHub Actions가 테스트 후 commit SHA 기반 이미지를 GHCR에 올리고,
+`development` Environment에 연결된 서버에서 `deploy/compose.yaml`을 적용한다. DB migration은
+앱 기동 전 단일 job으로 실행하며, `/health` 실패 시 직전 이미지로 자동 복구한다.
+`main`은 테스트와 이미지 발행까지만 수행하고 서버 배포는 의도적으로 비활성화되어 있다.
+
+배포된 서비스 DB는 외부에 port를 열지 않는 전용 PostgreSQL과 영속 volume을 사용한다.
+Charts 데이터는 dashboard가 R2 자격증명을 갖지 않고 `elt_net`의 dev Trino companion이
+`iceberg_dev` R2/Iceberg catalog를 조회하는 구조를 유지한다.
+현재 작업 브랜치가 PR을 통해 `dev`에 merge되기 전에는 서버에 PostgreSQL이나 dashboard
+컨테이너를 생성하지 않는다.
+
+실제 배포는 접속 PC·GitHub 웹·대상 서버의 위치를 분리한
+[사람용 종단간 순차 실행서](docs/deployment/end-to-end-human-runbook.md)를 위에서 아래로
+따른다. 각 전제의 상세 설명은 [사람용 서버 준비 안내](docs/deployment/server-setup-human.md),
+서버 안의 AI에게 점검을 맡길 때는
+[서버 AI runbook](docs/deployment/server-agent-runbook.md)을 사용한다.
+R2 값의 GitHub Environment 정본·일시 주입·회전은
+[R2/Trino secret 관리 계약](docs/deployment/r2-secret-management.md)을 따른다.
+배포 동작의 상세 계약은
+[운영 매뉴얼의 dev/main 서버 자동 배포](docs/operations.md#5-devmain-서버-자동-배포)에 있다.
+
 ## 인증·회원·권한
 
 - 익명은 랜딩·로그인·가입·비밀번호 재설정만 접근한다.
@@ -108,6 +131,6 @@ set -a; source .env; set +a
 ## W3 본작업으로 갈 때 바뀌는 것
 
 - extract.py → Airflow 태스크(transform 후속 스텝)로 승격, 스냅샷은 마트/serving-postgres 로
-- 서버 → compose 서비스 (공유 인프라 = 팀 게이트, serving-postgres 선례 패턴)
+- 독립 dashboard Compose → 상위 `sample/` 공유 배포와 network·secret 계약 통합
 - 도메인 1개 → 6개 (manifest 경로만 도메인별로 늘리면 됨)
 - SLO 엔드포인트 추가 (#257/DBT#110 마트 완성 후)

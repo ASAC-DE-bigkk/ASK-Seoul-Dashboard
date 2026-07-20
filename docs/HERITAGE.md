@@ -33,6 +33,7 @@ Charts Studio 가 라이브 질의를 갖는 이유: 사용자가 소스·차원
 - **데이터 규정(상위 커머스 번들 계승)**: 원본 값을 파괴하지 않는다 — 코드값은 표시 라벨로만 번역하고,
   집계·필터는 재현 가능해야 한다(응답에 SQL 포함). 시크릿을 코드·로그·커밋에 넣지 않는다.
 - **문서 체인**: [docs/README.md](README.md)(인덱스) → [operations.md](operations.md)(기동/중지) ·
+  [deployment/README.md](deployment/README.md)(사람/AI 서버 배포 문서 분리) ·
   [maintanance/README.md](maintanance/README.md)(개발 실행·최초 접속·운영 원칙) ·
   [charts-user-guide.md](charts-user-guide.md)(사용법) · [charts-design-intents.md](charts-design-intents.md)(의도 A~F) · 본 문서(계승).
 
@@ -49,6 +50,7 @@ Charts Studio 가 라이브 질의를 갖는 이유: 사용자가 소스·차원
 | 인증 DB | `DATABASE_URL`, 기본 `sqlite:///./data/ask_seoul.db`. PostgreSQL/MySQL dialect DDL도 테스트 |
 | 세션 | DB에는 HMAC 해시만 저장. 절대+idle 만료와 사용자별 상한 적용. 운영은 `AUTH_SESSION_PEPPER`, HTTPS Secure cookie 필수 |
 | MFA | RFC 6238 TOTP+일회용 복구 코드. 운영자 이상 기본 강제. 하위 역할은 감사 사유 기반 관리자 초기화, 권한 계정은 CLI break-glass만 허용. `AUTH_MFA_MASTER_KEY` 장기 보관 필수 |
+| 서버 배포 | `dev`만 GitHub `development` 서버에 배포. 서비스 DB는 전용 PostgreSQL volume, 데이터는 Trino→R2/Iceberg. `main`은 build만 하고 deploy 금지 |
 
 ## 4. 파일 지도 — 무엇을 고치려면 어디를 보나
 
@@ -74,6 +76,7 @@ app/static/charts/             ← 프론트 번들 (격리)
 app/static/auth/               ← 로그인·가입·재설정·프로필·운영 콘솔
 app/main.py      본체 접점 (카탈로그 + auth/charts router + 정적 화면)
 docs/additional_doc/           ← 인증/RDB/알림/클라우드 WAF 운영 문서
+docs/deployment/               ← 사람용 서버 준비 + 서버 AI용 제한적 실행 runbook
 ```
 
 ## 5. 설계 의도 요약 (정본: [charts-design-intents.md](charts-design-intents.md))
@@ -170,3 +173,10 @@ open "http://127.0.0.1:8765/charts?selftest=1"
   쓰기 없는 maintenance dry-run과 최초 접속 운영 문서를 추가.
 - 2026-07-20: 최초 MFA CLI의 미flush challenge 오류를 수정. challenge 즉시 가시성, 사람 입력 전
   트랜잭션 종료, 6자리 비표시·최대 5회 재시도와 seed 폐기 운영 절차를 추가.
+- 2026-07-20: `dev`/`main` push 기반 서버 배포 추가. Docker runtime 이미지, GitHub Environment별
+  SSH 배포, 단일 DB migration, notification worker, health gate와 직전 앱 rollback을 구성.
+- 2026-07-21: dev 서버의 최소 Trino companion과 R2 secret 관리 계약 추가. R2 6개 값은
+  GitHub `development` Environment를 정본으로 삼고 실행별 임시 파일로만 주입·삭제하며,
+  Dashboard/PostgreSQL/서버 장기 `.env`에는 복제하지 않도록 고정.
+- 2026-07-21: 사람이 같은 배포를 재현할 수 있도록 접속 PC·GitHub 웹·대상 서버·GitHub
+  Actions의 실행 위치를 분리한 종단간 순차 실행서를 추가.

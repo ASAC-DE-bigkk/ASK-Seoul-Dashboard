@@ -1,0 +1,20 @@
+services:
+  dashboard:
+    networks:
+      - dashboard
+      - data
+
+  notification-worker:
+    networks:
+      - dashboard
+      - data
+
+  migrate:
+    networks:
+      - dashboard
+      - data
+
+networks:
+  data:
+    external: true
+    name: ${DASHBOARD_DATA_NETWORK:?DASHBOARD_DATA_NETWORK is required}

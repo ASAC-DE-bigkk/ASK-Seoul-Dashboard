@@ -182,3 +182,218 @@ docker compose down        # 컨테이너 제거(볼륨은 유지). -v 는 데�
 3. 503 "Trino 접속 불가이고 캐시도 없습니다" → 스택 기동 후 타일의 ↻(다시 조회)
 4. "데이터가 없습니다" → 차트 필터 값 확인 (연월 형식 `YYYY-MM` 등)
 5. 새 gold 테이블/컬럼이 안 보임 → `extract.py` 로 스냅샷 갱신 (질의 자체는 cast 기반이라 낡은 스냅샷에도 안전)
+
+---
+
+## 5. dev/main 서버 자동 배포
+
+`dashboard/` 저장소는 다음 경로로 독립 배포한다.
+
+서버 소유자가 처음부터 실제 배포를 수행할 때는
+[사람용 종단간 순차 실행서](deployment/end-to-end-human-runbook.md)를 사용한다. 설치 전제의
+세부 판단은 [사람용 서버 준비 안내](deployment/server-setup-human.md), 대상 서버에서 AI가
+점검·준비할 때는 권한과 금지 작업을 분리한
+[서버 AI runbook](deployment/server-agent-runbook.md)을 먼저 적용한다.
+
+이 절의 인증·PostgreSQL·배포 구성은 현재 작업 브랜치의 PR 범위다. 서버에 이미 설치된 구성이
+아니며, PR이 `dev`에 merge되어 workflow가 처음 실행될 때 PostgreSQL 컨테이너와 영속 volume이
+생성된다. merge 전에는 대상 서버를 변경하지 않는다.
+
+```text
+dev push  ─→ GitHub development Environment ─→ dev 서버
+main push ─→ test + GHCR image build only ─→ 서버 배포 안 함
+                  │
+       test → GHCR SHA 이미지 → SSH
+                              ├─일시 R2 secret → Trino health → 즉시 삭제
+                              └─migration → Compose up → /health
+                                                       └─실패 시 직전 앱 이미지 복구
+```
+
+- 이미지는 `ghcr.io/<owner>/<repo>:<40자리 commit SHA>`로 고정한다.
+- 서버의 기존 runtime 설정과 인증 시크릿은 CI가 덮어쓰지 않는다. dev 최초 배포에서 파일이
+  없을 때만 서버의 `bootstrap-dev.sh`가 난수 값을 생성한다.
+- 앱 기동 전에 단일 `migrate` 컨테이너가 DB schema v6 계약을 적용한다.
+- 앱 컨테이너는 production에서 DDL을 실행하지 않고 결과만 검증한다.
+- 새 앱이 120초 안에 healthy가 되지 않으면 직전 Compose와 이미지로 자동 복구한다.
+  additive DB migration 자체는 되돌리지 않으므로 main 배포 전 DB 백업은 별도로 보장해야 한다.
+- 현재 `main`은 `main-deployment-disabled` job으로 배포 금지를 명시한다. production 서버 배포를
+  시작하기 전에는 별도 검토 없이 이 조건을 제거하지 않는다.
+
+### 5-1. 현재 dev 서버 결정
+
+현재 dev는 공개 HTTPS 없이 SSH tunnel로만 접근한다.
+
+| 항목 | 값 |
+|---|---|
+| SSH host | `exisnet.iptime.org` |
+| SSH port / user | `3707` / `exi` |
+| 권장 배포 경로 | `/home/exi/apps/ask-seoul-dashboard-dev` |
+| 권장 runtime env | `/home/exi/.config/ask-seoul/dashboard-dev.env` |
+| Compose project | `ask-seoul-dashboard-dev` |
+| 앱 bind | 서버 `127.0.0.1:8765` |
+| 서비스 DB | 전용 PostgreSQL 컨테이너 + `auth_postgres` volume |
+| 차트 데이터 | `elt_net`의 최소 dev Trino companion → R2/Iceberg |
+
+서버 아키텍처는 서버에서 확인한다.
+
+```bash
+uname -m
+# x86_64       → amd64
+# aarch64/arm64 → arm64
+```
+
+현재 workflow는 GitHub-hosted amd64 이미지 빌드이므로 서버가 arm64라면 배포 전에 build runner를
+조정해야 한다.
+
+dev runtime 파일은 [runtime.dev.env.example](../deploy/runtime.dev.env.example)을 계약으로 사용한다.
+PR merge 후 첫 `dev` 배포 때 `bootstrap-dev.sh`가 PostgreSQL 비밀번호, session pepper, MFA master key를
+서버 안에서 생성해 아래 경로에 mode `0600`으로 한 번만 저장하며 이후 배포에서는 덮어쓰지 않는다.
+PostgreSQL은 호스트 port를 공개하지 않고 dashboard 전용 network에서만 접근한다.
+
+```bash
+stat -c '%a %n' /home/exi/.config/ask-seoul/dashboard-dev.env
+# 600 /home/exi/.config/ask-seoul/dashboard-dev.env
+```
+
+배포 후 로컬 PC에서 tunnel을 열고 브라우저로 접속한다.
+
+```bash
+ssh -p 3707 \
+  -L 8765:127.0.0.1:8765 \
+  exi@exisnet.iptime.org
+
+# tunnel을 유지한 상태에서
+open http://127.0.0.1:8765
+```
+
+이 구조에서는 dashboard port를 공유기나 인터넷에 추가로 포워딩하지 않는다. SSH port `3707`만
+기존 접근 통제와 fail2ban 등의 보호를 받는다.
+
+### 5-2. 데이터 경로와 향후 전환 경계
+
+현재 dashboard는 R2 자격증명을 직접 가지지 않는다.
+
+```text
+dashboard
+  └─ CHARTS_TRINO_URL=http://trino:8080
+       └─ iceberg_dev REST catalog
+            ├─ R2_DEV_DATA_CATALOG_URI / WAREHOUSE / TOKEN
+            └─ R2_DEV_ENDPOINT / ACCESS_KEY / SECRET_KEY
+```
+
+R2 connector 계약의 정본은 상위 `trino/catalog/iceberg_dev.properties`다. dev 서버 배포
+secret의 정본은 GitHub `development` Environment이고, 상위 `sample/.env`는 로컬 데이터
+스택 입력으로만 사용한다. dashboard snapshot의 relation도
+`iceberg_dev.<schema>.<gold_table>`을 사용한다. 따라서 R2 endpoint, bucket, token,
+access key를 dashboard runtime env에 복사하지 않는다.
+
+대상 서버에 기존 Trino가 없으면 [deploy/trino/README.md](../deploy/trino/README.md)의
+최소 companion을 workflow가 기동한다. R2 6개 값은 실행별 mode `0600` 임시 파일을 통해
+Trino에만 주입하고 즉시 삭제한다. 전체 계약은
+[R2/Trino secret 관리](deployment/r2-secret-management.md)를 따른다.
+
+향후 데이터 제공 계층을 SQLite/D2로 바꾸는 작업은 `app/charts/trino.py`를 대체할 query adapter,
+snapshot relation 계약, 동시성·캐시·백필 경로를 함께 변경해야 한다. 제품명과 접속 API가 확정되기
+전까지 현재 Trino 경로를 유지한다.
+
+### 5-3. production 활성화 시 추가 준비
+
+현재 dev의 bundled PostgreSQL·SSH tunnel 구성에는 DB CA, Secret Manager, reverse proxy가
+필요하지 않다.
+나중에 main 배포를 활성화할 때 아래를 별도로 준비한다.
+
+1. Secret Manager/에이전트가 [runtime.env.example](../deploy/runtime.env.example)을 바탕으로
+   서버의 절대 경로에 runtime env 파일을 mode `0600`으로 렌더링하게 한다.
+2. PostgreSQL CA 같은 공개 인증서 파일은 `<DEPLOY_PATH>/certificates/` 아래에 mode `0644`로 둔다.
+3. `DASHBOARD_BIND_HOST=127.0.0.1`을 유지하고 같은 서버의 HTTPS reverse proxy로만 노출한다.
+   reverse proxy가 다른 호스트/컨테이너라면 private bind 주소와 방화벽 범위를 별도로 정한다.
+
+production runtime 파일의 필수 보안값은 다음과 같다.
+
+- `AUTH_ENV=production`
+- HTTPS `AUTH_PUBLIC_BASE_URL`, 정확한 `AUTH_ALLOWED_HOSTS`, 동일한 `HEALTHCHECK_HOST`
+- `AUTH_COOKIE_SECURE=true`, `AUTH_REQUIRE_MFA_FOR_PRIVILEGED=true`
+- 서로 다른 32자 이상 `AUTH_SESSION_PEPPER`, `AUTH_MFA_MASTER_KEY`
+- `sslmode=verify-full`과 CA를 사용하는 `DATABASE_URL`
+- 컨테이너에서 접근 가능한 `CHARTS_TRINO_URL`
+
+같은 서버에서 상위 `sample/docker-compose.yml`의 Trino를 쓴다면 GitHub 변수
+`DASHBOARD_DATA_NETWORK=elt_net`과 runtime 값 `CHARTS_TRINO_URL=http://trino:8080`을 사용한다.
+다른 서버의 Trino를 쓴다면 `DASHBOARD_DATA_NETWORK`를 비우고 private URL을 직접 지정한다.
+
+### 5-4. GitHub Environments
+
+저장소 Settings → Environments에 `development`를 만들고 아래 값을 등록한다. `production`은
+나중에 배포를 활성화할 때 만들며, 현재 workflow에서는 사용하지 않는다.
+
+| 종류 | 이름 | 예시/용도 |
+|---|---|---|
+| Variable | `DEPLOY_HOST` | `exisnet.iptime.org` |
+| Variable | `DEPLOY_PORT` | `3707` |
+| Variable | `DEPLOY_USER` | `exi` |
+| Variable | `DEPLOY_PATH` | `/home/exi/apps/ask-seoul-dashboard-dev` |
+| Variable | `COMPOSE_PROJECT_NAME` | `ask-seoul-dashboard-dev` |
+| Variable | `RUNTIME_ENV_FILE` | `/home/exi/.config/ask-seoul/dashboard-dev.env` |
+| Variable | `DASHBOARD_DATA_NETWORK` | `elt_net` |
+| Variable | `TRINO_DEPLOY_PATH` | `/home/exi/apps/ask-seoul-trino-dev` |
+| Variable | `TRINO_COMPOSE_PROJECT_NAME` | `ask-seoul-trino-dev` |
+| Secret | `SSH_PRIVATE_KEY` | 배포 전용 private key |
+| Secret | `SSH_KNOWN_HOSTS` | 별도 채널에서 fingerprint를 검증한 대상 서버 host key |
+| Secret | `R2_DEV_DATA_CATALOG_URI` | dev Iceberg REST catalog URI |
+| Secret | `R2_DEV_DATA_CATALOG_WAREHOUSE` | dev Iceberg warehouse |
+| Secret | `R2_DEV_DATA_CATALOG_TOKEN` | dev catalog OAuth2 token |
+| Secret | `R2_DEV_ENDPOINT` | R2 S3 endpoint |
+| Secret | `R2_DEV_ACCESS_KEY_ID` | R2 access key ID |
+| Secret | `R2_DEV_SECRET_ACCESS_KEY` | R2 secret access key |
+
+`SSH_KNOWN_HOSTS`는 `ssh-keyscan` 결과를 그대로 신뢰하지 말고 서버 콘솔의 fingerprint와
+비교한 뒤 등록한다. SSH port가 `3707`이므로 known_hosts에는
+`[exisnet.iptime.org]:3707` 형식으로 들어가야 한다.
+
+GHCR push/pull은 workflow의 짧은 수명 `GITHUB_TOKEN`을 사용한다. Organization 정책에서
+Actions의 package write 권한이 차단되어 있다면 이 저장소가 GHCR package를 만들고 읽을 수 있게
+허용해야 한다.
+
+R2 secret 최초 등록, 임시 파일 삭제, 회전·폐기 순서는
+[R2/Trino secret 관리 계약](deployment/r2-secret-management.md)을 따른다.
+
+### 5-5. 배포 후 최초 관리자
+
+첫 배포와 `/health` 확인 뒤 서버의 보호된 TTY에서 실행한다. 아래 `-f` 뒤의 data network
+override는 `DASHBOARD_DATA_NETWORK`를 설정한 환경에서만 붙인다.
+
+```bash
+cd <DEPLOY_PATH>
+
+docker compose \
+  --env-file <RUNTIME_ENV_FILE> \
+  --env-file .deploy.env \
+  --project-name <COMPOSE_PROJECT_NAME> \
+  -f compose.yaml \
+  -f compose.data-network.yaml \
+  exec dashboard python scripts/create_admin.py
+
+# 같은 명령 접두부로 MFA 등록
+docker compose \
+  --env-file <RUNTIME_ENV_FILE> \
+  --env-file .deploy.env \
+  --project-name <COMPOSE_PROJECT_NAME> \
+  -f compose.yaml \
+  -f compose.data-network.yaml \
+  exec dashboard python scripts/setup_mfa.py
+```
+
+이메일·비밀번호·MFA seed·복구 코드는 GitHub Actions 로그나 채팅에 입력하지 않는다.
+일상 상태 확인은 같은 Compose 접두부에 `ps`, 로그 확인은 `logs --tail 100 dashboard`를 붙인다.
+
+서비스 DB 백업은 dashboard 이미지 배포와 분리한다.
+
+```bash
+docker compose \
+  --env-file <RUNTIME_ENV_FILE> \
+  --env-file .deploy.env \
+  --project-name <COMPOSE_PROJECT_NAME> \
+  -f compose.yaml \
+  -f compose.data-network.yaml \
+  exec -T postgres pg_dump -U ask_seoul -d ask_seoul -Fc > ask_seoul.dump
+```
