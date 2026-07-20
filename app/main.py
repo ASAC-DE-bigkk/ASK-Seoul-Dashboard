@@ -43,6 +43,7 @@ def _summary(t: dict) -> dict:
         "quality_source_count": len(t["quality"]),
         "serving_tier": t.get("serving_tier"),
         "tests": t.get("tests", []),
+        "served_url": t.get("served_url"),
     }
 
 

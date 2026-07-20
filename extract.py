@@ -36,6 +36,19 @@ BASIC_MANIFEST_PROJECTS = ("commerce", "citydata", "traffic_weather", "transit")
 
 MAX_SAMPLE_TEXT = 120  # 샘플 셀 문자열 절단 길이 (UI 가독성)
 
+# ── 공개 D1 서빙 API (sample/serving, ASAC-DAG#445) ─────────────────
+# citydata_serving_export DAG 가 D1 에 올린 골드 = 카탈로그 화면에서 '실데이터 조회' 링크를
+# 걸 대상. 목록의 정본은 그 DAG(FAST_TABLES+DAILY_TABLES) — 여기 12종은 그 사본이다.
+# by_time(서빙 보류)·hourly 3종·demographics 는 아직 미적재(다음 확장 시 목록에 추가).
+SERVING_API_BASE = "https://ask-seoul-citydata-api.ask-seoul.workers.dev"
+SERVED_TABLES = {
+    "gold_citydata_place_latest", "gold_citydata_place_scorecard", "gold_citydata_hot_commerce",
+    "gold_citydata_ppltn_trend", "gold_citydata_ppltn_anomaly", "gold_citydata_ppltn_forecast",
+    "gold_citydata_ppltn_x_commerce_dong", "gold_citydata_charger_availability",
+    "gold_citydata_ppltn_daily", "gold_citydata_cmrcl_daily",
+    "gold_citydata_purchasing_power_daily", "gold_citydata_ppltn_x_culture_daily",
+}
+
 # ── 무스키마 행 단위 품질 규칙 (basic 도메인) ─────────────────────────
 # culture 는 silver 에 quality_status 컬럼을 박지만(공간 매칭 정밀도),
 # citydata 는 공간축이 seed 사전매핑이라 그 라벨이 무의미하다. 대신 도메인이
@@ -297,6 +310,7 @@ def extract_basic_domain(domain: str, schema: str, meta_lookup: dict) -> list[di
             "materialized": meta.get("materialized", ""),
             "serving_tier": meta.get("serving_tier"),
             "tests": meta.get("tests", []),
+            "served_url": f"{SERVING_API_BASE}/data/{name}" if name in SERVED_TABLES else None,
             "on_table_exists": None,
             "row_count": row_count,
             "date_range": date_range,
@@ -368,6 +382,7 @@ def main() -> None:
             "materialized": node.get("config", {}).get("materialized", ""),
             "serving_tier": (node.get("config", {}).get("meta") or {}).get("serving_tier"),
             "tests": rich_gates.get(uid, []),
+            "served_url": f"{SERVING_API_BASE}/data/{name}" if name in SERVED_TABLES else None,
             "on_table_exists": node.get("config", {}).get("on_table_exists")
                                or node.get("config", {}).get("extra", {}).get("on_table_exists"),
             "row_count": row_count,

@@ -426,6 +426,7 @@ const Q_META = {
   missing_core:    { label: '핵심 결측',     cls: 's' },
 };
 const Q_GOOD = new Set(['dong_precise', 'ok', 'no_service']);  // 미터의 '좋음' 비율 분자 (무운행=정상 결측)
+const SERVING_BASE = 'https://ask-seoul-citydata-api.ask-seoul.workers.dev';  // 공개 D1 서빙 API
 /* 도메인 색 — culture 만 rich 메타(dbt 아티팩트), 나머지는 Trino 실측 basic */
 const DOMAIN_META = {
   culture:  { c: '#4a3aa7', label: 'Culture'  },
@@ -733,7 +734,13 @@ function renderTab() {
           culture처럼 dbt 아티팩트를 등록하면 raw→gold 계보가 자동 채워집니다.</p></section>`;
   } else {
     const eps = [['', '상세 전부'], ['/schema', '스키마'], ['/quality', '품질 분포'], ['/sample', '샘플 5행']];
-    b.innerHTML = `<section><h3>REST API · v1</h3><div class="api-list">
+    const timeAxis = t.date_range && t.date_range.column;
+    // 실데이터 조회 예시 — 시간축 있으면 기간 필터를, 없으면 limit 만.
+    const serveEx = t.served_url
+      ? t.served_url + (timeAxis ? '?from=2026-07-13&to=2026-07-20&limit=100' : '?limit=100')
+      : null;
+    b.innerHTML = `<section><h3>카탈로그 API · v1 <span class="what">— 메타 조회(스키마·품질·샘플)</span></h3>
+      <div class="api-list">
       ${eps.map(([sfx, what]) => {
         const p = `/api/v1/catalog/tables/${t.name}${sfx}`;
         return `<div class="api-item"><span class="verb">GET</span>
@@ -743,7 +750,23 @@ function renderTab() {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 011-1h10"/></svg>
           </button></div>`;
       }).join('')}
-    </div></section>`;
+    </div></section>
+    <section><h3>실데이터 API <span class="what">— 공개 서빙 (Cloudflare D1 · 조회 전용)</span></h3>
+      ${serveEx ? `<div class="api-list">
+        <div class="api-item"><span class="verb">GET</span>
+          <a class="path" href="${serveEx}" target="_blank">${serveEx}</a>
+          <span class="what">필터·기간 조회${timeAxis ? ' (from/to=' + esc(timeAxis) + ')' : ''}</span>
+          <button class="copy-btn" onclick="event.stopPropagation();copyText('${serveEx}')" title="URL 복사">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 011-1h10"/></svg>
+          </button></div>
+        <div class="api-item"><span class="verb">GET</span>
+          <a class="path" href="${SERVING_BASE}/catalog" target="_blank">${SERVING_BASE}/catalog</a>
+          <span class="what">Agent 진입점 — 전체 서빙 목록</span></div>
+      </div>
+      <p class="desc">노트북과 무관하게 상시 가동. 컬럼명=필터, from/to=기간, limit(기본 500·최대 5000).</p>`
+      : `<p class="desc">이 데이터셋은 아직 공개 서빙에 미적재 — ${t.serving_tier === 'hold'
+          ? '대용량으로 서빙 보류(기간 조회는 일별/시간별 골드 사용)' : '다음 export 확장 예정'}.</p>`}
+    </section>`;
   }
 }
 
