@@ -198,6 +198,67 @@
      "grid": {"x": 6, "y": 5, "w": 6, "h": 5}
     }
    ]
+  },
+  {
+   "id": "seed-domains",
+   "name": "도메인 골드",
+   "charts": [
+    {
+     "id": "dm-culture-line",
+     "title": "일자별 문화 활동",
+     "type": "line",
+     "source": "gold_culture_activity_by_dong",
+     "bindings": {"axis": "event_date", "value": "activities_count"},
+     "agg": "sum",
+     "filters": [],
+     "options": {"smooth": false},
+     "grid": {"x": 0, "y": 0, "w": 6, "h": 4}
+    },
+    {
+     "id": "dm-traffic-line",
+     "title": "행정동별 교통 돌발 건수",
+     "type": "bar",
+     "source": "gold_traffic_incident_current_by_admin_dong_hourly",
+     "bindings": {"axis": "admin_dong", "value": "incident_count"},
+     "agg": "sum",
+     "filters": [],
+     "options": {"top_n": 20},
+     "grid": {"x": 6, "y": 0, "w": 6, "h": 4}
+    },
+    {
+     "id": "dm-weather-map",
+     "title": "자치구 평균 기온",
+     "type": "map_seoul",
+     "source": "gold_weather_current_wide_by_gu",
+     "bindings": {"region": "gu", "value": "temp_avg_c"},
+     "agg": "avg",
+     "filters": [],
+     "options": {},
+     "grid": {"x": 0, "y": 4, "w": 6, "h": 5}
+    },
+    {
+     "id": "dm-citydata-scatter",
+     "title": "장소별 인구와 결제 건수",
+     "type": "scatter",
+     "source": "gold_citydata_place_latest",
+     "bindings": {"axis": "area_nm", "x": "area_ppltn_max", "y": "payment_count"},
+     "agg": "avg",
+     "filters": [],
+     "options": {"top_n": 100},
+     "grid": {"x": 6, "y": 4, "w": 6, "h": 5}
+    },
+    {
+     "id": "dm-transit-table",
+     "title": "행정동 코드별 지하철 도착 정보 수",
+     "type": "table",
+     "source": "gold_transit_dong_hourly",
+     "bindings": {"axis": "admin_dong_code", "value": "subway_arrival_cnt"},
+     "agg": "sum",
+     "filters": [],
+     "options": {"top_n": 50},
+     "grid": {"x": 0, "y": 9, "w": 12, "h": 5}
+    }
+   ]
   }
  ]
 }

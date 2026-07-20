@@ -30,10 +30,16 @@ const RENDER = (() => {
     if (Math.abs(n) > 0 && Math.abs(n) < 1) return n.toLocaleString('ko-KR', { maximumFractionDigits: 3 });
     return n.toLocaleString('ko-KR', { maximumFractionDigits: 1 });
   };
+  const finiteOrNull = v => {
+    if (v == null || v === '') return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
   const PCT_RE = /(rate|ratio|share|survival|pct|비율|율)/i;
   function pctLike(fieldName, values) {
     if (!PCT_RE.test(fieldName || '')) return false;
-    const max = Math.max(...values.map(v => Math.abs(Number(v) || 0)));
+    const nums = values.map(finiteOrNull).filter(v => v != null);
+    const max = nums.length ? Math.max(...nums.map(Math.abs)) : 0;
     return max <= 1.5;
   }
   const fmtPct = v => (Number(v) * 100).toLocaleString('ko-KR', { maximumFractionDigits: 1 }) + '%';
@@ -79,9 +85,13 @@ const RENDER = (() => {
     const axisTotal = new Map(), serTotal = new Map();
     rows.forEach(r => {
       const a = String(r[0] ?? '—'), s = hasSeries ? String(r[1] ?? '—') : '_';
-      const v = Number(r[hasSeries ? 2 : 1]) || 0;
-      axisTotal.set(a, (axisTotal.get(a) || 0) + v);
-      serTotal.set(s, (serTotal.get(s) || 0) + v);
+      const v = finiteOrNull(r[hasSeries ? 2 : 1]);
+      if (!axisTotal.has(a)) axisTotal.set(a, 0);
+      if (!serTotal.has(s)) serTotal.set(s, 0);
+      if (v != null) {
+        axisTotal.set(a, axisTotal.get(a) + v);
+        serTotal.set(s, serTotal.get(s) + v);
+      }
     });
     let labels = [...axisTotal.keys()];
     const natural = smartOrder(labels);
@@ -111,7 +121,9 @@ const RENDER = (() => {
       let s = hasSeries ? String(r[1] ?? '—') : '_';
       if (!matrix.has(s)) { if (!folded) return; s = '기타'; }
       const arr = matrix.get(s), i = li.get(a);
-      arr[i] = (arr[i] ?? 0) + (Number(r[hasSeries ? 2 : 1]) || 0);
+      const value = finiteOrNull(r[hasSeries ? 2 : 1]);
+      if (value == null) return;
+      arr[i] = (arr[i] ?? 0) + value;
     });
     return { labels, seriesNames, matrix, folded, droppedSeries };
   }
@@ -128,7 +140,8 @@ const RENDER = (() => {
     const hasSeries = !!b.series;
     const isTime = kind === 'line';
     const topN = isTime ? 0 : (o.top_n || 20);
-    const foldable = ['sum', 'count', 'count_distinct'].includes(chart.agg || 'sum');
+    // count_distinct는 시리즈 간 중복 집합을 알 수 없어 합산하면 고유수가 부풀려진다.
+    const foldable = ['sum', 'count'].includes(chart.agg || 'sum');
     const pv = pivot(ctx.rows, hasSeries, topN, isTime ? 'alpha' : 'value', foldable);
     if (pv.droppedSeries) ctx.note = `시리즈 상위 ${MAX_SERIES}개만 표시 (+${pv.droppedSeries})`;
     const axisLabels = pv.labels.map(axisLabelFn(ctx, b.axis));
@@ -173,7 +186,9 @@ const RENDER = (() => {
     const { chart, b } = ctx;
     const o = chart.options || {};
     const topN = Math.min(o.top_n || 8, MAX_SERIES);
-    const sorted = [...ctx.rows].map(r => ({ name: vlabel(b.axis, r[0]), value: Number(r[1]) || 0 }))
+    const sorted = [...ctx.rows]
+      .map(r => ({ name: vlabel(b.axis, r[0]), value: finiteOrNull(r[1]) }))
+      .filter(row => row.value != null)
       .sort((a, x) => x.value - a.value);
     const head = sorted.slice(0, topN);
     const rest = sorted.slice(topN).reduce((a, r) => a + r.value, 0);
@@ -199,7 +214,9 @@ const RENDER = (() => {
 
   function rScatter(ctx) {
     const { b } = ctx;
-    const xs = ctx.rows.map(r => Number(r[1]) || 0), ys = ctx.rows.map(r => Number(r[2]) || 0);
+    const points = ctx.rows.map(r => [finiteOrNull(r[1]), finiteOrNull(r[2]), r[0]])
+      .filter(r => r[0] != null && r[1] != null);
+    const xs = points.map(r => r[0]), ys = points.map(r => r[1]);
     const xPct = pctLike(b.x, xs), yPct = pctLike(b.y, ys);
     return {
       ...base(),
@@ -211,7 +228,7 @@ const RENDER = (() => {
       series: [{
         type: 'scatter', symbolSize: 9,
         itemStyle: { color: PALETTE[0], opacity: 0.7, borderColor: '#fff', borderWidth: 1 },
-        data: ctx.rows.map(r => [Number(r[1]) || 0, Number(r[2]) || 0, r[0]]),
+        data: points,
       }],
     };
   }
@@ -221,7 +238,8 @@ const RENDER = (() => {
     const topN = (chart.options || {}).top_n || 30;
     const xt = new Map(), yt = new Map();
     ctx.rows.forEach(r => {
-      const v = Number(r[2]) || 0;
+      const v = finiteOrNull(r[2]);
+      if (v == null) return;
       xt.set(String(r[0]), (xt.get(String(r[0])) || 0) + v);
       yt.set(String(r[1]), (yt.get(String(r[1])) || 0) + v);
     });
@@ -233,7 +251,8 @@ const RENDER = (() => {
     ctx.rows.forEach(r => {
       const x = xi.get(String(r[0])), y = yi.get(String(r[1]));
       if (x == null || y == null) return;
-      const v = Number(r[2]) || 0;
+      const v = finiteOrNull(r[2]);
+      if (v == null) return;
       vmax = Math.max(vmax, v);
       data.push([x, y, v]);
     });
@@ -283,8 +302,10 @@ const RENDER = (() => {
   }
 
   function rMapPoints(ctx) {
-    const rows = ctx.rows.filter(r => r[0] != null && r[1] != null);
-    const vmax = Math.max(...rows.map(r => Number(r[2]) || 0), 1);
+    const rows = ctx.rows
+      .map(r => [finiteOrNull(r[0]), finiteOrNull(r[1]), finiteOrNull(r[2])])
+      .filter(r => r[0] != null && r[1] != null && r[2] != null);
+    const vmax = Math.max(...rows.map(r => r[2]), 1);
     return {
       ...base(),
       geo: {
@@ -301,9 +322,9 @@ const RENDER = (() => {
       },
       series: [{
         type: 'scatter', coordinateSystem: 'geo',
-        symbolSize: v => Math.max(3, Math.min(14, 3 + 11 * Math.sqrt((Number(v[2]) || 0) / vmax))),
+        symbolSize: v => Math.max(3, Math.min(14, 3 + 11 * Math.sqrt(v[2] / vmax))),
         itemStyle: { opacity: 0.65 },
-        data: rows.map(r => [Number(r[1]), Number(r[0]), Number(r[2]) || 0]),
+        data: rows.map(r => [r[1], r[0], r[2]]),
       }],
     };
   }
@@ -312,25 +333,27 @@ const RENDER = (() => {
   function buildRaceModel(ctx) {
     const { chart, b } = ctx;
     const o = chart.options || {};
-    const cumulative = o.cumulative !== false;
+    // 서버 계약의 기본값은 false. 오래된 저장물처럼 옵션 키가 없어도 누적을
+    // 암묵 적용하지 않아 stock/rate 값을 중복 합산하지 않는다.
+    const cumulative = o.cumulative === true;
     const topN = o.top_n || 12;
     const interval = Math.max(200, Math.min(5000, o.interval_ms || 800));
     const tLabel = axisLabelFn(ctx, b.time);
     const byTime = new Map();
-    const axes = new Set();
     ctx.rows.forEach(r => {
       const t = String(r[0] ?? ''), a = String(r[1] ?? '—');
+      const value = finiteOrNull(r[2]);
+      if (!t || value == null) return;
       if (!byTime.has(t)) byTime.set(t, new Map());
       const cur = byTime.get(t);
-      cur.set(a, (cur.get(a) || 0) + (Number(r[2]) || 0));
-      axes.add(a);
+      cur.set(a, (cur.get(a) || 0) + value);
     });
     const times = smartOrder([...byTime.keys()]) || [...byTime.keys()].sort();
-    const running = new Map([...axes].map(a => [a, 0]));
+    const running = new Map();
     const frames = times.map(t => {
       const cur = byTime.get(t);
-      if (cumulative) cur.forEach((v, a) => running.set(a, running.get(a) + v));
-      const src = cumulative ? running : new Map([...axes].map(a => [a, cur.get(a) || 0]));
+      if (cumulative) cur.forEach((v, a) => running.set(a, (running.get(a) || 0) + v));
+      const src = cumulative ? running : cur;
       return { label: tLabel(t), rows: [...src.entries()].map(([a, v]) => [vlabel(b.axis, a), v]) };
     });
     return { frames, topN, interval, cumulative };
@@ -341,14 +364,14 @@ const RENDER = (() => {
       { type: 'text', right: 18, bottom: 14, silent: true,
         style: { text, font: '750 26px "Pretendard Variable", Pretendard, sans-serif', fill: '#dfe4ec' } },
       { type: 'text', right: 18, bottom: 48, silent: true,
-        style: { text: playing ? '' : '⏸ 일시정지 — 클릭으로 재생', font: '600 11px Pretendard, sans-serif', fill: '#8a93a5' } },
+        style: { text: playing ? '' : '⏸ 일시정지', font: '600 11px Pretendard, sans-serif', fill: '#8a93a5' } },
     ],
   });
 
   function rRace(ctx) {
     const model = buildRaceModel(ctx);
     ctx.__race = model;
-    ctx.note = `${model.frames.length}프레임 · ${model.cumulative ? '누적' : '구간'} · 클릭=일시정지`;
+    ctx.note = `${model.frames.length}프레임 · ${model.cumulative ? '누적' : '구간'}`;
     return {
       ...base(),
       tooltip: { ...tooltipBase, trigger: 'item',
@@ -375,32 +398,158 @@ const RENDER = (() => {
     };
   }
 
-  /* 프레임 재생 루프 — dispose 자가 감지로 정리, 클릭으로 일시정지/재생, 끝나면 잠시 쉬고 반복 */
-  function startRace(inst, model) {
-    stopRace(inst);
-    let i = 1, playing = true, holdUntil = 0;
-    inst.getZr().on('click', () => {
-      playing = !playing;
-      const cur = model.frames[Math.max(0, i - 1)];
-      inst.setOption({ graphic: raceGraphic(cur ? cur.label : '', playing) });
+  /* 명시적 재생 컨트롤이 조작하는 인스턴스별 controller. 재귀 setTimeout이라
+     속도 변경·pause 시 즉시 스케줄을 교체하고 dispose 뒤 타이머를 남기지 않는다. */
+  function createRaceController(inst, model, initial = {}) {
+    const speeds = [0.5, 1, 1.5, 2];
+    let index = Math.max(0, Math.min(model.frames.length - 1, Number(initial.index) || 0));
+    let speed = speeds.includes(Number(initial.speed)) ? Number(initial.speed) : 1;
+    const reduced = typeof matchMedia === 'function'
+      && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let playing = model.frames.length > 1
+      && (typeof initial.playing === 'boolean' ? initial.playing : !reduced);
+    let timer = null, disposed = false;
+    const listeners = new Set();
+    const snapshot = () => ({
+      index, speed, playing, frameCount: model.frames.length,
+      label: model.frames[index] ? model.frames[index].label : '—',
     });
-    inst.__raceTimer = setInterval(() => {
-      if (!inst.getZr || (inst.isDisposed && inst.isDisposed())) { clearInterval(inst.__raceTimer); return; }
-      if (!playing || Date.now() < holdUntil) return;
-      const f = model.frames[i];
-      if (!f) { i = 0; holdUntil = Date.now() + 1500; return; }   // 한 바퀴 끝 — 쉬었다 처음부터
-      inst.setOption({ dataset: { source: f.rows }, graphic: raceGraphic(f.label, playing) });
-      i++;
-    }, model.interval);
+    const notify = () => listeners.forEach(listener => listener(snapshot()));
+    const clear = () => { if (timer) { clearTimeout(timer); timer = null; } };
+    const delay = () => Math.max(100, Math.round(model.interval / speed));
+    const renderFrame = () => {
+      if (disposed || !model.frames.length || (inst.isDisposed && inst.isDisposed())) return;
+      const frame = model.frames[index];
+      inst.setOption({
+        dataset: { source: frame.rows },
+        graphic: raceGraphic(frame.label, playing),
+        animationDurationUpdate: Math.min(400, Math.max(80, Math.round(delay() * 0.7))),
+      });
+    };
+    const schedule = (extra = 0) => {
+      clear();
+      if (!playing || disposed || model.frames.length <= 1) return;
+      timer = setTimeout(() => {
+        if (disposed || (inst.isDisposed && inst.isDisposed())) return;
+        index = (index + 1) % model.frames.length;
+        renderFrame(); notify();
+        schedule(index === 0 ? Math.min(1200, delay()) : 0);
+      }, delay() + extra);
+    };
+    const pause = () => {
+      playing = false; clear(); renderFrame(); notify();
+    };
+    const play = () => {
+      if (disposed || model.frames.length <= 1) return;
+      playing = true; renderFrame(); notify(); schedule();
+    };
+    const controller = {
+      play, pause,
+      toggle: () => { if (playing) pause(); else play(); },
+      step: delta => {
+        if (!model.frames.length) return;
+        playing = false; clear();
+        index = (index + delta + model.frames.length) % model.frames.length;
+        renderFrame(); notify();
+      },
+      setSpeed: value => {
+        const next = Number(value);
+        if (!speeds.includes(next)) return;
+        speed = next; renderFrame(); notify(); schedule();
+      },
+      snapshot,
+      subscribe: listener => {
+        listeners.add(listener); listener(snapshot());
+        return () => listeners.delete(listener);
+      },
+      dispose: () => {
+        disposed = true; playing = false; clear(); listeners.clear();
+      },
+      host: null,
+    };
+    renderFrame();
+    if (playing) schedule();
+    return controller;
+  }
+
+  function removeRaceControls(host) {
+    if (!host || !host.querySelector) return;
+    const controls = host.querySelector('.race-controls');
+    if (!controls) return;
+    if (controls.__unsubscribe) controls.__unsubscribe();
+    controls.remove();
+  }
+
+  function installRaceControls(inst, controller, host) {
+    removeRaceControls(host);
+    const controls = document.createElement('div');
+    controls.className = 'race-controls';
+    controls.setAttribute('role', 'group');
+    controls.setAttribute('aria-label', '타임랩스 재생 제어');
+    controls.innerHTML = `
+      <button type="button" class="race-prev" aria-label="이전 프레임" title="이전 프레임">‹</button>
+      <button type="button" class="race-toggle" aria-pressed="false"></button>
+      <button type="button" class="race-next" aria-label="다음 프레임" title="다음 프레임">›</button>
+      <label>속도 <select class="race-speed" aria-label="재생 속도">
+        <option value="0.5">0.5×</option><option value="1">1×</option>
+        <option value="1.5">1.5×</option><option value="2">2×</option>
+      </select></label>
+      <span class="race-frame" aria-live="off"></span>`;
+    const foot = host.querySelector('.tile-foot');
+    (foot || host).appendChild(controls);
+    controller.host = host;
+    const toggle = controls.querySelector('.race-toggle');
+    const speed = controls.querySelector('.race-speed');
+    controls.querySelector('.race-prev').onclick = event => {
+      event.stopPropagation(); controller.step(-1);
+    };
+    controls.querySelector('.race-next').onclick = event => {
+      event.stopPropagation(); controller.step(1);
+    };
+    toggle.onclick = event => { event.stopPropagation(); controller.toggle(); };
+    speed.onchange = event => { event.stopPropagation(); controller.setSpeed(event.target.value); };
+    controls.__unsubscribe = controller.subscribe(state => {
+      toggle.textContent = state.playing ? 'Ⅱ 정지' : '▶ 재생';
+      toggle.setAttribute('aria-pressed', String(state.playing));
+      toggle.setAttribute('aria-label', state.playing ? '재생 정지' : '재생 시작');
+      speed.value = String(state.speed);
+      const frame = controls.querySelector('.race-frame');
+      frame.setAttribute('aria-live', state.playing ? 'off' : 'polite');
+      frame.textContent =
+        `${state.frameCount ? state.index + 1 : 0}/${state.frameCount} · ${state.label}`;
+      controls.querySelectorAll('button').forEach(button => {
+        if (!button.classList.contains('race-toggle')) button.disabled = state.frameCount <= 1;
+      });
+      toggle.disabled = state.frameCount <= 1;
+    });
+  }
+
+  function startRace(inst, model, ctx) {
+    stopRace(inst);
+    const controller = createRaceController(inst, model, ctx.raceState || {});
+    inst.__raceController = controller;
+    installRaceControls(inst, controller, ctx.el);
   }
   function stopRace(inst) {
-    if (inst.__raceTimer) { clearInterval(inst.__raceTimer); inst.__raceTimer = null; }
-    if (inst.getZr && !((inst.isDisposed && inst.isDisposed()))) inst.getZr().off('click');
+    const controller = inst && inst.__raceController;
+    if (!controller) return;
+    const host = controller.host;
+    controller.dispose();
+    inst.__raceController = null;
+    removeRaceControls(host);
+  }
+  function raceSnapshot(inst) {
+    return inst && inst.__raceController ? inst.__raceController.snapshot() : null;
+  }
+  function dispose(inst) {
+    if (!inst) return;
+    stopRace(inst);
+    if (!(inst.isDisposed && inst.isDisposed())) inst.dispose();
   }
 
   function rStat(el, ctx) {
-    const v = ctx.rows.length ? Number(ctx.rows[0][0]) : null;
-    const usePct = pctLike(ctx.b.value, [v || 0]);
+    const v = ctx.rows.length ? finiteOrNull(ctx.rows[0][0]) : null;
+    const usePct = pctLike(ctx.b.value, [v]);
     el.innerHTML = `<div class="stat-wrap">
       <div class="v num">${v == null ? '—' : (usePct ? fmtPct(v) : Number(v).toLocaleString('ko-KR', { maximumFractionDigits: 1 }))}</div>
       <div class="s">${escapeHtml(ctx.valueLabel || '')} · ${escapeHtml(ctx.src.label)}</div>
@@ -429,12 +578,14 @@ const RENDER = (() => {
     const t = ctx.chart.type;
     if (t === 'stat' || t === 'table') {
       const old = echarts.getInstanceByDom(plotEl);
-      if (old) old.dispose();
+      if (old) dispose(old);
+      removeRaceControls(ctx.el);
       if (t === 'stat') rStat(plotEl, ctx); else rTable(plotEl, ctx);
       return null;
     }
     if (!echarts.getInstanceByDom(plotEl)) plotEl.innerHTML = '';
     if (ctx.geo) await GEO.ensure(ctx.geo);
+    if (ctx.isCurrent && !ctx.isCurrent()) return null;
 
     let option;
     if (t === 'bar') option = rBarLine(ctx, 'bar');
@@ -451,9 +602,10 @@ const RENDER = (() => {
     if (!inst) inst = echarts.init(plotEl, null, { renderer: 'canvas' });
     stopRace(inst);   // 같은 인스턴스가 경주→다른 타입으로 바뀌어도 재생 루프가 남지 않게
     inst.setOption(option, true);
-    if (t === 'race' && ctx.__race) startRace(inst, ctx.__race);
+    if (t === 'race' && ctx.__race) startRace(inst, ctx.__race, ctx);
+    else removeRaceControls(ctx.el);
     return inst;
   }
 
-  return { render, setMeta, fmt, PALETTE };
+  return { render, setMeta, fmt, PALETTE, dispose, raceSnapshot, buildRaceModel };
 })();

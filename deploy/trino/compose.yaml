@@ -1,0 +1,49 @@
+services:
+  trino:
+    image: trinodb/trino:482
+    restart: unless-stopped
+    environment:
+      CATALOG_MANAGEMENT: static
+      R2_DEV_DATA_CATALOG_URI: ${R2_DEV_DATA_CATALOG_URI:?R2_DEV_DATA_CATALOG_URI is required}
+      R2_DEV_DATA_CATALOG_WAREHOUSE: ${R2_DEV_DATA_CATALOG_WAREHOUSE:?R2_DEV_DATA_CATALOG_WAREHOUSE is required}
+      R2_DEV_DATA_CATALOG_TOKEN: ${R2_DEV_DATA_CATALOG_TOKEN:?R2_DEV_DATA_CATALOG_TOKEN is required}
+      R2_DEV_ENDPOINT: ${R2_DEV_ENDPOINT:?R2_DEV_ENDPOINT is required}
+      R2_DEV_ACCESS_KEY_ID: ${R2_DEV_ACCESS_KEY_ID:?R2_DEV_ACCESS_KEY_ID is required}
+      R2_DEV_SECRET_ACCESS_KEY: ${R2_DEV_SECRET_ACCESS_KEY:?R2_DEV_SECRET_ACCESS_KEY is required}
+      TRINO_TASK_CONCURRENCY: ${TRINO_TASK_CONCURRENCY:-2}
+      TRINO_QUERY_MAX_MEMORY_PER_NODE: ${TRINO_QUERY_MAX_MEMORY_PER_NODE:-2GB}
+      TRINO_MEMORY_HEAP_HEADROOM_PER_NODE: ${TRINO_MEMORY_HEAP_HEADROOM_PER_NODE:-2GB}
+      TRINO_QUERY_MAX_MEMORY: ${TRINO_QUERY_MAX_MEMORY:-2GB}
+      TRINO_QUERY_MAX_TOTAL_MEMORY: ${TRINO_QUERY_MAX_TOTAL_MEMORY:-4GB}
+    volumes:
+      - ./catalog:/etc/trino/catalog:ro
+      - ./config.properties:/etc/trino/config.properties:ro
+      - ./jvm.config:/etc/trino/jvm.config:ro
+      - ./resource-groups.properties:/etc/trino/resource-groups.properties:ro
+      - ./resource-groups.json:/etc/trino/resource-groups.json:ro
+    ports:
+      - 127.0.0.1:30586:8080
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD-SHELL", "trino --execute 'SELECT 1' >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    mem_limit: ${TRINO_MEMORY_LIMIT:-9g}
+    cpus: ${TRINO_CPUS:-4.0}
+    pids_limit: ${TRINO_PIDS_LIMIT:-1024}
+    labels:
+      io.ask-seoul.config-revision: ${TRINO_CONFIG_REVISION:?TRINO_CONFIG_REVISION is required}
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+networks:
+  data:
+    name: elt_net

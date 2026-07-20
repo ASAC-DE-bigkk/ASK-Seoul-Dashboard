@@ -7,6 +7,7 @@ const S = {
   meta: null, sources: [], srcDetails: {},
   pages: [], pageId: null, page: null,
   edit: false, dirty: false,
+  booting: true, switching: false, saving: false, pageAction: false,
   grid: null, tiles: {},          // chartId → {el, inst, chart}
   modes: {},                      // chartId → live|cache|stale
 };
@@ -32,7 +33,9 @@ function toast(msg) {
 }
 
 function modal({ title, desc = '', input = null, okLabel = '확인', danger = false }) {
+  if (!$('modal').hidden) return Promise.resolve(null);
   return new Promise(resolve => {
+    const returnFocus = document.activeElement;
     $('modal-title').textContent = title;
     $('modal-desc').textContent = desc;
     const wrap = $('modal-input-wrap'), inp = $('modal-input');
@@ -42,7 +45,13 @@ function modal({ title, desc = '', input = null, okLabel = '확인', danger = fa
     ok.textContent = okLabel;
     ok.className = 'btn primary' + (danger ? ' danger' : '');
     $('modal').hidden = false;
-    const done = v => { $('modal').hidden = true; ok.onclick = cancel.onclick = inp.onkeydown = null; resolve(v); };
+    if (input == null) setTimeout(() => cancel.focus(), 0);
+    const done = v => {
+      $('modal').hidden = true;
+      ok.onclick = cancel.onclick = inp.onkeydown = null;
+      if (returnFocus && returnFocus.isConnected) returnFocus.focus();
+      resolve(v);
+    };
     ok.onclick = () => done(input != null ? inp.value.trim() : true);
     cancel.onclick = () => done(null);
     inp.onkeydown = e => { if (e.key === 'Enter') ok.onclick(); };
@@ -65,30 +74,85 @@ function showCtx(x, y, items) {
 function hideCtx() { $('ctx').hidden = true; }
 document.addEventListener('click', e => { if (!e.target.closest('#ctx')) hideCtx(); });
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { hideCtx(); if (!$('modal').hidden) $('modal-cancel').click(); else if (CFG.open) closeCfg(); }
+  if (e.key === 'Escape') { hideCtx(); if (!$('modal').hidden) $('modal-cancel').click(); else if (CFG.open) requestCloseCfg(); }
+  if (e.key === 'Tab' && !$('modal').hidden) {
+    const focusable = [...$('modal').querySelectorAll('button:not(:disabled), input:not(:disabled)')]
+      .filter(el => el.offsetParent !== null);
+    if (!focusable.length) return;
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    return;
+  }
+  if (e.key === 'Tab' && CFG.open && $('modal').hidden) {
+    const focusable = [...$('cfg-drawer').querySelectorAll(
+      'button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])'
+    )].filter(el => el.offsetParent !== null);
+    if (!focusable.length) return;
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  }
 });
 
 /* ── 온톨로지 바인딩 해석 ─────────────────────────────────── */
-function typeDef(t) { return S.meta.chart_types[t]; }
-function fieldsByRole(src, accepts) { return src.fields.filter(f => accepts.includes(f.role)); }
+function typeDef(t) {
+  const contracts = S.meta.chart_contracts || S.meta.chart_types;
+  return contracts[t];
+}
+function fieldsByRole(src, accepts) {
+  return src.fields.filter(f => f.chartable !== false && accepts.includes(f.role));
+}
+function slotRequired(slot, chart) {
+  return !!slot.required && !((chart.agg || 'sum') === 'count' && slot.count_optional);
+}
 
 function resolveBindings(chart, src) {
   const def = typeDef(chart.type);
   if (!def) throw new Error(`알 수 없는 도표 타입: ${chart.type}`);
-  const b = {}, rebound = [];
-  for (const slot of def.slots) {
-    const want = (chart.bindings || {})[slot.name];
-    const f = want && src.fields.find(f => f.name === want);
-    if (f && slot.accepts.includes(f.role)) { b[slot.name] = f.name; continue; }
-    if (!want && !slot.required) continue;      // 선택 슬롯은 명시 바인딩 없으면 비워둔다
-    const cands = fieldsByRole(src, slot.accepts);
-    if (cands.length) {
-      b[slot.name] = cands[0].name;
-      if (want) rebound.push(`${want}→${cands[0].name}`);
-    } else if (slot.required) {
-      throw new Error(`'${src.label}' 에 ${slot.label}(${slot.accepts.join('/')}) 역할 필드가 없습니다`);
+  const requested = chart.bindings || {};
+  const candidates = slot => {
+    const matches = fieldsByRole(src, slot.accepts);
+    const want = requested[slot.name];
+    return want
+      ? [...matches.filter(field => field.name === want), ...matches.filter(field => field.name !== want)]
+      : matches;
+  };
+  // heatmap처럼 슬롯의 허용 role이 겹칠 때 앞 슬롯의 탐욕 선택이 뒤 슬롯을 막지 않도록
+  // 후보가 적은 필수 슬롯부터 백트래킹한다. 서버 compatible_bindings와 같은 불변식이다.
+  const required = def.slots
+    .filter(slot => slotRequired(slot, chart))
+    .sort((a, b) => candidates(a).length - candidates(b).length);
+  const assign = (index, used, result) => {
+    if (index === required.length) return result;
+    const slot = required[index];
+    for (const field of candidates(slot)) {
+      if (used.has(field.name)) continue;
+      const found = assign(index + 1, new Set([...used, field.name]),
+        { ...result, [slot.name]: field.name });
+      if (found) return found;
     }
+    return null;
+  };
+  const b = assign(0, new Set(), {});
+  if (!b) {
+    const slot = required.find(item => !candidates(item).length) || required[0];
+    throw new Error(`'${src.label}' 에 ${slot.label}(${slot.accepts.join('/')}) 역할 필드 조합이 없습니다`);
   }
+  const used = new Set(Object.values(b));
+  // 선택 슬롯은 사용자가 명시했을 때만 살린다. count(*)의 값 슬롯은 물리 필드를
+  // 요구하지 않으므로 오래된 저장물에 값이 남아 있어도 정규화해 제거한다.
+  def.slots.filter(slot => !slotRequired(slot, chart)).forEach(slot => {
+    const want = requested[slot.name];
+    if (!want || ((chart.agg || 'sum') === 'count' && slot.count_optional)) return;
+    const field = candidates(slot).find(candidate => !used.has(candidate.name));
+    if (field) { b[slot.name] = field.name; used.add(field.name); }
+  });
+  const rebound = [];
+  def.slots.forEach(slot => {
+    const want = requested[slot.name];
+    if (want && b[slot.name] !== want) rebound.push(`${want}→${b[slot.name] || '없음'}`);
+  });
   return { b, rebound, def };
 }
 
@@ -97,10 +161,108 @@ function fieldLabel(src, name) {
   return f ? f.label : name;
 }
 const AGG_LABEL = { sum: '합계', avg: '평균', count: '건수', count_distinct: '고유수', min: '최소', max: '최대' };
+const FILTER_OP_LABEL = {
+  eq: '같음', neq: '같지 않음', gte: '이상', lte: '이하',
+  between: '범위', like: '문자 패턴', in: '목록 중 하나', not_in: '목록 제외',
+};
+
+function allowedAggs(chart, src, bindings = chart.bindings || {}) {
+  const def = typeDef(chart.type);
+  if (!def || !src) return [];
+  let allowed = Object.keys(AGG_LABEL)
+    .filter(agg => !def.aggs || def.aggs.includes(agg));
+  const options = { ...(def.options || {}), ...(chart.options || {}) };
+  (def.agg_constraints || []).forEach(rule => {
+    const active = Object.entries(rule.when || {}).every(([key, value]) => options[key] === value);
+    if (active) allowed = allowed.filter(agg => (rule.allowed || []).includes(agg));
+  });
+  const measureFields = Object.values(bindings)
+    .map(name => src.fields.find(field => field.name === name))
+    .filter(field => field && field.role === 'measure');
+  measureFields.forEach(field => {
+    if (field.allowed_aggs) allowed = allowed.filter(agg => field.allowed_aggs.includes(agg));
+  });
+  if (chart.type === 'race' && options.cumulative) {
+    const valueSlot = def.slots.find(slot => slot.name === 'value');
+    const valueField = valueSlot && src.fields.find(field => field.name === bindings.value);
+    if ((chart.agg || 'sum') === 'count' || !valueField?.cumulative_safe) allowed = [];
+  }
+  const missingCountValue = def.slots.some(slot =>
+    slot.count_optional && slot.required
+    && !bindings[slot.name]
+    && fieldsByRole(src, slot.accepts).length === 0);
+  if (missingCountValue) allowed = allowed.filter(agg => agg === 'count');
+  return allowed;
+}
+
+function supportsAfterAvailability(src) {
+  return (src.supports || []).filter(type => {
+    try {
+      resolveBindings({ type, agg: 'sum', bindings: {} }, src);
+      return true;
+    } catch {
+      try {
+        resolveBindings({ type, agg: 'count', bindings: {} }, src);
+        return true;
+      } catch { return false; }
+    }
+  });
+}
+
+const AVAILABILITY_RECHECK_MS = 10 * 60 * 1000;
+function availabilityFresh(src) {
+  return !!src.__availabilityChecked
+    && Date.now() - Number(src.__availabilityCheckedAt || 0) < AVAILABILITY_RECHECK_MS;
+}
+
+async function sourceForConfig(name) {
+  const src = S.srcDetails[name] || await API.source(name);
+  S.srcDetails[name] = src;
+  if (!src.__catalogSupports) src.__catalogSupports = [...(src.supports || [])];
+  src.fields.forEach(field => {
+    if (field.__catalogChartable == null) field.__catalogChartable = field.chartable !== false;
+  });
+  if (availabilityFresh(src)) return src;
+  try {
+    const availability = await API.availability(name);
+    src.__availabilityMode = availability.mode;
+    if (availability.mode !== 'stale') {
+      src.supports = [...src.__catalogSupports];
+      src.fields.forEach(field => {
+        field.chartable = field.__catalogChartable;
+        delete field.unavailable;
+        field.non_null_count = Number(availability.fields[field.name] || 0);
+        if (field.non_null_count === 0) {
+          field.chartable = false;
+          field.unavailable = true;
+        }
+      });
+      src.supports = supportsAfterAvailability(src);
+      delete src.__availabilityWarning;
+      const summary = S.sources.find(source => source.name === name);
+      if (summary) summary.supports = [...src.supports];
+    } else {
+      src.__availabilityWarning = '필드 가용성이 stale 캐시라 선택 후보를 제거하지 않았습니다';
+    }
+  } catch (err) {
+    // Trino 장애 중에도 기존 stale 타일은 열어야 한다. 새 설정에는 검증 불가를 명시하고
+    // 적용 전 미리보기의 전부-null 방어를 마지막 안전망으로 둔다.
+    src.__availabilityWarning = `실데이터 가용성 확인 실패: ${err.message}`;
+    // 일시 장애를 영구 캐시하지 않는다. 다음 설정 진입에서는 다시 확인한다.
+    src.__availabilityChecked = false;
+    return src;
+  }
+  src.__availabilityChecked = true;
+  src.__availabilityCheckedAt = Date.now();
+  return src;
+}
 
 function buildSpec(chart, src, b) {
   const agg = chart.agg || 'sum';
-  const o = chart.options || {};
+  if (!allowedAggs(chart, src, b).includes(agg)) {
+    throw new Error(`선택한 필드·옵션에는 ${AGG_LABEL[agg] || agg} 집계를 사용할 수 없습니다`);
+  }
+  const o = optionsForType(chart.type, chart.options || {});
   const alias = agg === 'count' ? 'count' : `${agg}_${b.value || b.x || 'v'}`;
   const m = f => ({ field: agg === 'count' ? null : f, agg, alias: agg === 'count' ? 'count' : `${agg}_${f}` });
   const spec = { source: chart.source, dims: [], measures: [], filters: chart.filters || [], order_by: [], limit: 1000 };
@@ -119,9 +281,7 @@ function buildSpec(chart, src, b) {
     spec.order_by = [{ field: m(b.value).alias, dir: 'desc' }]; spec.limit = 500;
   }
   else if (t === 'scatter') {
-    // count 는 X·Y 가 같은 값으로 붕괴(대각선)하므로 산점도에서는 avg 로 대체
-    const sAgg = agg === 'count' || agg === 'count_distinct' ? 'avg' : agg;
-    const sm = f => ({ field: f, agg: sAgg, alias: `${sAgg}_${f}` });
+    const sm = f => ({ field: f, agg, alias: `${agg}_${f}` });
     spec.dims = [b.axis]; spec.measures = [sm(b.x), sm(b.y)];
     spec.order_by = [{ field: sm(b.x).alias, dir: 'desc' }];
     spec.limit = o.top_n || 300;
@@ -140,6 +300,43 @@ function buildSpec(chart, src, b) {
     spec.order_by = [{ field: m(b.value).alias, dir: 'desc' }]; spec.limit = o.top_n || 50;
   }
   return { spec, alias };
+}
+
+function hasRenderableMeasures(chart, spec, response) {
+  if (!response.rows.length) return false;
+  const indexes = spec.measures
+    .map(measure => measure.alias
+      || (measure.field ? `${measure.agg}_${measure.field}` : 'count'))
+    .map(alias => response.columns.indexOf(alias))
+    .filter(index => index >= 0);
+  if (!indexes.length) return false;
+  const numeric = value => value != null && value !== '' && Number.isFinite(Number(value));
+  if ((chart.agg || 'sum') === 'count') {
+    if (!response.rows.some(row => indexes.some(index => numeric(row[index]) && Number(row[index]) > 0))) {
+      return false;
+    }
+  } else if (chart.type === 'scatter') {
+    if (!response.rows.some(row => indexes.every(index => numeric(row[index])))) return false;
+  } else if (chart.type === 'pie') {
+    const values = response.rows.flatMap(row => indexes.map(index => row[index]))
+      .filter(numeric).map(Number);
+    if (!(values.length > 0 && values.some(value => value > 0) && values.every(value => value >= 0))) {
+      return false;
+    }
+  } else if (!response.rows.some(row => indexes.some(index => numeric(row[index])))) {
+    return false;
+  }
+  if (chart.type === 'line' || chart.type === 'race') {
+    const progressionIndex = response.columns.indexOf(spec.dims[0]);
+    if (progressionIndex < 0) return false;
+    const points = new Set(response.rows
+      .filter(row => indexes.some(index => numeric(row[index])))
+      .map(row => row[progressionIndex])
+      .filter(value => value != null && value !== '')
+      .map(String));
+    if (points.size < 2) return false;
+  }
+  return true;
 }
 
 /* ── 타일 ─────────────────────────────────────────────────── */
@@ -194,17 +391,27 @@ function tileState(el, html) {
 
 async function loadTile(chart, force, quiet) {
   const rec = S.tiles[chart.id]; if (!rec) return;
+  const gen = (rec.loadGen || 0) + 1;
+  rec.loadGen = gen;
+  const current = () => S.tiles[chart.id] === rec && rec.loadGen === gen;
   const el = rec.el;
   const plot = el.querySelector('.plot');
+  const refreshButton = el.querySelector('.rf');
+  refreshButton.disabled = true;
   // quiet(자동 갱신) 이고 이미 그려져 있으면 스피너로 화면을 가리지 않는다 — 무깜빡임 갱신
   if (!quiet || !rec.inst) tileState(el, '<div class="spin"></div>');
   try {
     const src = S.srcDetails[chart.source] || (S.srcDetails[chart.source] = await API.source(chart.source));
+    if (!current()) return;
+    chart.options = optionsForType(chart.type, chart.options || {});
     const { b, rebound, def } = resolveBindings(chart, src);
+    // 사라진 필드의 role 폴백 결과를 in-memory 저장물에도 반영한다. 그렇지 않으면
+    // 화면은 정상인데 다음 레이아웃 저장에서 오래된 필드명 때문에 전체 저장이 실패한다.
+    if (JSON.stringify(chart.bindings || {}) !== JSON.stringify(b)) chart.bindings = { ...b };
     const { spec, alias } = buildSpec(chart, src, b);
     if (force) spec.force = true;               // 신선 캐시 무시 ('다시 조회')
     const res = await API.query(spec);
-    if (S.tiles[chart.id] !== rec) return;      // 페이지 전환 등으로 타일이 사라진 늦은 응답 폐기
+    if (!current()) return;                    // 재조회/페이지 전환의 늦은 응답 폐기
     tileState(el, null);
 
     const ctx = {
@@ -215,18 +422,31 @@ async function loadTile(chart, force, quiet) {
       valueLabel: chart.agg === 'count' ? '건수' : `${fieldLabel(src, b.value || b.x)} ${AGG_LABEL[chart.agg || 'sum'] || ''}`.trim(),
       xLabel: b.x ? fieldLabel(src, b.x) : '', yLabel: b.y ? fieldLabel(src, b.y) : '',
       colLabels: {},
+      raceState: RENDER.raceSnapshot(rec.inst),
+      isCurrent: current,
     };
     ctx.colLabels = Object.fromEntries(res.columns.map(c => [c, c === alias ? ctx.valueLabel : fieldLabel(src, c)]));
-    if (!res.rows.length) {
+    if (!hasRenderableMeasures(chart, spec, res)) {
       const old = echarts.getInstanceByDom(plot);
-      if (old) old.dispose();                   // 직전 렌더 잔상이 '데이터 없음' 뒤로 비치지 않게
+      if (old) RENDER.dispose(old);             // 직전 렌더 잔상이 '데이터 없음' 뒤로 비치지 않게
       plot.innerHTML = '';
       rec.inst = null;
-      tileState(el, '<span>데이터가 없습니다 — 필터를 확인하세요</span>');
+      tileState(el, `<span>${res.rows.length
+        ? '측정값이 모두 비어 있거나 이 도표에 사용할 수 없습니다'
+        : '데이터가 없습니다 — 필터를 확인하세요'}</span>`);
     } else {
-      rec.inst = await RENDER.render(plot, ctx);
-      if (S.tiles[chart.id] !== rec) { if (rec.inst) rec.inst.dispose(); return; }
-      if (rec.inst) { plotRO.observe(plot); requestAnimationFrame(() => rec.inst && rec.inst.resize()); }
+      const inst = await RENDER.render(plot, ctx);
+      if (!current()) {
+        if (inst) RENDER.dispose(inst);
+        return;
+      }
+      rec.inst = inst;
+      if (rec.inst) {
+        plotRO.observe(plot);
+        requestAnimationFrame(() => rec.inst && rec.inst.resize());
+      } else {
+        plotRO.unobserve(plot);
+      }
     }
 
     S.modes[chart.id] = res.mode;
@@ -245,11 +465,14 @@ async function loadTile(chart, force, quiet) {
     el.querySelector('.ms').textContent = res.mode === 'live' ? `${res.elapsed_ms}ms` : '';
     updateSync();
   } catch (err) {
+    if (!current()) return;
     const st = tileState(el, `<div class="tile-state err"><b>렌더 실패</b>
       <span class="detail" title="${esc(err.message)}">${esc(err.message)}</span>
       <button class="btn ghost retry">다시 시도</button></div>`);
     st.querySelector('.retry').onclick = () => loadTile(chart, true);
     st.className = 'tile-state err';
+  } finally {
+    if (current()) refreshButton.disabled = false;
   }
 }
 
@@ -257,14 +480,16 @@ function addTile(chart, load = true) {
   const el = tileDom(chart);
   S.grid.el.appendChild(el);
   S.grid.makeWidget(el);
-  S.tiles[chart.id] = { el, inst: null, chart };
+  S.tiles[chart.id] = { el, inst: null, chart, loadGen: 0 };
   if (load) loadTile(chart);
   $('empty-board').hidden = S.page.charts.length > 0;
 }
 
 function removeTile(chartId) {
   const rec = S.tiles[chartId]; if (!rec) return;
-  if (rec.inst) { rec.inst.dispose(); }
+  rec.loadGen++;
+  plotRO.unobserve(rec.el.querySelector('.plot'));
+  if (rec.inst) RENDER.dispose(rec.inst);
   S.grid.removeWidget(rec.el);
   delete S.tiles[chartId];
   delete S.modes[chartId];
@@ -283,7 +508,11 @@ function collectGrid() {
 
 /* ── 페이지 렌더/전환 ─────────────────────────────────────── */
 async function renderPage() {
-  Object.values(S.tiles).forEach(r => r.inst && r.inst.dispose());
+  Object.values(S.tiles).forEach(r => {
+    r.loadGen++;
+    plotRO.unobserve(r.el.querySelector('.plot'));
+    if (r.inst) RENDER.dispose(r.inst);
+  });
   S.tiles = {};
   S.modes = {};
   S.grid.removeAll();
@@ -299,21 +528,46 @@ async function renderPage() {
 
 let switchGen = 0;   // 연타 경합 가드 — 늦게 도착한 이전 페이지 응답이 상태를 덮지 않게
 
+function setSwitchBusy(busy) {
+  S.switching = busy;
+  const locked = busy || S.booting || S.saving || S.pageAction;
+  $('canvas').setAttribute('aria-busy', String(busy));
+  ['btn-edit', 'btn-add-chart', 'btn-cancel-edit', 'add-page', 'mobile-page-menu']
+    .forEach(id => { $(id).disabled = locked; });
+  document.querySelectorAll('.page-item').forEach(button => { button.disabled = locked; });
+  $('mobile-page').disabled = locked;
+  $('mobile-add-page').disabled = locked;
+}
+
 async function switchPage(id, { force } = {}) {
+  if (S.saving) {
+    toast('레이아웃 저장이 끝난 뒤 이동하세요');
+    renderSidebar();
+    return false;
+  }
   if (!force && S.edit && S.dirty) {
     const ok = await modal({ title: '저장하지 않은 변경', desc: '레이아웃 변경 내용을 저장하지 않고 이동할까요?', okLabel: '이동', danger: true });
     if (!ok) return false;
   }
   if (S.edit) exitEdit();
   const gen = ++switchGen;
-  S.pageId = id;
-  localStorage.setItem('charts.pageId', id || '');
-  const page = id ? await API.page(id) : null;
-  if (gen !== switchGen) return false;   // 그 사이 다른 전환이 시작됨 — 이 응답은 폐기
-  S.page = page;
-  renderSidebar();
-  await renderPage();
-  return true;
+  setSwitchBusy(true);
+  try {
+    const page = id ? await API.page(id) : null;
+    if (gen !== switchGen) return false;   // 그 사이 다른 전환이 시작됨 — 이 응답은 폐기
+    // pageId/page를 한 번에 확정한다. 조회 중에는 이전 페이지가 새 ID로 저장되지 않는다.
+    S.pageId = id;
+    S.page = page;
+    localStorage.setItem('charts.pageId', id || '');
+    renderSidebar();
+    await renderPage();
+    return true;
+  } catch (err) {
+    if (gen === switchGen) toast('페이지 전환 실패: ' + err.message);
+    return false;
+  } finally {
+    if (gen === switchGen) setSwitchBusy(false);
+  }
 }
 
 /* ── 사이드탭 ─────────────────────────────────────────────── */
@@ -325,14 +579,27 @@ function renderSidebar() {
   S.pages.forEach((p, i) => {
     const b = document.createElement('button');
     b.className = 'page-item' + (p.id === S.pageId ? ' on' : '');
+    b.disabled = S.switching || S.saving || S.pageAction;
     b.innerHTML = `${PAGE_ICON}<span class="nm">${esc(p.name)}</span><span class="cnt">${p.chart_count}</span>`;
     b.onclick = () => { if (p.id !== S.pageId) switchPage(p.id); };
     b.oncontextmenu = e => { e.preventDefault(); pageCtx(e, p, i); };
     box.appendChild(b);
   });
+  const mobile = $('mobile-page');
+  mobile.innerHTML = S.pages.map(page =>
+    `<option value="${esc(page.id)}" ${page.id === S.pageId ? 'selected' : ''}>${esc(page.name)} (${page.chart_count})</option>`
+  ).join('');
+  mobile.hidden = S.pages.length === 0;
+  $('mobile-page-menu').hidden = S.pages.length === 0;
+  mobile.onchange = () => { if (mobile.value !== S.pageId) switchPage(mobile.value); };
 }
 
 function pageCtx(e, p, i) {
+  if (S.switching || S.saving || S.pageAction) {
+    toast(S.saving ? '레이아웃을 저장하는 중입니다'
+      : S.pageAction ? '레이아웃 작업을 처리하는 중입니다' : '페이지를 불러오는 중입니다');
+    return;
+  }
   showCtx(e.clientX, e.clientY, [
     { label: '위로 이동', disabled: i === 0, run: () => movePage(i, -1) },
     { label: '아래로 이동', disabled: i === S.pages.length - 1, run: () => movePage(i, 1) },
@@ -340,35 +607,84 @@ function pageCtx(e, p, i) {
     { label: '이름 변경', run: async () => {
         const name = await modal({ title: '레이아웃 이름 변경', input: p.name, okLabel: '변경' });
         if (!name) return;
-        await API.patchPage(p.id, { name });
-        p.name = name;
-        if (p.id === S.pageId) { S.page.name = name; $('crumb-page').textContent = name; }
-        renderSidebar(); toast('이름을 변경했습니다');
+        await runPageAction('이름 변경', async () => {
+          await API.patchPage(p.id, { name });
+          p.name = name;
+          if (p.id === S.pageId) { S.page.name = name; $('crumb-page').textContent = name; }
+          renderSidebar(); toast('이름을 변경했습니다');
+        });
       } },
     { label: '복제', run: async () => {
-        const copy = await API.duplicatePage(p.id);
-        S.pages = await API.pages(); renderSidebar();
-        toast(`'${copy.name}' 레이아웃을 만들었습니다`);
+        await runPageAction('레이아웃 복제', async () => {
+          const copy = await API.duplicatePage(p.id);
+          S.pages = await API.pages(); renderSidebar();
+          toast(`'${copy.name}' 레이아웃을 만들었습니다`);
+        });
       } },
     'hr',
     { label: '삭제', danger: true, run: async () => {
         const ok = await modal({ title: '레이아웃 삭제', desc: `'${p.name}' 레이아웃과 차트 ${p.chart_count}개 구성이 삭제됩니다.`, okLabel: '삭제', danger: true });
         if (!ok) return;
-        await API.deletePage(p.id);
-        S.pages = await API.pages();
-        if (p.id === S.pageId) await switchPage(S.pages.length ? S.pages[0].id : null, { force: true });
-        else renderSidebar();
-        toast('레이아웃을 삭제했습니다');
+        await runPageAction('레이아웃 삭제', async () => {
+          await API.deletePage(p.id);
+          S.pages = await API.pages();
+          if (p.id === S.pageId
+              && !await switchPage(S.pages.length ? S.pages[0].id : null, { force: true })) {
+            throw new Error('삭제 후 다음 레이아웃을 불러오지 못했습니다');
+          }
+          else renderSidebar();
+          toast('레이아웃을 삭제했습니다');
+        });
       } },
   ]);
 }
 
+async function runPageAction(label, action) {
+  if (S.pageAction) { toast('이미 레이아웃 작업을 처리하는 중입니다'); return false; }
+  S.pageAction = true;
+  setSwitchBusy(false);
+  try {
+    await action();
+    return true;
+  } catch (err) {
+    toast(`${label} 실패: ${err.message}`);
+    return false;
+  } finally {
+    S.pageAction = false;
+    setSwitchBusy(false);
+  }
+}
+
 async function movePage(i, delta) {
-  const ids = S.pages.map(p => p.id);
-  const j = i + delta;
-  [ids[i], ids[j]] = [ids[j], ids[i]];
-  S.pages = await API.reorderPages(ids);
-  renderSidebar();
+  if (S.switching || S.saving || S.pageAction) return;
+  await runPageAction('레이아웃 순서 변경', async () => {
+    const ids = S.pages.map(p => p.id);
+    const j = i + delta;
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    S.pages = await API.reorderPages(ids);
+    renderSidebar();
+  });
+}
+
+async function addLayoutPageFlow() {
+  if (S.booting || S.switching || S.saving || S.pageAction) {
+    toast(S.booting ? 'Charts Studio를 불러오는 중입니다' : '다른 레이아웃 작업이 끝난 뒤 추가하세요');
+    return;
+  }
+  const name = await modal({
+    title: '레이아웃 추가',
+    desc: '새 레이아웃 페이지 이름을 입력하세요.',
+    input: '새 레이아웃',
+    okLabel: '추가',
+  });
+  if (!name) return;
+  await runPageAction('레이아웃 추가', async () => {
+    const page = await API.createPage(name);
+    S.pages = await API.pages();
+    if (!await switchPage(page.id)) throw new Error('새 레이아웃을 불러오지 못했습니다');
+    enterEdit();
+    toast('빈 레이아웃입니다 — 차트 추가로 시작하세요');
+  });
 }
 
 /* ── 편집 모드 ────────────────────────────────────────────── */
@@ -377,6 +693,7 @@ function setActButtons() {
     .forEach(b => { b.hidden = !S.edit; });
 }
 function enterEdit() {
+  if (S.booting || S.switching) { toast('페이지를 불러온 뒤 다시 시도하세요'); return; }
   S.edit = true; S.dirty = false;
   S.grid.setStatic(false);
   $('canvas').classList.add('editing');
@@ -397,22 +714,41 @@ function exitEdit() {
   setActButtons();
 }
 async function saveLayout() {
+  if (S.switching || S.saving) {
+    toast(S.saving ? '이미 레이아웃을 저장하는 중입니다' : '페이지 전환이 끝난 뒤 저장하세요');
+    return false;
+  }
   collectGrid();
+  const targetPageId = S.pageId;
+  const charts = JSON.parse(JSON.stringify(S.page.charts));
   const btn = $('btn-edit');
+  S.saving = true;
+  setSwitchBusy(false);
+  S.grid.setStatic(true);
   btn.classList.add('saving');
   try {
-    await API.patchPage(S.pageId, { charts: S.page.charts });
+    await API.patchPage(targetPageId, { charts });
     S.pages = await API.pages(); renderSidebar();
-    exitEdit(); toast('레이아웃을 저장했습니다');
+    if (S.pageId === targetPageId) exitEdit();
+    toast('레이아웃을 저장했습니다');
+    return true;
   } catch (err) {
     toast('저장 실패: ' + err.message);
-  } finally { btn.classList.remove('saving'); }
+    return false;
+  } finally {
+    S.saving = false;
+    setSwitchBusy(false);
+    if (S.edit) S.grid.setStatic(false);
+    btn.classList.remove('saving');
+  }
 }
 
 /* ── 구성 드로어 (소스 → 도표 → 연결) ─────────────────────── */
 const CFG = { open: false, mode: 'add', chartId: null, step: 'source',
               source: null, src: null, type: null, bindings: {}, agg: 'sum',
-              title: '', titleTouched: false, filters: [], options: {}, domain: 'commerce', search: '' };
+              title: '', titleTouched: false, filters: [], options: {}, domain: 'all', search: '',
+              dirty: false, sourceGen: 0, previewGen: 0, previewKey: null,
+              previewBusy: false, loadError: '', returnFocus: null };
 
 const TYPE_ICONS = {
   stat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 12h6M7 15.5h4" stroke-linecap="round"/></svg>',
@@ -428,14 +764,19 @@ const TYPE_ICONS = {
 };
 
 function openCfg(mode, chart) {
+  hideRecoTip();
   CFG.open = true; CFG.mode = mode;
+  CFG.returnFocus = document.activeElement;
+  CFG.dirty = false; CFG.previewKey = null; CFG.previewBusy = false; CFG.loadError = '';
   if (mode === 'edit' && chart) {
     Object.assign(CFG, {
       chartId: chart.id, source: chart.source, type: chart.type,
+      src: null,
       bindings: { ...(chart.bindings || {}) }, agg: chart.agg || 'sum',
       title: chart.title, titleTouched: true,
       filters: JSON.parse(JSON.stringify(chart.filters || [])),
-      options: { ...(chart.options || {}) }, step: 'bind',
+      options: optionsForType(chart.type, chart.options || {}), step: 'bind',
+      comboIdx: null,
     });
     $('cfg-mode-label').textContent = '차트 편집';
     $('cfg-apply').textContent = '적용';
@@ -448,32 +789,79 @@ function openCfg(mode, chart) {
   }
   $('cfg-overlay').classList.add('on');
   $('cfg-drawer').classList.add('on');
+  $('cfg-drawer').removeAttribute('inert');
+  $('cfg-drawer').setAttribute('aria-hidden', 'false');
   if (mode === 'edit') {
     // 캐시가 있으면 동기 설정 — 최초 편집 클릭에서 CFG.src=null 렌더 크래시 방지
-    CFG.src = S.srcDetails[CFG.source] || null;
+    const cached = S.srcDetails[CFG.source] || null;
+    CFG.src = cached && availabilityFresh(cached) ? cached : null;
     if (!CFG.src) {
-      API.source(CFG.source).then(src => {
+      const sourceName = CFG.source;
+      const gen = ++CFG.sourceGen;
+      sourceForConfig(sourceName).then(src => {
         S.srcDetails[src.name] = src;
-        if (CFG.open && CFG.source === src.name) { CFG.src = src; renderCfg(); }
+        if (CFG.open && gen === CFG.sourceGen && CFG.source === src.name) {
+          CFG.src = src; renderCfg();
+        }
+      }).catch(err => {
+        if (CFG.open && gen === CFG.sourceGen && CFG.source === sourceName) {
+          CFG.loadError = err.message; renderCfg();
+        }
       });
     }
   }
   renderCfg();
+  $('cfg-preview').disabled = false;
+  $('cfg-preview').textContent = '미리보기';
+  setTimeout(() => { if (CFG.open) $('cfg-close').focus(); }, 0);
 }
 function disposePreview() {
   const plot = document.querySelector('.preview-box .plot');
   if (!plot) return;
   const pv = echarts.getInstanceByDom(plot);
-  if (pv) pv.dispose();
+  if (pv) RENDER.dispose(pv);
+}
+function resetPreview(message) {
+  const box = document.querySelector('.preview-box');
+  if (!box) return;
+  disposePreview();
+  box.querySelectorAll('.race-controls').forEach(control => control.remove());
+  const plot = box.querySelector('.plot');
+  if (plot) plot.innerHTML = '';
+  const hint = box.querySelector('.hint');
+  if (hint) {
+    hint.style.display = '';
+    hint.textContent = message;
+  }
 }
 function closeCfg() {
+  hideRecoTip();
   disposePreview();
   CFG.open = false;
+  invalidatePreview();
   $('cfg-overlay').classList.remove('on');
   $('cfg-drawer').classList.remove('on');
+  $('cfg-drawer').setAttribute('inert', '');
+  $('cfg-drawer').setAttribute('aria-hidden', 'true');
+  const target = CFG.returnFocus;
+  CFG.returnFocus = null;
+  if (target && target.isConnected) target.focus();
 }
-$('cfg-close').onclick = closeCfg;
-$('cfg-overlay').onclick = closeCfg;
+async function requestCloseCfg() {
+  if (!CFG.open) return;
+  if (CFG.dirty) {
+    const ok = await modal({
+      title: '차트 구성을 닫을까요?',
+      desc: '아직 적용하지 않은 설정이 사라집니다.',
+      okLabel: '닫기',
+      danger: true,
+    });
+    if (!ok) { $('cfg-close').focus(); return; }
+  }
+  closeCfg();
+}
+$('cfg-close').onclick = requestCloseCfg;
+$('cfg-overlay').onclick = requestCloseCfg;
 
 function cfgStepOk(step) {
   if (step === 'source') return true;
@@ -486,59 +874,226 @@ function renderCfgTabs() {
   document.querySelectorAll('#cfg-tabs button').forEach(b => {
     b.classList.toggle('on', b.dataset.step === CFG.step);
     b.disabled = !cfgStepOk(b.dataset.step);
-    b.onclick = () => { CFG.step = b.dataset.step; renderCfg(); };
+    b.onclick = () => {
+      hideRecoTip();
+      if (CFG.step !== b.dataset.step) invalidatePreview();
+      CFG.step = b.dataset.step;
+      renderCfg();
+    };
   });
   $('cfg-title').textContent = CFG.title || (CFG.src ? `${CFG.src.label}` : '새 차트');
-  $('cfg-apply').disabled = !(CFG.source && CFG.type && requiredBound());
+  $('cfg-apply').disabled = !!draftProblem() || CFG.previewBusy || $('cfg-apply').dataset.busy === '1';
 }
 function requiredBound() {
-  if (!CFG.src || !CFG.type) return false;
-  try { resolveBindings(currentDraft(), CFG.src); return true; } catch { return false; }
+  return !draftProblem();
 }
 function currentDraft() {
   return { id: CFG.chartId || 'draft', title: CFG.title, type: CFG.type, source: CFG.source,
-           bindings: CFG.bindings, agg: CFG.agg, filters: CFG.filters, options: CFG.options };
+           bindings: { ...CFG.bindings }, agg: CFG.agg,
+           filters: JSON.parse(JSON.stringify(CFG.filters)),
+           options: optionsForType(CFG.type, CFG.options) };
+}
+function previewFingerprint() {
+  const draft = currentDraft();
+  delete draft.id; delete draft.title;
+  return JSON.stringify(draft);
+}
+function invalidatePreview() {
+  CFG.previewKey = null;
+  CFG.previewGen++;
+  CFG.previewBusy = false;
+  if (CFG.open) resetPreview('설정이 변경되었습니다 — 다시 미리보기');
+  const button = $('cfg-preview');
+  if (button) { button.disabled = false; button.textContent = '미리보기'; }
+  if (CFG.open) $('cfg-note').textContent = '';
+}
+function markCfgDirty() {
+  CFG.dirty = true;
+  invalidatePreview();
+}
+function optionsForType(type, options = {}) {
+  const contract = (typeDef(type) || {}).options || {};
+  return Object.fromEntries(
+    Object.keys(contract)
+      .filter(key => Object.hasOwn(options, key))
+      .map(key => {
+        const fallback = contract[key];
+        if (typeof fallback === 'boolean') {
+          return [key, typeof options[key] === 'boolean' ? options[key] : fallback];
+        }
+        const bounds = key === 'interval_ms' ? [200, 5000] : [1, 5000];
+        const numeric = Number(options[key]);
+        const normalized = Number.isFinite(numeric) ? Math.round(numeric) : fallback;
+        return [key, Math.max(bounds[0], Math.min(bounds[1], normalized))];
+      })
+  );
+}
+
+function filterOpsFor(field) {
+  if (!field) return [];
+  if (Array.isArray(field.allowed_filter_ops) && field.allowed_filter_ops.length) {
+    return field.allowed_filter_ops;
+  }
+  if (field.role === 'measure' || field.role === 'sequence' || field.role === 'ordinal') {
+    return ['eq', 'neq', 'gte', 'lte', 'between', 'in', 'not_in'];
+  }
+  if (field.role === 'time') {
+    return ['eq', 'neq', 'gte', 'lte', 'between', 'in', 'not_in'];
+  }
+  if (field.role === 'category') return ['eq', 'neq', 'like', 'in', 'not_in'];
+  return ['eq', 'neq', 'in', 'not_in'];
+}
+
+function filterProblem() {
+  if (!CFG.src) return null;
+  for (let i = 0; i < CFG.filters.length; i++) {
+    const item = CFG.filters[i];
+    const field = CFG.src.fields.find(candidate => candidate.name === item.field);
+    if (!field) return `필터 ${i + 1}의 필드를 선택하세요`;
+    if (field.unavailable) return `필터 ${i + 1}의 필드는 실제 값이 없어 사용할 수 없습니다`;
+    if (!filterOpsFor(field).includes(item.op)) return `필터 ${i + 1}의 조건이 필드와 맞지 않습니다`;
+    const value = item.value;
+    const values = ['in', 'not_in', 'between'].includes(item.op) ? value : [value];
+    if (!Array.isArray(values) || !values.length || (item.op === 'between' && values.length !== 2)) {
+      return `필터 ${i + 1}의 값을 확인하세요`;
+    }
+    if (values.some(v => v == null || (typeof v === 'string' && !v.trim()))) {
+      return `필터 ${i + 1}의 값은 비워둘 수 없습니다`;
+    }
+    if ((field.role === 'measure' || field.role === 'sequence' || field.role === 'ordinal')
+        && values.some(v => !Number.isFinite(Number(v)))) {
+      return `필터 ${i + 1}에는 숫자를 입력하세요`;
+    }
+  }
+  return null;
+}
+
+function ensureValidAgg() {
+  if (!CFG.src || !CFG.type) return;
+  const allowed = allowedAggs(currentDraft(), CFG.src, CFG.bindings);
+  if (allowed.includes(CFG.agg)) return;
+  const def = typeDef(CFG.type);
+  const preferred = def.slots
+    .map(slot => CFG.bindings[slot.name])
+    .map(name => CFG.src.fields.find(field => field.name === name && field.role === 'measure'))
+    .filter(Boolean)
+    .map(field => field.preferred_agg)
+    .find(agg => allowed.includes(agg));
+  CFG.agg = preferred || allowed[0] || 'sum';
+}
+
+function draftProblem() {
+  if (!CFG.source) return '데이터 소스를 선택하세요';
+  if (!CFG.src) return CFG.loadError || '소스 정보를 불러오는 중입니다';
+  if (!CFG.type) return '도표를 선택하세요';
+  if (!CFG.src.supports.includes(CFG.type)) {
+    return '현재 실데이터와 정책에서는 이 도표를 사용할 수 없습니다';
+  }
+  try {
+    const { b } = resolveBindings(currentDraft(), CFG.src);
+    if (!allowedAggs(currentDraft(), CFG.src, b).includes(CFG.agg)) {
+      return '선택한 필드·옵션에 맞는 집계를 선택하세요';
+    }
+  } catch (err) {
+    return err.message;
+  }
+  return filterProblem();
 }
 
 function renderCfg() {
+  hideRecoTip();
   disposePreview();      // body 재작성 전에 미리보기 인스턴스 정리 (detached DOM 누수 방지)
   renderCfgTabs();
   const body = $('cfg-body');
   if (CFG.step === 'source') return renderCfgSource(body);
   if ((CFG.step === 'type' || CFG.step === 'bind') && !CFG.src) {
-    body.innerHTML = '<section><h3>소스 정보 로딩 중…</h3><div class="tile-state" style="position:static;padding:30px"><div class="spin"></div></div></section>';
+    body.innerHTML = CFG.loadError
+      ? `<section><h3>소스 정보를 불러오지 못했습니다</h3>
+          <div class="cfg-error">${esc(CFG.loadError)}
+            <button class="btn ghost" id="cfg-source-back">소스 다시 선택</button></div></section>`
+      : '<section><h3>소스 정보 로딩 중…</h3><div class="tile-state" style="position:static;padding:30px"><div class="spin"></div></div></section>';
+    const back = $('cfg-source-back');
+    if (back) back.onclick = () => { CFG.step = 'source'; CFG.source = null; CFG.loadError = ''; renderCfg(); };
     return;
   }
   if (CFG.step === 'type') return renderCfgType(body);
-  return renderCfgBind(body);
+  try {
+    return renderCfgBind(body);
+  } catch (err) {
+    body.innerHTML = `<section><h3>현재 실데이터로 이 구성을 사용할 수 없습니다</h3>
+      <div class="cfg-error">${esc(err.message)}
+        <button class="btn ghost" id="cfg-source-back">소스 다시 선택</button></div></section>`;
+    $('cfg-source-back').onclick = () => { CFG.step = 'source'; renderCfg(); };
+    $('cfg-note').textContent = 'null이 아닌 실제 값이 있는 필드만 선택할 수 있습니다';
+    return;
+  }
 }
 
 function renderCfgSource(body) {
-  const domains = ['all', ...Object.keys(S.meta.domains)];
-  const q = CFG.search.toLowerCase();
-  const list = S.sources
-    .filter(s => CFG.domain === 'all' || s.domain === CFG.domain)
-    .filter(s => !q || (s.name + s.label + s.description).toLowerCase().includes(q));
+  const selectable = new Set(Object.keys(S.meta.chart_types));
+  const viable = S.sources.filter(source => source.supports.some(type => selectable.has(type)));
+  const domainCounts = viable.reduce((counts, source) => {
+    counts[source.domain] = (counts[source.domain] || 0) + 1;
+    return counts;
+  }, {});
+  const domains = ['all', ...Object.keys(S.meta.domains).filter(domain => domainCounts[domain])];
+  const labels = S.meta.domain_labels || {};
+  const list = viable.filter(source => CFG.domain === 'all' || source.domain === CFG.domain);
   body.innerHTML = `
     <section><h3>데이터 소스 — gold 카탈로그</h3>
       <div class="src-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
         <input id="src-q" type="search" placeholder="소스 검색" value="${esc(CFG.search)}"></div>
       <div class="src-doms">${domains.map(d =>
-        `<button class="chip ${CFG.domain === d ? 'on' : ''}" data-d="${d}">${d}</button>`).join('')}</div>
+        `<button class="chip ${CFG.domain === d ? 'on' : ''}" data-d="${esc(d)}">${esc(labels[d] || d)}
+          <span>${d === 'all' ? viable.length : domainCounts[d]}</span></button>`).join('')}</div>
       <div class="src-list">${list.map(s => `
-        <button class="src-item ${CFG.source === s.name ? 'on' : ''}" data-s="${s.name}">
+        <button class="src-item ${CFG.source === s.name ? 'on' : ''}" data-s="${esc(s.name)}"
+                data-search="${esc((s.name + ' ' + s.label + ' ' + s.description).toLowerCase())}">
           <div class="info"><b>${esc(s.label)}</b><span>${esc(s.name)}</span></div>
-          <span class="rows num">${Number(s.row_count).toLocaleString('ko-KR')} rows</span>
-        </button>`).join('') || '<div style="color:var(--ink-4);font-size:12px;padding:16px">검색 결과 없음</div>'}
+          <span class="rows num">${Number(s.row_count).toLocaleString('ko-KR')}행 · ${s.supports.filter(t => selectable.has(t)).length}종</span>
+        </button>`).join('')}
+        <div class="src-empty" hidden>조건에 맞는 시각화 가능 소스가 없습니다</div>
       </div>
+      ${S.sources.length === viable.length ? '' :
+        `<p class="bind-hint">${S.sources.length - viable.length}개 소스는 현재 정책 또는 슬롯 계약상 구성 가능한 도표가 없어 선택에서 제외했습니다.</p>`}
     </section>`;
-  $('src-q').oninput = e => { CFG.search = e.target.value; renderCfgSource(body); };
+  const applySearch = () => {
+    const query = CFG.search.trim().toLowerCase();
+    let shown = 0;
+    body.querySelectorAll('.src-item').forEach(item => {
+      item.hidden = !!query && !item.dataset.search.includes(query);
+      if (!item.hidden) shown++;
+    });
+    body.querySelector('.src-empty').hidden = shown > 0;
+  };
+  $('src-q').oninput = e => { CFG.search = e.target.value; applySearch(); };
+  applySearch();
   body.querySelectorAll('.chip').forEach(c => c.onclick = () => { CFG.domain = c.dataset.d; renderCfgSource(body); });
   body.querySelectorAll('.src-item').forEach(el => el.onclick = async () => {
-    CFG.source = el.dataset.s;
-    CFG.src = S.srcDetails[CFG.source] || (S.srcDetails[CFG.source] = await API.source(CFG.source));
-    CFG.type = null; CFG.bindings = {};
-    CFG.step = 'type'; renderCfg();
+    const name = el.dataset.s;
+    const gen = ++CFG.sourceGen;
+    Object.assign(CFG, {
+      source: name, src: null, type: null, bindings: {}, options: {}, filters: [],
+      agg: 'sum', title: '', titleTouched: false, comboIdx: null, loadError: '', step: 'type',
+    });
+    markCfgDirty();
+    renderCfg();
+    try {
+      const src = await sourceForConfig(name);
+      if (!CFG.open || gen !== CFG.sourceGen || CFG.source !== name) return;
+      if (!src.supports.some(type => Object.hasOwn(S.meta.chart_types, type))) {
+        Object.assign(CFG, { source: null, src: null, type: null, step: 'source' });
+        toast('실제 값이 있는 필드로 구성 가능한 도표가 없어 소스에서 제외했습니다');
+        renderCfg();
+        return;
+      }
+      CFG.src = src;
+      renderCfg();
+    } catch (err) {
+      if (!CFG.open || gen !== CFG.sourceGen || CFG.source !== name) return;
+      CFG.loadError = err.message;
+      renderCfg();
+    }
   });
 }
 
@@ -548,85 +1103,169 @@ function recoTip() {
   if (!tip) { tip = document.createElement('div'); tip.id = 'reco-tip'; document.body.appendChild(tip); }
   return tip;
 }
+function hideRecoTip() {
+  const tip = $('reco-tip');
+  if (!tip) return;
+  tip.classList.remove('on');
+  tip.textContent = '';
+}
 function bindRecoTip(el, reason) {
-  el.addEventListener('mouseenter', () => {
+  const show = () => {
     const tip = recoTip();
     tip.innerHTML = `<b>이 소스엔 이 도표</b>${esc(reason)}`;
     tip.classList.add('on');
     const r = el.getBoundingClientRect();
     tip.style.left = Math.min(r.left, innerWidth - 270) + 'px';
     tip.style.top = (r.bottom + 6) + 'px';
-  });
-  el.addEventListener('mouseleave', () => recoTip().classList.remove('on'));
+  };
+  el.addEventListener('pointerenter', show);
+  el.addEventListener('focus', show);
+  el.addEventListener('pointerleave', hideRecoTip);
+  el.addEventListener('blur', hideRecoTip);
+  el.addEventListener('click', hideRecoTip);
 }
+addEventListener('resize', hideRecoTip);
+document.addEventListener('scroll', hideRecoTip, true);
 
 function renderCfgType(body) {
   const src = CFG.src;
   const reco = RECO.types(src);   // role 기반 — 어떤 소스가 와도 그 자리에서 계산
+  const choices = Object.entries(S.meta.chart_types)
+    .filter(([type]) => src.supports.includes(type))
+    .sort(([a], [b]) => (reco[b]?.score || 0) - (reco[a]?.score || 0));
   body.innerHTML = `
     <section><h3>도표 타입 — '${esc(src.label)}' 가 지원하는 형태</h3>
-      <div class="type-grid">${Object.entries(S.meta.chart_types).map(([t, def]) => {
+      <div class="type-grid">${choices.map(([t, def]) => {
         const isReco = reco[t] && reco[t].score >= 2;
         return `
-        <button class="type-card ${CFG.type === t ? 'on' : ''} ${isReco ? 'reco' : ''}" data-t="${t}"
-                ${src.supports.includes(t) ? '' : 'disabled'}>
+        <button class="type-card ${CFG.type === t ? 'on' : ''} ${isReco ? 'reco' : ''}" data-t="${t}">
           ${TYPE_ICONS[def.icon] || TYPE_ICONS.bar}<b>${esc(def.label)}</b>
         </button>`;
       }).join('')}</div>
-      <p class="bind-hint" style="margin-top:10px">비활성 = 이 소스에 필요한 역할(시간축/지역/측정값)이 없는 도표.
-        <span style="color:var(--accent-deep)">추천</span> 배지에 마우스를 올리면 컬럼 형태 기반 추천 이유가 보입니다.</p>
+      <p class="bind-hint" style="margin-top:10px">실제로 서로 다른 필드로 구성 가능한 도표만 추천 순으로 표시합니다.
+        <span style="color:var(--accent-deep)">추천</span> 배지에 마우스를 올리거나 키보드 포커스를 두면 이유가 보입니다.</p>
     </section>`;
-  body.querySelectorAll('.type-card:not(:disabled)').forEach(el => {
+  body.querySelectorAll('.type-card').forEach(el => {
     const t = el.dataset.t;
-    el.onclick = () => { CFG.type = t; autoBind(); CFG.step = 'bind'; renderCfg(); };
+    el.onclick = () => {
+      hideRecoTip();
+      CFG.type = t;
+      CFG.options = {};
+      CFG.agg = 'sum';
+      autoBind();
+      markCfgDirty();
+      CFG.step = 'bind';
+      renderCfg();
+    };
     if (reco[t] && reco[t].score >= 2) bindRecoTip(el, reco[t].reason);
   });
 }
 
 function autoBind() {
   const def = typeDef(CFG.type), src = CFG.src;
-  const b = {};
+  const b = {}, used = new Set();
   const dc = src.default_chart;
   const curatedHit = dc && dc.type === CFG.type;
   // 우선순위: 큐레이션 힌트 → 추천 엔진 1순위 조합 → role 첫 후보
   const combo = !curatedHit ? (RECO.combos(src, CFG.type)[0] || null) : null;
+  if (curatedHit && dc.agg) CFG.agg = dc.agg;
+  else if (combo) {
+    CFG.agg = combo.agg;
+    CFG.options = { ...CFG.options, ...combo.options };
+  } else {
+    const value = src.fields.find(field =>
+      field.chartable !== false && field.role === 'measure'
+      && (field.recommendation_priority ?? 40) < 90);
+    CFG.agg = value?.preferred_agg || (def.slots.some(slot => slot.count_optional)
+      && !src.fields.some(field => field.role === 'measure') ? 'count' : 'sum');
+  }
   for (const slot of def.slots) {
     const want = (curatedHit && dc.bindings && dc.bindings[slot.name])
               || (combo && combo.bindings[slot.name]);
-    const wf = want && src.fields.find(f => f.name === want && slot.accepts.includes(f.role));
-    if (wf) { b[slot.name] = wf.name; continue; }
-    if (!slot.required) continue;               // 선택 슬롯은 명시적 제안이 있을 때만
-    const cands = fieldsByRole(src, slot.accepts);
-    if (cands.length) b[slot.name] = cands[0].name;
+    const wf = want && src.fields.find(f =>
+      f.name === want && f.chartable !== false
+      && slot.accepts.includes(f.role) && !used.has(f.name));
+    if (wf) { b[slot.name] = wf.name; used.add(wf.name); continue; }
+    if (!slotRequired(slot, { agg: CFG.agg })) continue;
+    const cands = fieldsByRole(src, slot.accepts)
+      .filter(field => !used.has(field.name))
+      .sort((a, b) => (a.recommendation_priority ?? 40) - (b.recommendation_priority ?? 40));
+    if (cands.length) { b[slot.name] = cands[0].name; used.add(cands[0].name); }
   }
   CFG.bindings = b;
   CFG.comboIdx = combo ? 0 : null;
-  if (curatedHit && dc.agg) CFG.agg = dc.agg;
-  else if (combo) { CFG.agg = combo.agg; CFG.options = { ...CFG.options, ...combo.options }; }
+  ensureValidAgg();
   if (!CFG.titleTouched) CFG.title = combo ? combo.label : `${src.label} · ${def.label}`;
 }
 
 function renderCfgBind(body) {
+  hideRecoTip();
+  disposePreview();
   const def = typeDef(CFG.type), src = CFG.src;
+  if (CFG.agg === 'count') {
+    def.slots.filter(slot => slot.count_optional).forEach(slot => delete CFG.bindings[slot.name]);
+  }
+  const normalized = resolveBindings(currentDraft(), src);
+  CFG.bindings = { ...normalized.b };
+  ensureValidAgg();
+  const aggChoices = allowedAggs(currentDraft(), src, CFG.bindings);
+  const combos = RECO.combos(src, CFG.type).filter(combo => {
+    const candidate = {
+      ...currentDraft(),
+      bindings: combo.bindings,
+      agg: combo.agg,
+      options: { ...CFG.options, ...combo.options },
+    };
+    try {
+      const { b } = resolveBindings(candidate, src);
+      return allowedAggs(candidate, src, b).includes(candidate.agg);
+    } catch { return false; }
+  });
   const slotRow = slot => {
-    const cands = fieldsByRole(src, slot.accepts);
     const cur = CFG.bindings[slot.name] || '';
+    const usedElsewhere = new Set(Object.entries(CFG.bindings)
+      .filter(([name]) => name !== slot.name)
+      .map(([, value]) => value));
+    const cands = fieldsByRole(src, slot.accepts)
+      .filter(field => !usedElsewhere.has(field.name));
+    const countValue = CFG.agg === 'count' && slot.count_optional;
     return `<div class="bind-row">
       <label>${esc(slot.label)} ${slot.required ? '<span class="req">*</span>' : ''}</label>
-      <select data-slot="${slot.name}">
-        ${slot.required ? '' : '<option value="">(없음)</option>'}
-        ${cands.map(f => `<option value="${f.name}" ${f.name === cur ? 'selected' : ''}>${esc(f.label)} — ${f.name} (${f.role})</option>`).join('')}
+      <select data-slot="${esc(slot.name)}" ${countValue && !cands.length ? 'disabled' : ''}>
+        ${countValue ? '<option value="">행 수 (count *)</option>'
+          : (slot.required ? '' : '<option value="">(없음)</option>')}
+        ${cands.map(f => `<option value="${esc(f.name)}" ${f.name === cur ? 'selected' : ''}>${esc(f.label)} — ${esc(f.name)} (${esc(f.role)})</option>`).join('')}
       </select></div>`;
   };
-  const filterRow = (f, i) => `
+  const filterRow = (f, i) => {
+    const field = src.fields.find(item => item.name === f.field);
+    const ops = filterOpsFor(field);
+    const enumLabels = (S.meta.value_labels || {})[f.field];
+    if (enumLabels && ['eq', 'neq'].includes(f.op)
+        && !Object.hasOwn(enumLabels, String(f.value ?? ''))) f.value = '';
+    const displayValue = Array.isArray(f.value) ? f.value.join(',') : (f.value ?? '');
+    const valueControl = enumLabels && ['eq', 'neq', 'in', 'not_in'].includes(f.op)
+      ? `<select class="fv" ${['in', 'not_in'].includes(f.op) ? 'multiple size="4"' : ''} ${field ? '' : 'disabled'}>
+          ${['eq', 'neq'].includes(f.op) ? '<option value="">값 선택</option>' : ''}
+          ${Object.entries(enumLabels).map(([value, label]) => {
+            const selected = Array.isArray(f.value)
+              ? f.value.map(String).includes(value) : String(f.value ?? '') === value;
+            return `<option value="${esc(value)}" ${selected ? 'selected' : ''}>${esc(label)} (${esc(value)})</option>`;
+          }).join('')}</select>`
+      : `<input type="text" class="fv" value="${esc(displayValue)}"
+          placeholder="${['in', 'not_in'].includes(f.op) ? '쉼표로 구분' : f.op === 'between' ? '최소, 최대' : '값 입력'}"
+          ${field ? '' : 'disabled'}>`;
+    return `
     <div class="bind-grid" data-fi="${i}" style="grid-template-columns: 1.2fr .7fr 1fr auto; align-items:end">
-      <div class="bind-row"><label>필드</label><select class="ff">${src.fields.map(x =>
-        `<option value="${x.name}" ${x.name === f.field ? 'selected' : ''}>${esc(x.label)} — ${x.name}</option>`).join('')}</select></div>
-      <div class="bind-row"><label>조건</label><select class="fo">${['eq', 'neq', 'gte', 'lte', 'like', 'in'].map(o =>
-        `<option ${o === f.op ? 'selected' : ''}>${o}</option>`).join('')}</select></div>
-      <div class="bind-row"><label>값</label><input type="text" class="fv" value="${esc(f.op === 'in' && Array.isArray(f.value) ? f.value.join(',') : (f.value ?? ''))}"></div>
+      <div class="bind-row"><label>필드</label><select class="ff">
+        <option value="">필드 선택</option>${src.fields.filter(x => !x.unavailable).map(x =>
+        `<option value="${esc(x.name)}" ${x.name === f.field ? 'selected' : ''}>${esc(x.label)} — ${esc(x.name)}</option>`).join('')}</select></div>
+      <div class="bind-row"><label>조건</label><select class="fo" ${field ? '' : 'disabled'}>${ops.map(o =>
+        `<option value="${o}" ${o === f.op ? 'selected' : ''}>${FILTER_OP_LABEL[o] || o}</option>`).join('')}</select></div>
+      <div class="bind-row"><label>값</label>${valueControl}</div>
       <button class="btn ghost fdel" title="필터 삭제" style="height:33px">✕</button>
     </div>`;
+  };
 
   body.innerHTML = `
     <section><h3>온톨로지 연결 — 슬롯(역할) ↔ 필드</h3>
@@ -634,15 +1273,15 @@ function renderCfgBind(body) {
         <div class="bind-row"><label>제목</label><input type="text" id="cfg-name" value="${esc(CFG.title)}" maxlength="60"></div>
         <div class="bind-grid">${def.slots.map(slotRow).join('')}
           <div class="bind-row"><label>집계</label><select id="cfg-agg">
-            ${Object.entries(AGG_LABEL)
-              .filter(([a]) => CFG.type !== 'scatter' || (a !== 'count' && a !== 'count_distinct'))
+            ${Object.entries(AGG_LABEL).filter(([a]) => aggChoices.includes(a))
               .map(([a, l]) => `<option value="${a}" ${a === CFG.agg ? 'selected' : ''}>${l} (${a})</option>`).join('')}
           </select></div>
           ${def.options ? Object.keys(def.options).filter(k => typeof def.options[k] === 'number').map(k => {
-            const lim = k === 'interval_ms' ? [200, 5000] : [3, 500];
+            const lim = k === 'interval_ms' ? [200, 5000] : [1, 5000];
             const nm = { top_n: '상위 N', interval_ms: '프레임 간격(ms)' }[k] || k;
             return `<div class="bind-row"><label>${nm}</label>
-            <input type="number" data-numopt="${k}" min="${lim[0]}" max="${lim[1]}" value="${CFG.options[k] ?? def.options[k]}"></div>`;
+            <input type="number" data-numopt="${esc(k)}" min="${lim[0]}" max="${lim[1]}" step="1"
+                   value="${esc(CFG.options[k] ?? def.options[k])}"></div>`;
           }).join('') : ''}
         </div>
         ${renderOptToggles(def)}
@@ -650,55 +1289,99 @@ function renderCfgBind(body) {
     </section>
     <section><h3>필터 <button class="btn ghost" id="f-add" style="margin-left:8px;padding:2px 8px;font-size:10.5px">+ 추가</button></h3>
       <div id="f-list">${CFG.filters.map(filterRow).join('') || '<p class="bind-hint">필터 없음 — 소스 전체를 집계합니다.</p>'}</div>
+      ${CFG.filters.length ? '<p class="bind-hint">목록 조건은 여러 값을 선택하거나 쉼표로 구분하고, 범위는 “최소, 최대” 순서로 입력합니다.</p>' : ''}
     </section>
-    ${(() => {
-      const combos = RECO.combos(src, CFG.type);   // 소스×도표 형태에서 즉석 계산 — 테이블이 바뀌어도 그 모양에 맞게
-      if (!combos.length) return '';
-      return `<section><h3>추천 조합 — 누르면 위 설정에 바로 적용됩니다</h3>
+    ${combos.length ? `<section><h3>추천 조합 — 누르면 위 설정에 바로 적용됩니다</h3>
         <div class="combo-row">${combos.map((c, i) => `
           <button class="combo-chip ${CFG.comboIdx === i ? 'on' : ''}" data-ci="${i}">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M13 2L4 14h6l-1 8 9-12h-6l1-8z"/></svg>
             ${esc(c.label)}</button>`).join('')}
-        </div></section>`;
-    })()}
+        </div></section>` : ''}
     <section><h3>미리보기</h3>
       <div class="preview-box"><div class="plot"></div><div class="hint">아래 '미리보기'를 누르면 여기에 그려집니다</div></div>
     </section>`;
 
-  $('cfg-name').oninput = e => { CFG.title = e.target.value; CFG.titleTouched = true; renderCfgTabs(); };
+  $('cfg-name').oninput = e => {
+    CFG.title = e.target.value; CFG.titleTouched = true; CFG.dirty = true; renderCfgTabs();
+  };
   body.querySelectorAll('select[data-slot]').forEach(s => s.onchange = () => {
     if (s.value) CFG.bindings[s.dataset.slot] = s.value; else delete CFG.bindings[s.dataset.slot];
     CFG.comboIdx = null;   // 수동으로 만졌으면 추천 조합 선택 표시 해제
-    body.querySelectorAll('.combo-chip').forEach(ch => ch.classList.remove('on'));
-    renderCfgTabs();
+    ensureValidAgg();
+    markCfgDirty();
+    renderCfgBind(body);
   });
   body.querySelectorAll('.combo-chip').forEach(ch => ch.onclick = () => {
-    const combo = RECO.combos(src, CFG.type)[Number(ch.dataset.ci)];
+    const combo = combos[Number(ch.dataset.ci)];
     if (!combo) return;
     CFG.bindings = { ...combo.bindings };
     CFG.agg = combo.agg;
     CFG.options = { ...CFG.options, ...combo.options };
     CFG.comboIdx = Number(ch.dataset.ci);
     if (!CFG.titleTouched) CFG.title = combo.label;
+    markCfgDirty();
     renderCfgBind(body);          // 위 폼(슬롯·집계·상위 N·토글)에 반영
-    $('cfg-preview').click();     // 적용 즉시 미리보기
+    runPreview();                 // 적용 즉시 미리보기
   });
-  $('cfg-agg').onchange = e => { CFG.agg = e.target.value; };
+  $('cfg-agg').onchange = e => {
+    CFG.agg = e.target.value;
+    markCfgDirty();
+    renderCfgBind(body);
+  };
   body.querySelectorAll('input[data-numopt]').forEach(inp => inp.onchange = e => {
     const k = inp.dataset.numopt;
     const lo = Number(inp.min), hi = Number(inp.max);
-    CFG.options[k] = Math.max(lo, Math.min(hi, Number(e.target.value) || Number(inp.min)));
+    CFG.options[k] = Math.max(lo, Math.min(hi, Math.round(Number(e.target.value) || Number(inp.min))));
+    ensureValidAgg();
+    markCfgDirty();
+    renderCfgBind(body);
   });
-  body.querySelectorAll('.opt-toggle input').forEach(t => t.onchange = () => { CFG.options[t.dataset.opt] = t.checked; });
-  $('f-add').onclick = () => { CFG.filters.push({ field: src.fields[0].name, op: 'eq', value: '' }); renderCfgBind(body); };
+  body.querySelectorAll('.opt-toggle input').forEach(t => t.onchange = () => {
+    CFG.options[t.dataset.opt] = t.checked;
+    ensureValidAgg();
+    markCfgDirty();
+    renderCfgBind(body);
+  });
+  $('f-add').onclick = () => {
+    CFG.filters.push({ field: '', op: 'eq', value: '' });
+    markCfgDirty();
+    renderCfgBind(body);
+  };
   body.querySelectorAll('#f-list [data-fi]').forEach(row => {
     const i = Number(row.dataset.fi), f = CFG.filters[i];
-    row.querySelector('.ff').onchange = e => { f.field = e.target.value; };
-    row.querySelector('.fo').onchange = e => { f.op = e.target.value; };
-    row.querySelector('.fv').onchange = e => { f.value = parseFilterValue(f, e.target.value); };
-    row.querySelector('.fdel').onclick = () => { CFG.filters.splice(i, 1); renderCfgBind(body); };
+    row.querySelector('.ff').onchange = e => {
+      f.field = e.target.value;
+      const field = src.fields.find(item => item.name === f.field);
+      f.op = filterOpsFor(field)[0] || 'eq';
+      f.value = '';
+      markCfgDirty();
+      renderCfgBind(body);
+    };
+    row.querySelector('.fo').onchange = e => {
+      f.op = e.target.value; f.value = '';
+      markCfgDirty();
+      renderCfgBind(body);
+    };
+    const valueInput = row.querySelector('.fv');
+    const updateFilterValue = e => {
+      const raw = e.target.multiple
+        ? [...e.target.selectedOptions].map(option => option.value)
+        : e.target.value;
+      f.value = parseFilterValue(f, raw);
+      markCfgDirty();
+      renderCfgTabs();
+      $('cfg-note').textContent = filterProblem() || '';
+    };
+    if (valueInput.tagName === 'SELECT') valueInput.onchange = updateFilterValue;
+    else valueInput.oninput = updateFilterValue;
+    row.querySelector('.fdel').onclick = () => {
+      CFG.filters.splice(i, 1);
+      markCfgDirty();
+      renderCfgBind(body);
+    };
   });
   renderCfgTabs();
+  $('cfg-note').textContent = draftProblem() || src.__availabilityWarning || '';
 }
 
 function renderOptToggles(def) {
@@ -707,70 +1390,145 @@ function renderOptToggles(def) {
   if (!toggles.length) return '';
   const NAMES = { horizontal: '가로 막대', stacked: '누적', area: '면적 채움', smooth: '곡선', donut: '도넛',
                   cumulative: '누적 값(경주)' };
-  return `<div style="display:flex;gap:14px;flex-wrap:wrap">` + toggles.map(k => `
+  return `<div style="display:flex;gap:14px;flex-wrap:wrap">` + toggles.map(k => {
+    const checked = CFG.options[k] ?? def.options[k];
+    const candidate = { ...currentDraft(), options: { ...CFG.options, [k]: true } };
+    const canEnable = allowedAggs(candidate, CFG.src, CFG.bindings).includes(CFG.agg);
+    return `
     <label class="opt-toggle" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-2)">
-      <input type="checkbox" data-opt="${k}" ${CFG.options[k] ?? def.options[k] ? 'checked' : ''}>${NAMES[k] || k}</label>`).join('') + '</div>';
+      <input type="checkbox" data-opt="${k}" ${checked ? 'checked' : ''}
+             ${!checked && !canEnable ? 'disabled title="현재 집계에서는 사용할 수 없습니다"' : ''}>${NAMES[k] || k}</label>`;
+  }).join('') + '</div>';
 }
 
 function parseFilterValue(f, raw) {
-  if (f.op === 'in') return raw.split(',').map(s => s.trim()).filter(Boolean);
   const src = CFG.src, fl = src.fields.find(x => x.name === f.field);
-  if (fl && (fl.role === 'measure' || fl.role === 'sequence') && raw !== '' && !Number.isNaN(Number(raw))) return Number(raw);
-  return raw;
+  const numeric = fl && (fl.role === 'measure' || fl.role === 'sequence' || fl.role === 'ordinal');
+  const parseOne = value => numeric && value !== '' && !Number.isNaN(Number(value))
+    ? Number(value) : value;
+  if (['in', 'not_in', 'between'].includes(f.op)) {
+    if (Array.isArray(raw)) return raw.map(parseOne);
+    return raw.split(',').map(s => s.trim()).filter(Boolean).map(parseOne);
+  }
+  return parseOne(raw);
 }
 
-$('cfg-preview').onclick = async () => {
-  if (!requiredBound()) { toast('필수 슬롯을 먼저 연결하세요'); return; }
+async function runPreview() {
+  const problem = draftProblem();
+  if (problem) { toast(problem); return false; }
   const box = document.querySelector('.preview-box');
+  if (!box) return false;
+  resetPreview('gold 데이터를 확인하는 중…');
   const hint = box.querySelector('.hint');
-  hint.textContent = '조회 중…';
+  const button = $('cfg-preview');
+  const key = previewFingerprint();
+  const gen = ++CFG.previewGen;
+  CFG.previewBusy = true;
+  button.disabled = true;
+  button.textContent = '조회 중…';
+  renderCfgTabs();
   try {
     const draft = currentDraft();
     const { b, def } = resolveBindings(draft, CFG.src);
     const { spec, alias } = buildSpec(draft, CFG.src, b);
     const res = await API.query(spec);
-    if (!res.rows.length) { hint.textContent = '데이터 0행 — 필터를 확인하세요'; return; }
+    if (!CFG.open || gen !== CFG.previewGen || key !== previewFingerprint()) return false;
+    if (!hasRenderableMeasures(draft, spec, res)) {
+      CFG.previewKey = null;
+      hint.textContent = res.rows.length
+        ? '사용 가능한 측정값이 없습니다 — 이 설정은 추가하지 않습니다'
+        : '데이터 0행 — 이 설정은 추가하지 않습니다';
+      $('cfg-note').textContent = '필터 값·집계 대상·측정값 가용성을 확인하세요';
+      return false;
+    }
     hint.style.display = 'none';
-    await RENDER.render(box.querySelector('.plot'), {
+    const colLabels = Object.fromEntries(res.columns.map(column =>
+      [column, column === alias
+        ? (draft.agg === 'count' ? '건수' : `${fieldLabel(CFG.src, b.value || b.x)} ${AGG_LABEL[draft.agg] || ''}`.trim())
+        : fieldLabel(CFG.src, column)]));
+    const inst = await RENDER.render(box.querySelector('.plot'), {
       el: box, chart: draft, b, src: CFG.src, rows: res.rows, cols: res.columns,
       geo: def.geo || null,
       regionRole: b.region ? (CFG.src.fields.find(f => f.name === b.region) || {}).role : null,
       valueLabel: draft.agg === 'count' ? '건수' : `${fieldLabel(CFG.src, b.value || b.x)} ${AGG_LABEL[draft.agg] || ''}`.trim(),
       xLabel: b.x ? fieldLabel(CFG.src, b.x) : '', yLabel: b.y ? fieldLabel(CFG.src, b.y) : '',
-      colLabels: {},
+      colLabels,
+      isCurrent: () => CFG.open && gen === CFG.previewGen && key === previewFingerprint(),
     });
+    if (!CFG.open || gen !== CFG.previewGen || key !== previewFingerprint()) {
+      if (inst) RENDER.dispose(inst);
+      return false;
+    }
+    CFG.previewKey = key;
     $('cfg-note').textContent = `${res.row_count}행 · ${res.mode}${res.mode === 'live' ? ` · ${res.elapsed_ms}ms` : ''}`;
+    return true;
   } catch (err) {
+    if (gen !== CFG.previewGen) return false;
+    CFG.previewKey = null;
     hint.style.display = ''; hint.textContent = '실패: ' + err.message;
+    $('cfg-note').textContent = '오류가 해결되기 전에는 추가되지 않습니다';
+    return false;
+  } finally {
+    if (gen === CFG.previewGen) {
+      CFG.previewBusy = false;
+      button.disabled = false;
+      button.textContent = '미리보기';
+      renderCfgTabs();
+    }
   }
-};
+}
+$('cfg-preview').onclick = () => runPreview();
 
 $('cfg-apply').onclick = async () => {
-  if (!requiredBound()) return;
+  const button = $('cfg-apply');
+  if (button.dataset.busy === '1') return;
+  const problem = draftProblem();
+  if (problem) { toast(problem); return; }
   if (!S.page) { toast('레이아웃 페이지를 먼저 추가하세요'); return; }
-  const cfg = currentDraft();
-  if (CFG.mode === 'add') {
-    const chart = { ...cfg, id: uid(), grid: {} };
-    if (!S.edit) enterEdit();
-    S.page.charts.push(chart);
-    addTile(chart);
-    S.dirty = true;
-    toast('차트를 추가했습니다 — 배치 후 레이아웃 저장을 누르세요');
-  } else {
-    const chart = S.page.charts.find(c => c.id === CFG.chartId);
-    Object.assign(chart, { title: cfg.title, type: cfg.type, source: cfg.source,
-                           bindings: cfg.bindings, agg: cfg.agg, filters: cfg.filters, options: cfg.options });
-    const rec = S.tiles[chart.id];
-    if (rec) {
-      rec.el.querySelector('.tt b').textContent = chart.title || '차트';
-      rec.el.querySelector('.tt span').textContent = chart.source;
-      if (rec.inst) { rec.inst.dispose(); rec.inst = null; }
-      loadTile(chart);
+  button.dataset.busy = '1';
+  const originalLabel = CFG.mode === 'add' ? '추가' : '적용';
+  button.textContent = '확인 중…';
+  button.disabled = true;
+  if (CFG.previewKey !== previewFingerprint()) {
+    const valid = await runPreview();
+    if (!valid) {
+      toast('미리보기 오류를 확인하세요 — 차트는 추가하지 않았습니다');
+      button.dataset.busy = '';
+      button.textContent = originalLabel;
+      renderCfgTabs();
+      return;
     }
-    S.dirty = true;
-    toast('차트를 수정했습니다 — 레이아웃 저장으로 확정하세요');
   }
-  closeCfg();
+  const cfg = currentDraft();
+  try {
+    if (CFG.mode === 'add') {
+      const chart = { ...cfg, id: uid(), grid: {} };
+      if (!S.edit) enterEdit();
+      S.page.charts.push(chart);
+      addTile(chart);
+      S.dirty = true;
+      toast('차트를 추가했습니다 — 배치 후 레이아웃 저장을 누르세요');
+    } else {
+      const chart = S.page.charts.find(c => c.id === CFG.chartId);
+      Object.assign(chart, { title: cfg.title, type: cfg.type, source: cfg.source,
+                             bindings: cfg.bindings, agg: cfg.agg, filters: cfg.filters, options: cfg.options });
+      const rec = S.tiles[chart.id];
+      if (rec) {
+        rec.el.querySelector('.tt b').textContent = chart.title || '차트';
+        rec.el.querySelector('.tt span').textContent = chart.source;
+        plotRO.unobserve(rec.el.querySelector('.plot'));
+        if (rec.inst) { RENDER.dispose(rec.inst); rec.inst = null; }
+        loadTile(chart);
+      }
+      S.dirty = true;
+      toast('차트를 수정했습니다 — 레이아웃 저장으로 확정하세요');
+    }
+    CFG.dirty = false;
+    closeCfg();
+  } finally {
+    button.dataset.busy = '';
+    button.textContent = originalLabel;
+  }
 };
 
 /* ── 상단 동기화 표시 + 자동 갱신 ─────────────────────────── */
@@ -837,6 +1595,7 @@ async function boot() {
     staticGrid: true, animate: true,
   }, '#grid');
   S.grid = grid;
+  setSwitchBusy(true);
   grid.on('change', () => { if (S.edit) S.dirty = true; });
   grid.on('resizestop', (e, el) => {
     setTimeout(() => {
@@ -860,24 +1619,26 @@ async function boot() {
       const ok = await modal({ title: '변경 취소', desc: '저장하지 않은 배치/차트 변경을 되돌릴까요?', okLabel: '되돌리기', danger: true });
       if (!ok) return;
     }
-    exitEdit();
-    S.page = await API.page(S.pageId);
-    await renderPage();
+    await switchPage(S.pageId, { force: true });
   };
   $('btn-add-chart').onclick = () => openCfg('add');
-  $('add-page').onclick = async () => {
-    const name = await modal({ title: '레이아웃 추가', desc: '새 레이아웃 페이지 이름을 입력하세요.', input: '새 레이아웃', okLabel: '추가' });
-    if (!name) return;
-    const page = await API.createPage(name);
-    S.pages = await API.pages();
-    await switchPage(page.id);
-    enterEdit();
-    toast('빈 레이아웃입니다 — 차트 추가로 시작하세요');
+  $('add-page').onclick = addLayoutPageFlow;
+  $('mobile-add-page').onclick = addLayoutPageFlow;
+  $('mobile-page-menu').onclick = event => {
+    const index = S.pages.findIndex(page => page.id === S.pageId);
+    if (index < 0) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    pageCtx(
+      { preventDefault() {}, clientX: rect.right, clientY: rect.bottom },
+      S.pages[index],
+      index,
+    );
   };
 
   try {
     const [meta, srcs, pages] = await Promise.all([API.meta(), API.sources('all'), API.pages()]);
     S.meta = meta; S.sources = srcs.sources; S.pages = pages;
+    CFG.domain = meta.default_domain || 'all';
     RENDER.setMeta(meta);
     RECO.setMeta(meta);
     initAutoRefresh();
@@ -886,9 +1647,16 @@ async function boot() {
     const saved = urlPage || localStorage.getItem('charts.pageId');
     const first = pages.find(p => p.id === saved) ? saved : (pages[0] && pages[0].id);
     await switchPage(first || null, { force: true });
+    S.booting = false;
+    setSwitchBusy(false);
   } catch (err) {
     $('sync-note').textContent = 'API 연결 실패';
     $('pulse').className = 'pulse bad';
+    const empty = $('empty-board');
+    empty.hidden = false;
+    empty.innerHTML = `<div class="art">!</div><b>Charts Studio를 불러오지 못했습니다</b>
+      <p>${esc(err.message)}</p><button type="button" class="btn primary" id="boot-retry">다시 연결</button>`;
+    $('boot-retry').onclick = () => location.reload();
     toast('초기화 실패: ' + err.message);
   }
 }
@@ -898,9 +1666,34 @@ async function selftest() {
   const R = [];
   const ok = (name, cond) => R.push(`${cond ? 'PASS' : 'FAIL'} ${name}`);
   const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const waitFor = async (predicate, label, timeoutMs = 8000) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (predicate()) return;
+      await sleep(50);
+    }
+    throw new Error(`${label} 대기 시간 초과`);
+  };
+  const cleanup = {
+    originalPageId: S.pageId,
+    originalOrder: S.pages.map(page => page.id),
+    prefix: `__charts_selftest_${uid()}`,
+    tempIds: [],
+  };
   try {
     ok('pages loaded', S.pages.length >= 3);
-    await switchPage('seed-overview', { force: true });
+    const baseSummary = S.pages.find(page => page.id === 'seed-overview')
+      || S.pages.find(page => page.chart_count > 0);
+    if (!baseSummary) throw new Error('복제할 기준 레이아웃이 없습니다');
+    const basePage = await API.page(baseSummary.id);
+    const testPage = await API.createPage(cleanup.prefix);
+    cleanup.tempIds.push(testPage.id);
+    await API.patchPage(testPage.id, {
+      charts: JSON.parse(JSON.stringify(basePage.charts)),
+    });
+    S.pages = await API.pages();
+    ok('page created', S.pages.some(page => page.id === testPage.id));
+    await switchPage(testPage.id, { force: true });
     await sleep(4000);
     ok('tiles rendered', Object.keys(S.tiles).length === S.page.charts.length);
     ok('no tile errors', !document.querySelector('.tile-state.err'));
@@ -910,17 +1703,12 @@ async function selftest() {
     ok('edit mode grid unlocked', !S.grid.opts.staticGrid);
     const firstEl = S.grid.engine.nodes[0].el;
     const movedId = firstEl.dataset.chartId;
-    const before = JSON.stringify((S.page.charts.find(c => c.id === movedId) || {}).grid);
     S.grid.update(firstEl, { x: 6, y: 8 });
     ok('move marks dirty', S.dirty);
     await saveLayout();
     const reloaded = await API.page(S.pageId);
     const moved = reloaded.charts.find(c => c.id === movedId);
     ok('moved position persisted', moved && moved.grid.x === 6);
-    // 원복
-    enterEdit();
-    S.grid.update(firstEl, JSON.parse(before));
-    await saveLayout();
 
     // 차트 추가 → 저장 → 삭제 → 저장
     enterEdit();
@@ -934,20 +1722,15 @@ async function selftest() {
     enterEdit(); removeTile(chart.id); S.dirty = true; await saveLayout();
     ok('chart delete persisted', !(await API.page(S.pageId)).charts.some(c => c.id === chart.id));
 
-    // 레이아웃 페이지 CRUD + 순서변경
-    const p = await API.createPage('셀프테스트 페이지');
-    S.pages = await API.pages();
-    ok('page created', S.pages.some(x => x.id === p.id));
-    await API.patchPage(p.id, { name: '이름변경 확인' });
-    ok('page renamed', (await API.pages()).some(x => x.id === p.id && x.name === '이름변경 확인'));
+    // 임시 레이아웃 안에서 이름·순서 변경. 삭제와 원래 순서 복원은 finally가 책임진다.
+    await API.patchPage(testPage.id, { name: `${cleanup.prefix}_renamed` });
+    ok('page renamed', (await API.pages()).some(
+      page => page.id === testPage.id && page.name === `${cleanup.prefix}_renamed`
+    ));
     const ids = (await API.pages()).map(x => x.id);
-    [ids[0], ids[1]] = [ids[1], ids[0]];
-    const after = await API.reorderPages(ids);
-    ok('pages reordered', after[0].id === ids[0]);
-    [ids[0], ids[1]] = [ids[1], ids[0]];
-    await API.reorderPages(ids);
-    await API.deletePage(p.id);
-    ok('page deleted', !(await API.pages()).some(x => x.id === p.id));
+    const reorderedIds = [testPage.id, ...ids.filter(id => id !== testPage.id)];
+    const after = await API.reorderPages(reorderedIds);
+    ok('pages reordered', after[0].id === testPage.id);
     S.pages = await API.pages(); renderSidebar();
 
     // 온톨로지 폴백 — 사라진 필드는 같은 role 로 재바인딩
@@ -970,8 +1753,185 @@ async function selftest() {
     ok('reco prefers line for time source', recoFlow.line && recoFlow.line.score >= 3);
     ok('reco suggests race for time source', recoFlow.race && recoFlow.race.score >= 3
        && RECO.combos(flowSrc, 'race').length >= 1);
+
+    // 성격 급한 이용자 — 검색 입력이 첫 글자 뒤 DOM 교체로 포커스를 잃지 않아야 한다.
+    openCfg('add');
+    CFG.domain = 'all'; CFG.step = 'source'; renderCfg();
+    const search = $('src-q');
+    search.focus(); search.value = 'weather';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    ok('persona fast: source search keeps focus',
+       document.activeElement === search && [...document.querySelectorAll('.src-item')].some(el => !el.hidden));
+    CFG.dirty = false; closeCfg();
+
+    // 화가 많은 이용자 — 추천 카드를 hover한 채 클릭해도 body 툴팁이 남지 않아야 한다.
+    openCfg('add');
+    CFG.source = flowSrc.name; CFG.src = flowSrc; CFG.step = 'type'; renderCfg();
+    const recoCard = document.querySelector('.type-card.reco');
+    recoCard.dispatchEvent(new Event('pointerenter'));
+    const tipWasVisible = $('reco-tip') && $('reco-tip').classList.contains('on');
+    recoCard.click();
+    ok('persona angry: recommendation tooltip closes on transition',
+       tipWasVisible && !$('reco-tip').classList.contains('on') && CFG.step === 'bind');
+    CFG.dirty = false; closeCfg();
+
+    // 귀찮은 이용자 — 도메인→소스 클릭→실데이터 availability→도표 카드→
+    // 자동 바인딩→미리보기 렌더까지 실제 드로어 경로를 한 번에 통과해야 한다.
+    const domainCases = [
+      ['culture', 'gold_culture_activity_by_dong', 'line',
+       { axis: 'event_date', value: 'activities_count' }, 'sum'],
+      ['traffic', 'gold_traffic_incident_current_by_admin_dong_hourly', 'bar',
+       { axis: 'admin_dong', value: 'incident_count' }, 'sum'],
+      ['weather', 'gold_weather_daily_by_admin_dong', 'line',
+       { axis: 'forecast_date', value: 'temp_avg_c' }, 'avg'],
+      ['citydata', 'gold_citydata_ppltn_by_time', 'line',
+       { axis: 'event_at', value: 'avg_ppltn' }, 'avg'],
+      ['transit', 'gold_transit_dong_hourly', 'table',
+       { axis: 'admin_dong_code', value: 'subway_arrival_cnt' }, 'sum'],
+    ];
+    for (const [domain, sourceName, type, bindings, agg] of domainCases) {
+      openCfg('add');
+      CFG.domain = 'all'; CFG.step = 'source'; renderCfg();
+      const domainChip = [...document.querySelectorAll('.src-doms .chip')]
+        .find(element => element.dataset.d === domain);
+      if (!domainChip) throw new Error(`${domain} 도메인 선택지가 없습니다`);
+      domainChip.click();
+      const sourceButton = [...document.querySelectorAll('.src-item')]
+        .find(element => element.dataset.s === sourceName && !element.hidden);
+      if (!sourceButton) throw new Error(`${sourceName} 소스 선택지가 없습니다`);
+      sourceButton.click();
+      await waitFor(
+        () => CFG.source === sourceName && !!CFG.src && CFG.step === 'type',
+        `${domain} availability`,
+      );
+      const typeCard = [...document.querySelectorAll('.type-card')]
+        .find(element => element.dataset.t === type);
+      if (!typeCard) throw new Error(`${domain} ${type} 도표 선택지가 없습니다`);
+      typeCard.click();
+      const autoBound = Object.entries(bindings).every(
+        ([slot, field]) => CFG.bindings[slot] === field
+      ) && CFG.agg === agg;
+      const previewed = await runPreview();
+      const plot = document.querySelector('.preview-box .plot');
+      const rendered = type === 'table'
+        ? !!plot.querySelector('table')
+        : !!echarts.getInstanceByDom(plot);
+      ok(`persona lazy/domain ${domain}: one-flow preview`,
+         autoBound && previewed && rendered && availabilityFresh(CFG.src));
+      CFG.dirty = false;
+      closeCfg();
+    }
+
+    const transitSrc = S.srcDetails.gold_transit_dong_hourly;
+    const distinct = resolveBindings({
+      type: 'heatmap', source: transitSrc.name,
+      bindings: { x: 'hour_at', y: 'hour_at', value: 'bus_obs_cnt' }, agg: 'sum',
+    }, transitSrc);
+    ok('ontology prevents duplicate heatmap axes',
+       distinct.b.x !== distinct.b.y && distinct.b.y === 'admin_dong_code');
+    const overlapSrc = {
+      label: '겹치는 역할 테스트',
+      fields: [
+        { name: 'category', role: 'category', chartable: true },
+        { name: 'sequence', role: 'sequence', chartable: true },
+        { name: 'value', role: 'measure', chartable: true, allowed_aggs: ['sum'] },
+      ],
+    };
+    const overlap = resolveBindings({ type: 'heatmap', bindings: {}, agg: 'sum' }, overlapSrc);
+    ok('ontology backtracks overlapping slot roles',
+       overlap.b.x === 'sequence' && overlap.b.y === 'category' && overlap.b.value === 'value');
+
+    const sportsSrc = await API.source('gold_culture_sports_schedule');
+    const countChart = { type: 'race', source: sportsSrc.name,
+      bindings: { time: 'game_date', axis: 'stadium' }, agg: 'count', options: {} };
+    ok('count-only gold is chartable without fake value field',
+       sportsSrc.supports.includes('race') && !resolveBindings(countChart, sportsSrc).b.value);
+
+    // 레이스 컨트롤과 결측 보존은 외부 데이터와 무관한 결정론적 DOM 테스트.
+    const raceHost = document.createElement('div');
+    raceHost.className = 'preview-box';
+    raceHost.style.cssText = 'position:fixed;left:-2000px;top:0;width:520px;height:280px';
+    raceHost.innerHTML = '<div class="plot"></div>';
+    document.body.appendChild(raceHost);
+    const raceChart = { type: 'race', source: flowSrc.name,
+      bindings: { time: 'ym', axis: 'event_type', value: 'cnt' }, agg: 'sum',
+      options: { cumulative: false, top_n: 5, interval_ms: 200 } };
+    const raceInst = await RENDER.render(raceHost.querySelector('.plot'), {
+      el: raceHost, chart: raceChart, b: raceChart.bindings, src: flowSrc,
+      rows: [['2025-01', 'opened', 2], ['2025-01', 'closed', 1],
+             ['2025-02', 'opened', 3], ['2025-02', 'closed', 4],
+             ['2025-03', 'opened', 5]], cols: [], colLabels: {},
+    });
+    const raceControls = raceHost.querySelector('.race-controls');
+    if (RENDER.raceSnapshot(raceInst).playing) raceControls.querySelector('.race-toggle').click();
+    const beforeFrame = RENDER.raceSnapshot(raceInst).index;
+    raceControls.querySelector('.race-next').click();
+    const speedControl = raceControls.querySelector('.race-speed');
+    speedControl.value = '2'; speedControl.dispatchEvent(new Event('change'));
+    const raceState = RENDER.raceSnapshot(raceInst);
+    ok('race has play, frame and speed controls',
+       !!raceControls && !raceState.playing && raceState.speed === 2
+       && raceState.index === (beforeFrame + 1) % raceState.frameCount);
+    const cumulativeModel = RENDER.buildRaceModel({
+      chart: { ...raceChart, options: { ...raceChart.options, cumulative: true } },
+      b: raceChart.bindings, src: flowSrc,
+      rows: [['2025-01', 'opened', 2], ['2025-02', 'opened', 3]],
+    });
+    ok('race cumulative frames start from zero and accumulate',
+       cumulativeModel.frames[0].rows[0][1] === 2
+       && cumulativeModel.frames[1].rows[0][1] === 5);
+    const defaultRaceModel = RENDER.buildRaceModel({
+      chart: { ...raceChart, options: {} },
+      b: raceChart.bindings, src: flowSrc,
+      rows: [['2025-01', 'opened', 2], ['2025-02', 'opened', 3]],
+    });
+    ok('race without an option stays non-cumulative',
+       defaultRaceModel.cumulative === false
+       && defaultRaceModel.frames[1].rows[0][1] === 3);
+    RENDER.dispose(raceInst);
+    ok('race dispose clears controls and timer', !raceHost.querySelector('.race-controls'));
+    raceHost.remove();
+
+    const nullHost = document.createElement('div');
+    nullHost.style.cssText = 'position:fixed;left:-2000px;top:0;width:400px;height:220px';
+    document.body.appendChild(nullHost);
+    const nullChart = { type: 'line', source: flowSrc.name,
+      bindings: { axis: 'ym', value: 'cnt' }, agg: 'sum', options: {} };
+    const nullInst = await RENDER.render(nullHost, {
+      el: nullHost, chart: nullChart, b: nullChart.bindings, src: flowSrc,
+      rows: [['2025-01', null], ['2025-02', 4]], cols: [], colLabels: {},
+    });
+    ok('missing values stay null instead of zero', nullInst.getOption().series[0].data[0] == null);
+    RENDER.dispose(nullInst); nullHost.remove();
   } catch (err) {
     R.push('FAIL exception: ' + err.message);
+  } finally {
+    try {
+      CFG.dirty = false;
+      if (CFG.open) closeCfg();
+      if (S.edit) exitEdit();
+      const beforeCleanup = await API.pages();
+      const original = beforeCleanup.find(page => page.id === cleanup.originalPageId);
+      if (original) await switchPage(original.id, { force: true });
+      const disposable = beforeCleanup.filter(page =>
+        cleanup.tempIds.includes(page.id) || page.name.startsWith(cleanup.prefix));
+      for (const page of disposable) {
+        try { await API.deletePage(page.id); } catch { /* 다음 목록 검사에서 실패를 드러낸다 */ }
+      }
+      let remaining = await API.pages();
+      const remainingIds = new Set(remaining.map(page => page.id));
+      const restored = cleanup.originalOrder.filter(id => remainingIds.has(id));
+      const extras = remaining.map(page => page.id).filter(id => !restored.includes(id));
+      if (restored.length + extras.length === remaining.length) {
+        remaining = await API.reorderPages([...restored, ...extras]);
+      }
+      S.pages = remaining;
+      renderSidebar();
+      ok('page deleted', !remaining.some(page =>
+        cleanup.tempIds.includes(page.id) || page.name.startsWith(cleanup.prefix)));
+    } catch (cleanupError) {
+      R.push('FAIL cleanup: ' + cleanupError.message);
+    }
   }
   const div = document.createElement('div');
   div.id = 'selftest';
@@ -981,7 +1941,7 @@ async function selftest() {
   document.title = R.every(r => r.startsWith('PASS')) ? 'SELFTEST_ALL_PASS' : 'SELFTEST_FAIL';
 }
 
-boot().then(async () => {
+AuthUI.bootstrapProtected().then(boot).then(async () => {
   const q = new URLSearchParams(location.search);
   if (q.get('selftest') === '1') selftest();
   if (q.get('uidemo')) {           // 개발/검증용: 편집모드·드로어를 열어둔 상태로 진입

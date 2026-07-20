@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>운영 콘솔 · ASK SEOUL</title>
+  <link rel="stylesheet" href="/static/auth/auth.css">
+</head>
+<body>
+<div class="console">
+  <aside class="console-side">
+    <a class="brand" href="/"><span class="brand-mark">AS</span>ASK SEOUL</a>
+    <div class="console-profile"><span class="avatar-lg" id="side-avatar">AS</span><b id="side-nickname">불러오는 중</b><span id="side-identity">권한 확인 중</span></div>
+    <nav class="console-nav" id="admin-nav">
+      <a href="#users" data-tab="users" data-page-key="admin_users">회원 관리</a>
+      <a href="#access" data-tab="access" data-page-key="admin_access">접근 관리</a>
+      <a href="#payments" data-tab="payments" data-page-key="admin_payments">결제 승인</a>
+      <a href="#policies" data-tab="policies" data-page-key="admin_policies">정책·IP</a>
+      <a href="#audit" data-tab="audit" data-page-key="admin_audit">감사 로그</a>
+      <a href="/catalog" data-page-key="catalog">데이터 마켓플레이스</a>
+      <a href="/charts" data-page-key="charts">Charts Studio</a>
+      <a href="/profile">내 프로필</a>
+    </nav>
+    <button class="btn logout" type="button" data-logout>로그아웃</button>
+  </aside>
+  <main class="console-main">
+    <header class="console-top"><h1>회원·권한 운영 콘솔</h1><span class="right">모든 변경은 감사 로그에 기록됩니다.</span></header>
+    <div class="console-body">
+      <div id="message" class="message info" hidden></div>
+
+      <section class="section admin-panel" id="panel-users">
+        <h2>회원 관리</h2><p class="desc">승인 대기 회원을 활성화하고 역할·이용권·개별 페이지 권한을 관리합니다.</p>
+        <div class="toolbar">
+          <select id="user-status"><option value="">전체 상태</option><option value="pending">승인 대기</option><option value="active">활성</option><option value="suspended">정지</option><option value="rejected">거절</option></select>
+          <input id="user-search" type="search" placeholder="이메일·닉네임·UUID 검색">
+          <button class="btn" id="refresh-users" type="button">새로고침</button>
+        </div>
+        <div class="table-wrap"><table><thead><tr><th>회원</th><th>ID</th><th>역할</th><th>상태</th><th>이메일 인증</th><th>이용권 종료</th><th>관리</th></tr></thead><tbody id="users-body"></tbody></table></div>
+        <div class="toolbar"><button class="btn" id="load-more-users" type="button" hidden>회원 더 보기</button></div>
+      </section>
+
+      <section class="section admin-panel" id="panel-access" hidden>
+        <h2>역할 기본 접근</h2><p class="desc">역할별 초기 접근 영역입니다. 사용자별 override가 있으면 override가 우선합니다.</p>
+        <div id="access-matrix" class="table-wrap"></div>
+      </section>
+
+      <section class="section admin-panel" id="panel-payments" hidden>
+        <h2>모의 결제 승인</h2><p class="desc">승인 시 선택 요금제 기간만큼 현재 이용권 종료일 뒤에 연장됩니다.</p>
+        <div class="toolbar"><select id="payment-status"><option value="pending">승인 대기</option><option value="approved">승인됨</option><option value="rejected">거절됨</option></select><button class="btn" id="refresh-payments" type="button">새로고침</button></div>
+        <div class="table-wrap"><table><thead><tr><th>요청일</th><th>회원</th><th>요금제</th><th>상태</th><th>알림</th><th>처리</th></tr></thead><tbody id="payments-body"></tbody></table></div>
+      </section>
+
+      <section class="section admin-panel" id="panel-policies" hidden>
+        <h2>공통·역할·개인 정책</h2><p class="desc">낮은 priority부터 병합되며 사용자 정책이 최종 override 역할을 합니다.</p>
+        <form id="policy-form" class="form">
+          <div class="grid-3">
+            <div class="field"><label>정책명</label><input name="name" required maxlength="100"></div>
+            <div class="field"><label>유형</label><select name="policy_type"><option value="ontology">ontology</option><option value="request_limit">request_limit</option></select></div>
+            <div class="field"><label>범위</label><select name="scope_type"><option value="role">role</option><option value="user">user</option><option value="system">system</option></select></div>
+            <div class="field"><label>역할</label><select name="scope_role"><option value="">선택 안 함</option><option value="guest">게스트</option><option value="member">일반회원</option><option value="operator">운영자</option><option value="admin">최고관리자</option></select></div>
+            <div class="field"><label>사용자 UUID</label><input name="scope_user_public_id" placeholder="user 범위일 때"></div>
+            <div class="field"><label>우선순위</label><input name="priority" type="number" min="0" max="10000" value="100"></div>
+          </div>
+          <div class="field"><label>정책 JSON</label><textarea name="config" required>{"hidden_chart_types":[]}</textarea></div>
+          <button class="btn primary" type="submit">정책 추가</button>
+        </form>
+        <div class="table-wrap"><table><thead><tr><th>정책</th><th>유형/범위</th><th>우선순위</th><th>설정</th><th>상태</th></tr></thead><tbody id="policies-body"></tbody></table></div>
+
+        <div id="ip-section" data-admin-only>
+          <h2 style="margin-top:24px">IP/CIDR 차단</h2><p class="desc">앱 단일 인스턴스의 보조 방어입니다. 운영 환경의 주 방어는 WAF/Edge에서 구성하세요.</p>
+          <form id="ip-form" class="toolbar"><input name="network" placeholder="203.0.113.4 또는 203.0.113.0/24" required><input name="reason" placeholder="차단 사유"><button class="btn primary" type="submit">차단 추가</button></form>
+          <div class="table-wrap"><table><thead><tr><th>네트워크</th><th>사유</th><th>만료</th><th>상태</th><th>관리</th></tr></thead><tbody id="ip-body"></tbody></table></div>
+        </div>
+      </section>
+
+      <section class="section admin-panel" id="panel-audit" hidden>
+        <h2>보안·관리 감사 로그</h2><p class="desc">로그인 실패, 세션, MFA, 회원·권한·정책·결제 변경 이벤트를 최신순으로 조회합니다.</p>
+        <div class="toolbar">
+          <input id="audit-event-type" placeholder="이벤트 유형 정확히 입력">
+          <button class="btn" id="refresh-audit" type="button">조회</button>
+        </div>
+        <div class="table-wrap"><table><thead><tr><th>시각</th><th>이벤트</th><th>행위자</th><th>대상</th><th>IP 지문</th><th>상세</th></tr></thead><tbody id="audit-body"></tbody></table></div>
+        <div class="toolbar"><button class="btn" id="load-more-audit" type="button" hidden>이전 기록 더 보기</button></div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<div id="user-modal" class="modal-wrap" hidden>
+  <section class="modal" role="dialog" aria-modal="true" aria-labelledby="user-modal-heading">
+    <h3 id="user-modal-heading">회원 권한·상태 변경</h3>
+    <p class="desc" id="user-modal-title"></p>
+    <form id="user-form" class="form">
+      <input name="public_id" type="hidden">
+      <div class="grid-2">
+        <div class="field"><label>역할</label><select name="role"><option value="guest">게스트</option><option value="member">일반회원</option><option value="operator">운영자</option><option value="admin">최고관리자</option></select></div>
+        <div class="field"><label>상태</label><select name="status"><option value="pending">승인 대기</option><option value="active">활성</option><option value="suspended">정지</option><option value="rejected">거절</option></select></div>
+      </div>
+      <div class="field"><label>이용권 종료일</label><input name="membership_ends_at" type="datetime-local"><span class="hint">비워서 저장하면 이용권 종료일을 해제합니다.</span></div>
+      <div class="field"><label>회원 UUID</label><div class="secret-box"><code id="user-public-id"></code><button class="btn" id="copy-user-id" type="button">UUID 복사</button></div></div>
+      <div class="field" id="mfa-admin-reset" hidden>
+        <label for="mfa-admin-reset-reason">MFA 긴급 초기화</label>
+        <span class="hint" id="mfa-admin-reset-status"></span>
+        <input id="mfa-admin-reset-reason" maxlength="500" placeholder="본인 확인 방법과 초기화 사유를 10자 이상 기록">
+        <button class="btn danger" id="mfa-admin-reset-button" type="button">MFA·복구코드·세션 초기화</button>
+        <span class="hint">게스트·일반회원만 화면에서 초기화할 수 있습니다. 권한 계정은 운영 CLI break-glass 절차를 사용합니다.</span>
+      </div>
+      <div class="field"><label>개별 페이지 override</label><div id="user-permissions" class="grid-2"></div><span class="hint">역할 기본값을 상속하거나 사용자별로 허용/차단할 수 있습니다.</span></div>
+      <div class="actions"><button class="btn" type="button" data-close-user>취소</button><button class="btn primary" type="submit">변경 저장</button></div>
+    </form>
+  </section>
+</div>
+
+<div id="review-modal" class="modal-wrap" hidden>
+  <section class="modal" role="dialog" aria-modal="true" aria-labelledby="review-modal-heading">
+    <h3 id="review-modal-heading">결제 요청 검토</h3>
+    <p class="desc" id="review-modal-summary"></p>
+    <form id="review-form" class="form">
+      <input name="request_id" type="hidden">
+      <input name="approve" type="hidden">
+      <div class="field"><label for="review-note">검토 메모</label><textarea id="review-note" name="note" maxlength="500"></textarea><span class="hint" id="review-note-hint">거절 시 사유를 입력해야 합니다.</span></div>
+      <div class="actions"><button class="btn" type="button" data-close-review>취소</button><button class="btn primary" id="submit-review" type="submit">처리</button></div>
+    </form>
+  </section>
+</div>
+
+<script src="/static/auth/session-ui.js"></script>
+<script src="/static/auth/admin.js"></script>
+</body>
+</html>

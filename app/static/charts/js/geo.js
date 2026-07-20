@@ -78,7 +78,8 @@ const GEO = (() => {
     let matched = 0, ambiguous = 0;
     rows.forEach(([region, value]) => {
       const key = String(region ?? '');
-      if (!key || key === 'UNK') return;
+      const numeric = value == null || value === '' ? null : Number(value);
+      if (!key || key === 'UNK' || !Number.isFinite(numeric)) return;
       let name = null;
       if (byCode) {
         if (g.conf.codeLen) name = g.codeToName[key.slice(0, g.conf.codeLen)];
@@ -89,7 +90,7 @@ const GEO = (() => {
       }
       if (!name) return;
       matched++;
-      agg[name] = (agg[name] || 0) + (Number(value) || 0);
+      agg[name] = (agg[name] || 0) + numeric;
     });
     return {
       data: Object.entries(agg).map(([name, value]) => ({ name, value })),

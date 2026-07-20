@@ -1,0 +1,16 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>회원가입 · ASK SEOUL</title><link rel="stylesheet" href="/static/auth/auth.css"></head>
+<body><div class="auth-page"><nav class="auth-nav"><a class="brand" href="/"><span class="brand-mark">AS</span>ASK SEOUL</a>
+<div class="right"><a href="/auth/login">로그인</a></div></nav>
+<main class="auth-main"><section class="auth-card"><div class="eyebrow">Account request</div><h1>회원가입</h1>
+<p class="lead">이메일 인증이 설정된 환경은 인증 후 활성화됩니다. 미설정 환경은 관리자 승인 대기 목록에 등록됩니다.</p>
+<div id="message" class="message info" hidden></div>
+<form id="register-form" class="form"><div class="field"><label for="email">이메일</label><input id="email" name="email" type="email" autocomplete="email" required></div>
+<div class="field"><label for="password">비밀번호</label><input id="password" name="password" type="password" autocomplete="new-password" maxlength="128" required>
+<span class="hint">15~128자. 이메일 아이디와 널리 사용되는 비밀번호는 사용할 수 없습니다.</span></div>
+<div class="field"><label for="password-confirm">비밀번호 확인</label><input id="password-confirm" name="password_confirm" type="password" autocomplete="new-password" maxlength="128" required></div>
+<label class="check"><input name="agree" type="checkbox">서비스 <a href="/legal/terms" target="_blank" rel="noopener noreferrer">이용약관</a>과 <a href="/legal/privacy" target="_blank" rel="noopener noreferrer">개인정보 처리 안내</a>에 동의합니다.</label>
+<button class="btn primary" type="submit">가입 요청</button></form>
+<div class="auth-links"><a href="/auth/resend-verification">인증 메일 다시 받기</a><a href="/auth/login">이미 계정이 있습니다</a></div>
+</section></main><footer class="auth-foot">가입 시 중복되지 않는 임시 닉네임이 자동 부여됩니다.</footer></div>
+<script src="/static/auth/session-ui.js"></script><script src="/static/auth/auth-pages.js"></script><script>setupRegister()</script></body></html>

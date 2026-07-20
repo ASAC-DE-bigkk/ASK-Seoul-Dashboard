@@ -1,0 +1,11 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>인증 메일 재전송 · ASK SEOUL</title><link rel="stylesheet" href="/static/auth/auth.css"></head>
+<body><div class="auth-page"><nav class="auth-nav"><a class="brand" href="/"><span class="brand-mark">AS</span>ASK SEOUL</a></nav>
+<main class="auth-main"><section class="auth-card"><div class="eyebrow">Verify email</div><h1>인증 메일 다시 받기</h1>
+<p class="lead">가입 계정 존재 여부는 표시하지 않습니다. 인증이 필요한 계정에만 새 링크가 발송됩니다.</p>
+<div id="message" class="message info" hidden role="status" aria-live="polite"></div>
+<form id="resend-form" class="form"><div class="field"><label for="email">가입 이메일</label><input id="email" name="email" type="email" autocomplete="email" required></div>
+<button class="btn primary" type="submit">인증 메일 요청</button></form>
+<div class="auth-links"><a href="/auth/register">회원가입</a><a href="/auth/login">로그인</a></div>
+</section></main><footer class="auth-foot">여러 번 요청하면 이전 인증 링크는 폐기되고 최신 링크만 유효합니다.</footer></div>
+<script src="/static/auth/session-ui.js"></script><script src="/static/auth/auth-pages.js"></script><script>setupResendVerification()</script></body></html>

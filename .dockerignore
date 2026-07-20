@@ -1,0 +1,14 @@
+.git
+.github
+.venv
+.pytest_cache
+__pycache__
+*.py[cod]
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+data/
+app/charts/data/cache/
+app/charts/data/*.tmp

@@ -1,0 +1,109 @@
+x-dashboard-runtime: &dashboard-runtime
+  image: ${IMAGE_REF:?IMAGE_REF is required}
+  env_file:
+    - ${RUNTIME_ENV_FILE:?RUNTIME_ENV_FILE is required}
+  environment:
+    PYTHONDONTWRITEBYTECODE: "1"
+    PYTHONUNBUFFERED: "1"
+  init: true
+  read_only: true
+  volumes:
+    - auth_data:/app/data
+    - chart_cache:/app/app/charts/data/cache
+    - ./certificates:/run/certificates:ro
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=64m
+  extra_hosts:
+    - host.docker.internal:host-gateway
+  networks:
+    - dashboard
+  depends_on:
+    postgres:
+      condition: service_healthy
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  pids_limit: ${DASHBOARD_PIDS_LIMIT:-256}
+  mem_limit: ${DASHBOARD_MEMORY_LIMIT:-1g}
+  cpus: ${DASHBOARD_CPUS:-1.0}
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "5"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    volumes:
+      - auth_postgres:/var/lib/postgresql/data
+    shm_size: 256m
+    networks:
+      - dashboard
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+  dashboard:
+    <<: *dashboard-runtime
+    command:
+      - sh
+      - -c
+      - exec uvicorn app.main:app --host 0.0.0.0 --port 8765 --workers "$${UVICORN_WORKERS:-1}"
+    restart: unless-stopped
+    ports:
+      - ${DASHBOARD_BIND_HOST:-127.0.0.1}:${DASHBOARD_PORT:-8765}:8765
+    stop_grace_period: 30s
+
+  notification-worker:
+    <<: *dashboard-runtime
+    healthcheck:
+      disable: true
+    command:
+      - sh
+      - -c
+      - |
+        while true; do
+          python scripts/process_notifications.py \
+            --limit "$${NOTIFICATION_BATCH_SIZE:-100}" \
+            --stale-minutes "$${NOTIFICATION_STALE_MINUTES:-5}"
+          sleep "$${NOTIFICATION_INTERVAL_SECONDS:-60}"
+        done
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  migrate:
+    <<: *dashboard-runtime
+    healthcheck:
+      disable: true
+    command: ["python", "scripts/init_auth_db.py"]
+    restart: "no"
+    profiles:
+      - tools
+
+volumes:
+  auth_data:
+  auth_postgres:
+  chart_cache:
+
+networks:
+  dashboard:

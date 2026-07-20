@@ -3,28 +3,30 @@
 
 const API = (() => {
   const BASE = '/api/v1/charts';
+  let querySchedule = Promise.resolve();
+  let nextQueryAt = 0;
 
   async function call(path, opts = {}) {
-    const res = await fetch(BASE + path, {
-      headers: { 'content-type': 'application/json' },
-      ...opts,
+    return AuthUI.api(BASE + path, opts);
+  }
+
+  function query(spec) {
+    const start = querySchedule.then(async () => {
+      const wait = Math.max(0, nextQueryAt - Date.now());
+      if (wait) await new Promise(resolve => setTimeout(resolve, wait));
+      nextQueryAt = Date.now() + 150;
     });
-    if (res.status === 204) return null;
-    const body = await res.json().catch(() => null);
-    if (!res.ok) {
-      const detail = body && (body.detail || body.title) || `HTTP ${res.status}`;
-      const err = new Error(detail);
-      err.status = res.status;
-      throw err;
-    }
-    return body;
+    querySchedule = start.catch(() => {});
+    return start.then(() =>
+      call('/query', { method: 'POST', body: JSON.stringify(spec) }));
   }
 
   return {
     meta: () => call('/meta'),
     sources: (domain = 'all') => call(`/sources?domain=${encodeURIComponent(domain)}`),
     source: name => call(`/sources/${encodeURIComponent(name)}`),
-    query: spec => call('/query', { method: 'POST', body: JSON.stringify(spec) }),
+    availability: name => call(`/sources/${encodeURIComponent(name)}/availability`),
+    query,
     pages: () => call('/layouts'),
     page: id => call(`/layouts/${id}`),
     createPage: name => call('/layouts', { method: 'POST', body: JSON.stringify({ name }) }),
