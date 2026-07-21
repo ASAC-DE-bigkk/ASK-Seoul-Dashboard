@@ -40,7 +40,7 @@ MAX_SAMPLE_TEXT = 120  # 샘플 셀 문자열 절단 길이 (UI 가독성)
 # citydata_serving_export DAG 가 D1 에 올린 골드 = 카탈로그 화면에서 '실데이터 조회' 링크를
 # 걸 대상. 목록의 정본은 그 DAG(FAST_TABLES+DAILY_TABLES) — 여기 12종은 그 사본이다.
 # by_time(서빙 보류)·hourly 3종·demographics 는 아직 미적재(다음 확장 시 목록에 추가).
-SERVING_API_BASE = "https://ask-seoul-citydata-api.ask-seoul.workers.dev"
+SERVING_API_BASE = "https://ask-seoul-citydata-api.dy950328.workers.dev"
 SERVED_TABLES = {
     "gold_citydata_place_latest", "gold_citydata_place_scorecard", "gold_citydata_hot_commerce",
     "gold_citydata_ppltn_trend", "gold_citydata_ppltn_anomaly", "gold_citydata_ppltn_forecast",
