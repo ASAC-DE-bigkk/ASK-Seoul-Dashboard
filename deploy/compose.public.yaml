@@ -1,0 +1,39 @@
+services:
+  dashboard:
+    environment:
+      AUTH_PUBLIC_BASE_URL: ${AUTH_PUBLIC_BASE_URL:?AUTH_PUBLIC_BASE_URL is required when compose.public.yaml is used}
+      AUTH_ALLOWED_HOSTS: ${AUTH_ALLOWED_HOSTS:?AUTH_ALLOWED_HOSTS is required when compose.public.yaml is used}
+      AUTH_COOKIE_SECURE: "true"
+      AUTH_TRUST_PROXY_HEADERS: "true"
+      AUTH_REQUIRE_MFA_FOR_PRIVILEGED: "true"
+      AUTH_AUTO_APPROVE_VERIFIED: "false"
+      HEALTHCHECK_HOST: ${PUBLIC_HOST:?PUBLIC_HOST is required when compose.public.yaml is used}
+
+  edge-proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      dashboard:
+        condition: service_started
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - edge_proxy_data:/data
+      - edge_proxy_config:/config
+    networks:
+      - dashboard
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+volumes:
+  edge_proxy_data:
+  edge_proxy_config:
