@@ -18,6 +18,8 @@ FastAPI로 서빙한다.
 3. [docs/README.md](docs/README.md)
 4. 작업 종류에 따라:
    - Charts Studio 코드/UX: [docs/charts-design-intents.md](docs/charts-design-intents.md)
+   - 로컬 분석 실행(사람): [docs/local-analysis-human-guide.md](docs/local-analysis-human-guide.md)
+   - 로컬 분석 준비·검증(AI): [docs/local-analysis-agent-runbook.md](docs/local-analysis-agent-runbook.md)
    - 실행·장애·환경: [docs/operations.md](docs/operations.md)
    - 서버 배포 전체 순서(사람): [docs/deployment/end-to-end-human-runbook.md](docs/deployment/end-to-end-human-runbook.md)
    - 서버 배포(사람): [docs/deployment/server-setup-human.md](docs/deployment/server-setup-human.md)
@@ -185,6 +187,8 @@ dashboard/
 └─ docs/
    ├─ HERITAGE.md                  # 역사·불변식·확장법 정본
    ├─ README.md                    # 문서 인덱스
+   ├─ local-analysis-human-guide.md # 팀원 로컬 분석 순차 실행서
+   ├─ local-analysis-agent-runbook.md # AI용 권한 경계·검증 계약
    ├─ deployment/                  # 사람용 서버 준비 + 서버 AI용 안전 runbook
    ├─ charts-design-intents.md     # 설계 의도 A~F
    ├─ charts-user-guide.md
@@ -279,6 +283,11 @@ dashboard/
 - 로그·예외·캐시·레이아웃·스냅샷에 API 키, 인증 헤더, DSN 비밀번호를 남기지 않는다.
 - 새 시크릿은 환경변수로 주입하고 실제 값은 커밋하지 않는다.
 - 인증/권한은 UI 숨김이 아니라 전역 미들웨어와 API 의존성에서 매 요청마다 강제한다.
+- 팀원 로컬 분석 편의는 `AUTH_MODE=local_auto`로만 제공한다. 이 모드는 development +
+  loopback HTTP + loopback Host + SQLite + proxy header 미신뢰 조건을 모두 만족해야 하며,
+  자동 생성된 일반 회원의 정상 DB 세션·CSRF·사용자별 레이아웃 계약을 그대로 사용한다.
+- 배포 dev와 main은 모두 `AUTH_MODE=required`를 사용한다. 브랜치 이름이나
+  `AUTH_ENV != production`만으로 인증을 우회하지 않는다.
 - 역할 기본 권한과 사용자별 allow/deny override를 분리하고, 운영자는 자신보다 낮은 역할만 관리한다.
 - 세션 원문·CSRF 원문·비밀번호 원문은 DB/로그에 저장하지 않는다.
 - 인증·정책·RDB 변경은 `docs/additional_doc/`의 해당 운영 문서를 같은 변경에서 갱신한다.

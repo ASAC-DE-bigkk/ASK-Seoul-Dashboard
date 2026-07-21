@@ -171,6 +171,7 @@ class AuthSecurityMiddleware(BaseHTTPMiddleware):
         request.state.user_agent_hash = ua_hash
         request.state.user = None
         request.state.auth_session = None
+        request.state.local_session_credentials = None
 
         database = request.app.state.database
         try:
@@ -190,8 +191,32 @@ class AuthSecurityMiddleware(BaseHTTPMiddleware):
                     request.state.auth_session = auth_session
                     request.state.user = user
 
+                page_key = page_key_for_path(request.url.path)
+                if current is None and self._should_auto_login(
+                    request, client_ip, page_key
+                ):
+                    user = auth.ensure_local_analyst()
+                    token, csrf, _expires = auth.create_session(
+                        user,
+                        remember=False,
+                        ip_hash=ip_hash,
+                        user_agent_hash=ua_hash,
+                    )
+                    db.flush()
+                    current = auth.current_session(
+                        token,
+                        ip_hash=ip_hash,
+                        user_agent_hash=ua_hash,
+                    )
+                    if current is None:
+                        raise RuntimeError("로컬 분석 세션을 생성할 수 없습니다.")
+                    auth_session, user = current
+                    request.state.auth_session = auth_session
+                    request.state.user = user
+                    request.state.local_session_credentials = (token, csrf)
+
                 rate_response = await self._rate_limit(
-                    db, request, user if current else None, client_ip
+                    db, request, request.state.user, client_ip
                 )
                 if rate_response:
                     return self._secure(rate_response, request)
@@ -201,7 +226,6 @@ class AuthSecurityMiddleware(BaseHTTPMiddleware):
                     if csrf_response:
                         return self._secure(csrf_response, request)
 
-                page_key = page_key_for_path(request.url.path)
                 if page_key:
                     if request.state.user is None:
                         return self._secure(self._unauthenticated(request), request)
@@ -237,6 +261,18 @@ class AuthSecurityMiddleware(BaseHTTPMiddleware):
                 request,
             )
         return self._secure(response, request)
+
+    def _should_auto_login(
+        self, request: Request, client_ip: str, page_key: str | None
+    ) -> bool:
+        if not self.settings.local_auto or request.method not in {"GET", "HEAD"}:
+            return False
+        if page_key is None and request.url.path != "/api/v1/auth/session":
+            return False
+        try:
+            return ipaddress.ip_address(client_ip).is_loopback
+        except ValueError:
+            return False
 
     def _client_ip(self, request: Request) -> str:
         direct = request.client.host if request.client else "0.0.0.0"
@@ -335,6 +371,27 @@ class AuthSecurityMiddleware(BaseHTTPMiddleware):
         return problem(403, "forbidden", "이 영역에 접근할 권한이 없습니다.")
 
     def _secure(self, response: Response, request: Request) -> Response:
+        local_credentials = getattr(
+            request.state, "local_session_credentials", None
+        )
+        if local_credentials:
+            token, csrf = local_credentials
+            response.set_cookie(
+                self.settings.cookie_name,
+                token,
+                path="/",
+                secure=self.settings.cookie_secure,
+                httponly=True,
+                samesite="lax",
+            )
+            response.set_cookie(
+                self.settings.csrf_cookie_name,
+                csrf,
+                path="/",
+                secure=self.settings.cookie_secure,
+                httponly=False,
+                samesite="lax",
+            )
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")

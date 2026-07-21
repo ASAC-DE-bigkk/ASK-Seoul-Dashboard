@@ -72,6 +72,7 @@ def _host_allowed(hostname: str, allowed_hosts: tuple[str, ...]) -> bool:
 @dataclass(frozen=True)
 class AuthSettings:
     env: str
+    mode: str
     database_url: str
     public_base_url: str
     allowed_hosts: tuple[str, ...]
@@ -100,6 +101,10 @@ class AuthSettings:
     def production(self) -> bool:
         return self.env == "production"
 
+    @property
+    def local_auto(self) -> bool:
+        return self.mode == "local_auto"
+
 
 def load_settings() -> AuthSettings:
     env = os.environ.get("AUTH_ENV", "development").strip().lower()
@@ -107,6 +112,9 @@ def load_settings() -> AuthSettings:
         raise RuntimeError(
             "AUTH_ENV는 development, test, production 중 하나여야 합니다."
         )
+    mode = os.environ.get("AUTH_MODE", "required").strip().lower()
+    if mode not in {"required", "local_auto"}:
+        raise RuntimeError("AUTH_MODE는 required 또는 local_auto여야 합니다.")
     production = env == "production"
     pepper = os.environ.get("AUTH_SESSION_PEPPER", "").strip()
     if not pepper:
@@ -191,6 +199,37 @@ def load_settings() -> AuthSettings:
         parsed_database_url = make_url(database_url)
     except ArgumentError as exc:
         raise RuntimeError("DATABASE_URL 형식이 올바르지 않습니다.") from exc
+    trusted_proxy_headers = _bool("AUTH_TRUST_PROXY_HEADERS", False)
+    if mode == "local_auto":
+        loopback_hosts = {"127.0.0.1", "localhost", "::1"}
+        if env != "development":
+            raise RuntimeError(
+                "AUTH_MODE=local_auto는 AUTH_ENV=development에서만 사용할 수 있습니다."
+            )
+        if public_url.scheme != "http" or public_url.hostname not in loopback_hosts:
+            raise RuntimeError(
+                "AUTH_MODE=local_auto의 AUTH_PUBLIC_BASE_URL은 loopback HTTP origin이어야 합니다."
+            )
+        if any(host not in loopback_hosts for host in effective_allowed):
+            raise RuntimeError(
+                "AUTH_MODE=local_auto의 AUTH_ALLOWED_HOSTS에는 loopback host만 허용됩니다."
+            )
+        if trusted_proxy_headers:
+            raise RuntimeError(
+                "AUTH_MODE=local_auto에서는 AUTH_TRUST_PROXY_HEADERS=false가 필수입니다."
+            )
+        if parsed_database_url.get_backend_name() != "sqlite":
+            raise RuntimeError(
+                "AUTH_MODE=local_auto는 로컬 SQLite DATABASE_URL에서만 사용할 수 있습니다."
+            )
+        if cookie_secure:
+            raise RuntimeError(
+                "AUTH_MODE=local_auto에서는 AUTH_COOKIE_SECURE=false가 필수입니다."
+            )
+        if bootstrap_admin_email:
+            raise RuntimeError(
+                "AUTH_MODE=local_auto에서는 bootstrap 관리자 자격증명을 사용할 수 없습니다."
+            )
     if production:
         backend = parsed_database_url.get_backend_name()
         query = parsed_database_url.query
@@ -214,6 +253,7 @@ def load_settings() -> AuthSettings:
                 )
     return AuthSettings(
         env=env,
+        mode=mode,
         database_url=database_url,
         public_base_url=public_base_url,
         allowed_hosts=effective_allowed,
@@ -229,7 +269,7 @@ def load_settings() -> AuthSettings:
         reset_token_minutes=max(5, _int("AUTH_RESET_TOKEN_MINUTES", 30)),
         verify_token_hours=max(1, _int("AUTH_VERIFY_TOKEN_HOURS", 24)),
         auto_approve_verified=_bool("AUTH_AUTO_APPROVE_VERIFIED", True),
-        trusted_proxy_headers=_bool("AUTH_TRUST_PROXY_HEADERS", False),
+        trusted_proxy_headers=trusted_proxy_headers,
         bind_session_user_agent=_bool("AUTH_BIND_SESSION_USER_AGENT", True),
         bind_session_ip=_bool("AUTH_BIND_SESSION_IP", False),
         mfa_master_key=mfa_master_key,

@@ -33,6 +33,8 @@ Charts Studio 가 라이브 질의를 갖는 이유: 사용자가 소스·차원
 - **데이터 규정(상위 커머스 번들 계승)**: 원본 값을 파괴하지 않는다 — 코드값은 표시 라벨로만 번역하고,
   집계·필터는 재현 가능해야 한다(응답에 SQL 포함). 시크릿을 코드·로그·커밋에 넣지 않는다.
 - **문서 체인**: [docs/README.md](README.md)(인덱스) → [operations.md](operations.md)(기동/중지) ·
+  [local-analysis-human-guide.md](local-analysis-human-guide.md)(팀원 로컬 분석 정본) ·
+  [local-analysis-agent-runbook.md](local-analysis-agent-runbook.md)(AI 권한 경계·검증) ·
   [deployment/README.md](deployment/README.md)(사람/AI 서버 배포 문서 분리) ·
   [maintanance/README.md](maintanance/README.md)(개발 실행·최초 접속·운영 원칙) ·
   [charts-user-guide.md](charts-user-guide.md)(사용법) · [charts-design-intents.md](charts-design-intents.md)(의도 A~F) · 본 문서(계승).
@@ -48,6 +50,7 @@ Charts Studio 가 라이브 질의를 갖는 이유: 사용자가 소스·차원
 | 결측 표기 | 지역 코드 결측은 문자열 `'UNK'` — 지도 매칭에서 제외된다 |
 | 파이썬/실행 | Python 3.9+ 호환. FastAPI·SQLAlchemy·Argon2. 포트 관례 8765(문서)·8799(개발) |
 | 인증 DB | `DATABASE_URL`, 기본 `sqlite:///./data/ask_seoul.db`. PostgreSQL/MySQL dialect DDL도 테스트 |
+| 로컬 분석 인증 | `.env.local.example`의 `AUTH_MODE=local_auto`만 사용. loopback HTTP + SQLite + proxy header 미신뢰 조건에서 일반 회원 세션·CSRF를 자동 발급. 배포 dev/main은 `AUTH_MODE=required` |
 | 세션 | DB에는 HMAC 해시만 저장. 절대+idle 만료와 사용자별 상한 적용. 운영은 `AUTH_SESSION_PEPPER`, HTTPS Secure cookie 필수 |
 | MFA | RFC 6238 TOTP+일회용 복구 코드. 운영자 이상 기본 강제. 하위 역할은 감사 사유 기반 관리자 초기화, 권한 계정은 CLI break-glass만 허용. `AUTH_MFA_MASTER_KEY` 장기 보관 필수 |
 | 서버 배포 | `dev`만 GitHub `development` 서버에 배포. 서비스 DB는 전용 PostgreSQL volume, 데이터는 Trino→R2/Iceberg. `main`은 build만 하고 deploy 금지 |
@@ -77,6 +80,8 @@ app/static/auth/               ← 로그인·가입·재설정·프로필·운�
 app/main.py      본체 접점 (카탈로그 + auth/charts router + 정적 화면)
 docs/additional_doc/           ← 인증/RDB/알림/클라우드 WAF 운영 문서
 docs/deployment/               ← 사람용 서버 준비 + 서버 AI용 제한적 실행 runbook
+docs/local-analysis-human-guide.md  ← 팀원용 로컬 분석 시작·문제 해결 정본
+docs/local-analysis-agent-runbook.md ← AI용 local_auto 불변식·안전 실행·보고 계약
 ```
 
 ## 5. 설계 의도 요약 (정본: [charts-design-intents.md](charts-design-intents.md))
@@ -183,3 +188,9 @@ open "http://127.0.0.1:8765/charts?selftest=1"
 - 2026-07-21: 최신 snapshot에 commerce가 빠져 Docker test가 실패한 회귀를 보강. sample 하위
   submodule 경로를 인식하고, culture artifact가 없을 때도 지정 basic domain만 현재 Trino에서
   원자적으로 부분 갱신하면서 domain별 관측 시각과 비대상 domain을 보존하도록 수정.
+- 2026-07-21: 팀원 로컬 분석용 `AUTH_MODE=local_auto`를 추가. 로컬 SQLite의 일반 회원에게
+  정상 DB 세션·CSRF·사용자별 레이아웃을 자동 발급하되 loopback 요청에서만 허용하고,
+  dev/main 배포 템플릿과 배포 스크립트는 `AUTH_MODE=required`만 허용하도록 고정.
+- 2026-07-21: 로컬 분석 계약을 사람용 시작 가이드와 AI용 안전 runbook으로 분리. 사람에게는
+  실행 위치·정상 결과·전환·장애 해결을, AI에게는 정본 코드·허용/금지 작업·fail-closed 검증과
+  secret 없는 보고 형식을 제공하고 문서 인덱스·AGENTS 진입점에 연결.

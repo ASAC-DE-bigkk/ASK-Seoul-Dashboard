@@ -38,6 +38,11 @@ if (( 8#$runtime_mode & 077 )); then
   echo "runtime environment file must not be readable by group or others" >&2
   exit 77
 fi
+if grep -q '^AUTH_MODE=' "$runtime_env_file" \
+  && ! grep -q '^AUTH_MODE=required$' "$runtime_env_file"; then
+  echo "deployed runtime environment must use AUTH_MODE=required" >&2
+  exit 78
+fi
 
 cd "$deploy_dir"
 install -d -m 755 certificates

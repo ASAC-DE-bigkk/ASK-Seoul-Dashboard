@@ -74,6 +74,8 @@ from .security import (
 
 SCHEMA_VERSION = 6
 TERMS_VERSION = "2026-07-17"
+LOCAL_ANALYST_EMAIL = "local-analyst@localhost.invalid"
+LOCAL_ANALYST_NICKNAME = "local-analyst"
 
 PAGE_DEFINITIONS = (
     ("catalog", "데이터 마켓플레이스", "/catalog", "published gold 카탈로그와 API"),
@@ -839,6 +841,56 @@ class AuthService:
         if claimed.rowcount != 1:
             raise DomainError(404, "user not found", "회원을 찾을 수 없습니다.")
         self.db.refresh(user)
+
+    def ensure_local_analyst(self) -> User:
+        """로컬 자동 로그인 전용 일반 회원을 확보한다.
+
+        이 계정은 비밀번호로 로그인하지 않으며 local_auto의 fail-closed 설정과
+        loopback 요청 검사를 모두 통과한 미들웨어에서만 세션을 발급받는다.
+        """
+        if not self.settings.local_auto:
+            raise RuntimeError("로컬 분석 계정은 AUTH_MODE=local_auto에서만 사용할 수 있습니다.")
+        user = self.db.scalar(
+            select(User).where(User.email == LOCAL_ANALYST_EMAIL)
+        )
+        if user is None:
+            nickname = LOCAL_ANALYST_NICKNAME
+            if self.db.scalar(select(User.id).where(User.nickname == nickname)):
+                nickname = _unique_nickname(self.db)
+            now = utcnow()
+            candidate = User(
+                email=LOCAL_ANALYST_EMAIL,
+                password_hash=hash_password(random_token(48)),
+                nickname=nickname,
+                role="member",
+                status="active",
+                email_verified_at=now,
+                approved_at=now,
+                terms_accepted_at=now,
+                terms_version=TERMS_VERSION,
+            )
+            try:
+                with self.db.begin_nested():
+                    self.db.add(candidate)
+                    self.db.flush()
+                user = candidate
+                audit(
+                    self.db,
+                    "local_analyst_created",
+                    target=user,
+                    details={"auth_mode": "local_auto"},
+                )
+            except IntegrityError:
+                user = self.db.scalar(
+                    select(User).where(User.email == LOCAL_ANALYST_EMAIL)
+                )
+        if user is None:
+            raise RuntimeError("로컬 분석 계정을 생성할 수 없습니다.")
+        if user.role != "member" or user.status != "active":
+            raise RuntimeError(
+                "예약된 로컬 분석 계정의 역할 또는 상태가 올바르지 않습니다."
+            )
+        return user
 
     def register(
         self,
