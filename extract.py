@@ -49,6 +49,25 @@ def is_external(node: dict, name: str) -> bool:
         return bool(meta["external"])
     return name not in INTERNAL_GOLD
 
+
+def display_meta(node: dict) -> dict:
+    """config.meta.display → 외부 전시 4필드.
+
+    선언이 없으면 빈 dict 를 돌려준다(= 스냅샷에 키 자체가 없음 → 화면이 name/description 으로 폴백).
+    문구의 소스 오브 트루스는 dbt yml 이고, 여기서는 옮기기만 한다.
+    """
+    d = (node.get("config", {}).get("meta", {}) or {}).get("display") or {}
+    out: dict = {}
+    if d.get("title"):
+        out["display_name"] = str(d["title"])
+    if d.get("summary"):
+        out["summary"] = str(d["summary"])
+    if d.get("caveat"):
+        out["caveat"] = str(d["caveat"])
+    if d.get("use_cases"):
+        out["use_cases"] = [str(u) for u in d["use_cases"]]
+    return out
+
 # basic 도메인 description 을 끌어올 dbt 프로젝트(모델명 전역 유일 → 병합 lookup).
 # traffic·weather 는 하나의 dbt 프로젝트(traffic_weather)로 합쳐져 있다.
 BASIC_MANIFEST_PROJECTS = ("commerce", "citydata", "traffic_weather", "transit")
@@ -190,6 +209,10 @@ def load_basic_meta() -> dict:
                 "materialized": cfg.get("materialized", ""),
                 # 계보 — culture rich 와 같은 upstream_layers 재사용 (도메인 manifest 내 한정)
                 "lineage": upstream_layers(uid, all_nodes),
+                # 타 도메인이 자기 yml 에 단 meta 를 그대로 존중한다. external 은 지금까지
+                # lookup 에 실리지 않아 아래 extract_basic_domain 의 폴백이 늘 True 였다.
+                "external": bool(cfg.get("meta", {}).get("external", True)),
+                "display": (cfg.get("meta", {}) or {}).get("display") or {},
             }
     return lookup
 
@@ -241,6 +264,7 @@ def extract_basic_domain(domain: str, schema: str, meta_lookup: dict) -> list[di
             "quality": [],
             "lineage": meta.get("lineage", {}),
             "sample": sample,
+            **display_meta({"config": {"meta": {"display": meta.get("display", {})}}}),
         })
     return tables
 
@@ -311,6 +335,7 @@ def main() -> None:
             "quality": quality,
             "lineage": upstream_layers(uid, nodes),
             "sample": sample,
+            **display_meta(node),
         })
 
     basic_meta = load_basic_meta()

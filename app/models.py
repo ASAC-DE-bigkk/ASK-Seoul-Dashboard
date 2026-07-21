@@ -31,6 +31,12 @@ class TableSummary(BaseModel):
     external: bool = True  # 외부 공개 대상 여부(#269). false=내부/팀 전용(예: SLO 운영 지표)
     relation: str
     description: str = ""
+    # 외부 전시 문구(dbt config.meta.display). 선언 없는 테이블은 None/빈 리스트 →
+    # 화면이 name·description 으로 폴백한다.
+    display_name: str | None = None
+    summary: str | None = None
+    caveat: str | None = None
+    use_cases: list[str] = []
     tags: list[str] = []
     contract_enforced: bool
     materialized: str = ""

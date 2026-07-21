@@ -38,6 +38,8 @@ def _summary(t: dict) -> dict:
     return {
         **{k: t[k] for k in ("name", "relation", "description", "tags",
                              "contract_enforced", "materialized", "row_count", "date_range")},
+        # 전시 문구는 선언한 테이블에만 있다 — 없으면 응답 모델의 기본값(None/[])이 쓰인다.
+        **{k: t[k] for k in ("display_name", "summary", "caveat", "use_cases") if k in t},
         "domain": t.get("domain", "culture"),
         "external": t.get("external", True),
         "column_count": len(t["columns"]),
