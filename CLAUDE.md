@@ -33,12 +33,16 @@ SHARE.md에만 두고 여기서 중복하지 않는다([AGENTS.md](AGENTS.md)도
 - 로컬 member 자동 인증(로그인 생략)은 PowerShell에서 아래 한 줄로 실행한다.
 
   ```powershell
-  pwsh scripts/run_local.ps1
-  # 또는:  powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1
+  powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1
+  # pwsh(PowerShell 7)가 있으면:  pwsh -File scripts\run_local.ps1
   ```
 
-  이 스크립트가 `.env.local` 생성·로드 → 인증 DB 초기화 → uvicorn 기동을 일괄 수행한다.
+  이 스크립트가 `.env.local` 생성·로드 → 인증 DB 초기화 → uvicorn 기동을 일괄 수행하며,
+  venv가 없으면 안정 버전 Python으로 만들고 의존성까지 설치한다.
   기대 결과: `/charts`가 로그인 없이 열리고 사용자 `local-analyst`(역할 `일반회원`)로 인식된다.
+  - venv Python은 네이티브 휠이 있는 안정 버전(예: 3.13)을 쓴다. 3.14 등 최신은
+    `ModuleNotFoundError: pydantic_core._pydantic_core`가 날 수 있어, 그때는 `.venv`를 지우고
+    `py -3.13`으로 재생성한다.
 
 ### 2. 검증
 

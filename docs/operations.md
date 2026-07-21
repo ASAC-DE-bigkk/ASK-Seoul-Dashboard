@@ -78,10 +78,14 @@ Windows PowerShell:
 
 ```powershell
 cd sample\dashboard
-py -3 -m venv .venv
+py -3.13 -m venv .venv     # 안정 버전 권장(3.14 등 최신은 pydantic_core 휠 부재 가능)
 .venv\Scripts\pip install -r requirements.txt
-pwsh scripts/run_local.ps1   # .env.local 생성·로드 → init_auth_db → uvicorn 일괄
+powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1   # .env.local 로드 → init_auth_db → uvicorn 일괄
 ```
+
+기본 `powershell`(5.1)은 `.ps1` 실행을 정책으로 막을 수 있어 `-ExecutionPolicy Bypass`가 필요하다.
+`No module named 'pydantic_core._pydantic_core'`가 나오면 venv Python과 네이티브 바이너리 버전이
+어긋난 것이므로 `.venv`를 안정 버전으로 재생성한다(`Remove-Item .venv -Recurse -Force` 후 재설치).
 
 이 경로는 로컬 SQLite의 일반 회원 세션을 자동 발급하며 관리자 권한은 제공하지 않는다.
 배포 dev/main 또는 실제 인증 흐름 검증에는 사용하지 않는다.

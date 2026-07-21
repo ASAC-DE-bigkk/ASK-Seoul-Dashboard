@@ -50,12 +50,17 @@ set -a; source .env.local; set +a
 **Windows PowerShell**
 
 ```powershell
-py -3 -m venv .venv
+py -3.13 -m venv .venv     # 안정 버전 권장. 3.14 등 최신은 pydantic_core 휠이 없을 수 있음
 .venv\Scripts\pip install -r requirements.txt
-pwsh scripts/run_local.ps1
+powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1
 # run_local.ps1 이 .env.local 생성·로드 → 인증 DB 초기화 → uvicorn 기동을 일괄 수행
 # → http://127.0.0.1:8765/charts
 ```
+
+> `pwsh`(PowerShell 7)가 없으면 위처럼 기본 `powershell`을 쓴다. 기본 PowerShell은 `.ps1`
+> 실행을 정책으로 막을 수 있어 `-ExecutionPolicy Bypass`가 필요하다. `.venv`가 이미 있는데
+> 다른 Python으로 다시 만들면 네이티브 바이너리가 어긋나므로, 재생성 시 먼저
+> `Remove-Item .venv -Recurse -Force` 후 만든다.
 
 `AUTH_MODE=local_auto`는 loopback에서 최초 화면을 열 때 로컬 SQLite에 일반 회원을 만들고
 정상 세션·CSRF 쿠키를 자동 발급한다. 관리자 권한은 없으며 레이아웃은 로컬 사용자 ID로 분리된다.

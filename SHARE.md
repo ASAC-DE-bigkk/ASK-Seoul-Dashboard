@@ -59,11 +59,17 @@ bash 예시(`set -a; source .env.local; set +a`)를 **Windows PowerShell에서 �
 
 | 단계 | macOS/Linux · Git Bash (bash) | Windows (PowerShell) |
 |---|---|---|
-| venv 생성 | `python3 -m venv .venv` | `py -3 -m venv .venv` |
+| venv 생성 | `python3 -m venv .venv` | `py -3.13 -m venv .venv` |
 | 패키지 설치 | `.venv/bin/pip install -r requirements.txt` | `.venv\Scripts\pip install -r requirements.txt` |
-| env 로드+실행 | `set -a; source .env.local; set +a` 후 `.venv/bin/uvicorn ...` | `pwsh scripts/run_local.ps1` (로드+init+uvicorn 일괄) |
+| env 로드+실행 | `set -a; source .env.local; set +a` 후 `.venv/bin/uvicorn ...` | `powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1` (로드+init+uvicorn 일괄) |
 | DB 초기화 | `.venv/bin/python scripts/init_auth_db.py` | `.venv\Scripts\python scripts\init_auth_db.py` |
 | 서버 실행 | `.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload` | `.venv\Scripts\uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload` |
+
+Windows 주의: (1) 기본 `powershell`(5.1)은 `.ps1` 실행을 정책으로 막을 수 있어 `-ExecutionPolicy
+Bypass`가 필요하다(`pwsh`는 PowerShell 7로 별도 설치). (2) venv Python은 네이티브 휠이 준비된
+안정 버전(예: 3.13)으로 만든다 — 매우 최신 버전(3.14 등)은 `pydantic_core`·`psycopg` 휠이 없어
+`ModuleNotFoundError: pydantic_core._pydantic_core`가 날 수 있다. (3) 기존 `.venv`를 다른 Python으로
+다시 만들면 바이너리가 어긋나므로 재생성 시 `Remove-Item .venv -Recurse -Force` 후 만든다.
 
 macOS/Linux(bash)에서 `.env.local`을 현재 세션에 로드할 때:
 

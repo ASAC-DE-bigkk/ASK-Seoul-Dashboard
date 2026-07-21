@@ -140,14 +140,17 @@ set +a
 
 ```powershell
 cd <프로젝트 루트>\sample\dashboard
-py -3 -m venv .venv
+py -3.13 -m venv .venv     # 안정 버전 권장(3.14 등 최신은 pydantic_core 휠 부재 가능)
 .venv\Scripts\python -m pip install -r requirements.txt
 
-pwsh scripts/run_local.ps1
+powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1
 ```
 
+기본 `powershell`(5.1)은 `.ps1` 실행을 정책으로 막을 수 있어 `-ExecutionPolicy Bypass`가
+필요하다. `pwsh`(PowerShell 7)가 설치돼 있으면 `pwsh -File scripts\run_local.ps1`도 된다.
 `scripts/run_local.ps1`이 `.env.local` 생성·로드 → `init_auth_db.py` → uvicorn 기동을 일괄
-수행한다. 개별 단계를 직접 실행하려면 `.env.local`을 현재 세션에 먼저 로드해야 한다.
+수행하며, venv가 없으면 안정 버전 Python으로 만들고 의존성까지 설치한다. 개별 단계를 직접
+실행하려면 `.env.local`을 현재 세션에 먼저 로드해야 한다.
 
 ```powershell
 Get-Content .env.local | Where-Object { $_ -match '^\s*[^#].*=' } | ForEach-Object {
@@ -189,7 +192,7 @@ Windows PowerShell:
 
 ```powershell
 cd <프로젝트 루트>\sample\dashboard
-pwsh scripts/run_local.ps1
+powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1
 ```
 
 ## 4. 접속과 정상 동작 확인
@@ -254,7 +257,10 @@ curl -fsS http://127.0.0.1:8765/api/v1/public/summary
 
 | 증상 | 원인과 해결 |
 |---|---|
-| 로그인 화면으로 이동함 | `.env.local`을 현재 셸에 로드했는지, `AUTH_MODE=local_auto`인지 확인하고 서버를 재기동한다. **Windows에서 bash용 `source .env.local`을 PowerShell에 붙여넣으면 로드되지 않는다** — `pwsh scripts/run_local.ps1`을 사용하거나 §3-2의 PowerShell 로드 스니펫을 실행한다. `/health` 응답이 떠도 `AUTH_MODE`가 `required`이면 로그인 화면이 정상이다. |
+| 로그인 화면으로 이동함 | `.env.local`을 현재 셸에 로드했는지, `AUTH_MODE=local_auto`인지 확인하고 서버를 재기동한다. **Windows에서 bash용 `source .env.local`을 PowerShell에 붙여넣으면 로드되지 않는다** — `powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1`을 사용하거나 §3-2의 PowerShell 로드 스니펫을 실행한다. `/health` 응답이 떠도 `AUTH_MODE`가 `required`이면 로그인 화면이 정상이다. |
+| `pwsh 용어가 인식되지 않습니다` | `pwsh`는 PowerShell 7이다. 미설치면 기본 `powershell`을 쓴다: `powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1`. |
+| `이 시스템에서 스크립트를 실행할 수 없으므로 …` (PSSecurityException) | 실행 정책 차단이다. `-ExecutionPolicy Bypass`로 실행하거나 현재 창에서 `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` 후 `.\scripts\run_local.ps1`. |
+| `ModuleNotFoundError: No module named 'pydantic_core._pydantic_core'` | venv의 Python과 설치된 네이티브 바이너리 버전이 어긋난 것이다(예: venv는 3.14인데 `.pyd`는 3.13용). 안정 버전으로 재생성한다: `Remove-Item .venv -Recurse -Force; py -3.13 -m venv .venv; .venv\Scripts\python -m pip install -r requirements.txt`. |
 | `403 origin mismatch` | `localhost:8765` 대신 설정과 같은 `http://127.0.0.1:8765`를 사용한다. 쿠키나 계정을 먼저 변경하지 않는다. |
 | `local_auto는 ... 사용할 수 없습니다`로 기동 실패 | 오류에 표시된 조건을 고친다. development, SQLite, loopback HTTP/Host, proxy header 미신뢰가 모두 필요하다. |
 | `/admin`이 열리지 않음 | 정상이다. 로컬 분석 계정은 일반 회원이며 관리 권한을 갖지 않는다. |

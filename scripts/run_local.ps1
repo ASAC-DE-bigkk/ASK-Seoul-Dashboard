@@ -12,11 +12,14 @@
     macOS/Linux(bash)에서는 이 스크립트 대신 docs/local-analysis-human-guide.md 의
     bash 절차를 사용한다.
 
-.EXAMPLE
-    pwsh scripts/run_local.ps1
+    Windows PowerShell(기본 5.1)은 .ps1 실행을 정책으로 막을 수 있으므로 -ExecutionPolicy
+    Bypass로 실행한다. pwsh(PowerShell 7)가 설치돼 있으면 `pwsh -File ...`도 가능하다.
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1 -Port 8765
+    powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1
+
+.EXAMPLE
+    powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1 -Port 8890
 #>
 [CmdletBinding()]
 param(
@@ -27,6 +30,15 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# 안정 버전 Python 런처 플래그를 고른다. 매우 최신 버전(예: 3.14)은 pydantic_core·psycopg
+# 등의 네이티브 휠이 아직 없을 수 있어, 휠이 준비된 3.13 → 3.12 → 3.11 순으로 선택한다.
+function Resolve-StablePython {
+    foreach ($v in '3.13', '3.12', '3.11', '3') {
+        try { & py "-$v" --version *> $null; if ($LASTEXITCODE -eq 0) { return "-$v" } } catch { break }
+    }
+    return $null
+}
 
 # 스크립트 위치 기준으로 dashboard 루트를 계산한다(어느 위치에서 실행해도 동작).
 $DashboardRoot = Split-Path -Parent $PSScriptRoot
@@ -68,10 +80,26 @@ if ($env:AUTH_MODE -ne "local_auto") {
     Write-Warning "AUTH_MODE 가 local_auto 가 아닙니다. 로그인 없이 접근하려면 .env.local 의 AUTH_MODE=local_auto 를 확인하세요."
 }
 
-# 3) venv Python 확인.
+# 3) venv 확보 — 없으면 안정 버전 Python으로 생성하고 의존성을 설치한다.
 $VenvPython = Join-Path $DashboardRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path $VenvPython)) {
-    throw ".venv 가 없습니다. 먼저 다음을 실행하세요:  py -3 -m venv .venv;  .venv\Scripts\pip install -r requirements.txt"
+    $ver = Resolve-StablePython
+    if ($ver) { Write-Host "[run_local] .venv 없음 — py $ver 로 생성" -ForegroundColor Cyan; & py $ver -m venv .venv }
+    else      { Write-Host "[run_local] .venv 없음 — python 으로 생성" -ForegroundColor Cyan; & python -m venv .venv }
+    & $VenvPython -m pip install --upgrade pip -q
+    & $VenvPython -m pip install -r requirements.txt
+}
+
+# 3-1) 네이티브 확장 사전점검 — venv Python과 설치된 바이너리(pydantic_core 등)의 정합 확인.
+# 예: venv를 3.14로 다시 만들었는데 site-packages에 3.13용 .pyd가 남으면 여기서 걸린다.
+& $VenvPython -c "import fastapi" *> $null
+if ($LASTEXITCODE -ne 0) {
+    Write-Warning "venv의 Python과 설치된 네이티브 패키지(pydantic_core 등)가 맞지 않습니다 (ModuleNotFoundError: pydantic_core._pydantic_core 등)."
+    Write-Host "  .venv를 안정 버전 Python으로 새로 만드세요:" -ForegroundColor Yellow
+    Write-Host "    Remove-Item .venv -Recurse -Force" -ForegroundColor Yellow
+    Write-Host "    py -3.13 -m venv .venv" -ForegroundColor Yellow
+    Write-Host "    .venv\Scripts\python -m pip install -r requirements.txt" -ForegroundColor Yellow
+    exit 1
 }
 
 # 4) 인증·권한 스키마 초기화(비-production 기동 시 앱도 자동 수행하지만 명시적으로 한 번 더).
