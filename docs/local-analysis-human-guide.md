@@ -17,15 +17,67 @@
 만들고, 기존과 동일한 DB 세션과 CSRF 쿠키를 자동 발급한다. 따라서 Charts 레이아웃도 정상적으로
 사용자 ID에 귀속된다. 관리자 권한은 제공하지 않는다.
 
+### 1-1. 로컬에서 사용하는 구조
+
+```text
+sample/docker-compose.yml의 Trino
+        ↓ http://127.0.0.1:30586
+dashboard/FastAPI
+        ↓ http://127.0.0.1:8765
+브라우저 Catalog·Charts
+```
+
+로컬에서는 상위 `sample/`이 Trino 설정과 실행을 소유하고 Dashboard는 그 Trino에 접속한다.
+`dashboard/deploy/trino/`의 배포용 companion을 로컬에 또 띄우지 않는다. 두 번째 Trino를 만들면
+30586 포트 충돌, 메모리 중복 사용, catalog·secret 설정 드리프트가 생길 수 있다.
+
+로컬과 dev가 동일해야 하는 것은 컨테이너 배치가 아니라 데이터 계약이다. 두 환경 모두 같은 Trino
+버전·catalog·`iceberg_dev.<schema>.<relation>`·질의 제한을 사용하되 접속 주소만 다음처럼 다르다.
+
+| 환경 | Trino 소유·접속 | Dashboard 인증·DB |
+|---|---|---|
+| 로컬 | 상위 `sample/`, `http://127.0.0.1:30586` | `local_auto`, SQLite |
+| dev | 서버 companion/shared Trino, `http://trino:8080` | `required`, PostgreSQL |
+| 향후 main | 운영 private Trino endpoint | `required`, 운영 RDB |
+
 ## 2. 준비 사항
 
 - Python 3.9 이상
 - Python 패키지를 최초 한 번 설치할 수 있는 환경
 - Charts 실데이터가 필요하면 Docker와 상위 `sample/` 데이터 스택 설정
 - Dashboard는 반드시 자기 PC의 `127.0.0.1`에만 실행
+- 상위 `sample/.env`에 팀에서 허가받은 R2 dev catalog·object storage 설정
 
 R2/Iceberg 자격증명은 상위 `sample/.env`를 통해 Trino에만 주입한다.
 `dashboard/.env.local`에 R2 token, access key, cookie 또는 실제 계정 비밀번호를 넣지 않는다.
+
+### 2-1. Dashboard 코드 버전 확인
+
+`sample/` 루트에서 현재 Dashboard 브랜치를 먼저 확인한다.
+
+```bash
+cd <프로젝트 루트>/sample
+git -C dashboard status --short --branch
+git submodule status dashboard
+grep -q '^AUTH_MODE=local_auto$' dashboard/.env.local.example
+```
+
+로컬 자동 인증의 최초 반영 작업은 PR #14에서 Dashboard `dev`에 merge되었다. 다만 Git submodule인
+상위 `sample/`이 기록한 Dashboard commit은 `dashboard/dev`보다 늦게 갱신될 수 있다. 위 `grep`이
+실패하면 현재 submodule commit에는 이 기능이 없는 것이다.
+
+그 경우 Dashboard 작업 트리가 깨끗한지 확인한 뒤 최신 `dev`를 받는다. 이미 수정 중인 파일이 있으면
+branch를 바꾸거나 pull하지 말고 먼저 작업 소유자와 정리한다.
+
+```bash
+git -C dashboard fetch origin
+git -C dashboard switch dev
+git -C dashboard pull --ff-only
+```
+
+상위 `sample/`이 local_auto 반영 commit으로 submodule pointer를 갱신한 뒤에는 일반적인
+`git submodule update --init dashboard`만으로 준비된다. 로컬에서 움직인 submodule pointer를 이 실행
+작업과 함께 상위 저장소에 임의로 commit하지 않는다.
 
 ## 3. 처음 실행하기
 
@@ -33,15 +85,31 @@ R2/Iceberg 자격증명은 상위 `sample/.env`를 통해 Trino에만 주입한�
 
 작업 위치: `sample/` 루트
 
+Charts 실데이터를 읽으려면 `sample/.env`에 다음 이름의 값이 설정되어 있어야 한다. 실제 값은 문서,
+터미널 출력, Dashboard 환경 파일에 복사하지 않는다.
+
+```text
+R2_DEV_ENDPOINT
+R2_DEV_ACCESS_KEY_ID
+R2_DEV_SECRET_ACCESS_KEY
+R2_DEV_DATA_CATALOG_TOKEN
+R2_DEV_DATA_CATALOG_URI
+R2_DEV_DATA_CATALOG_WAREHOUSE
+```
+
 ```bash
 cd <프로젝트 루트>/sample
 docker compose up -d trino
 docker compose ps trino
 curl -fsS http://127.0.0.1:30586/v1/info
+docker compose exec trino trino --execute 'SELECT 1'
+docker compose exec trino trino --execute 'SHOW SCHEMAS FROM iceberg_dev'
+docker compose exec trino trino --execute 'SHOW TABLES FROM iceberg_dev.commerce'
 ```
 
-`trino`가 healthy이고 마지막 명령이 JSON을 반환하면 된다. Catalog 화면과 로그인 관련 화면만
-확인한다면 Trino 없이 Dashboard를 먼저 기동할 수 있다.
+`trino`가 healthy이고 `/v1/info`가 JSON을 반환하며 `SELECT 1`이 성공하면 query engine은 정상이다.
+`SHOW SCHEMAS/TABLES`까지 성공해야 R2 dev catalog와 commerce 데이터 연결이 확인된다. Catalog 화면과
+로그인 관련 화면만 확인한다면 Trino 없이 Dashboard를 먼저 기동할 수 있다.
 
 ### 3-2. Dashboard 준비와 실행
 
@@ -50,7 +118,7 @@ curl -fsS http://127.0.0.1:30586/v1/info
 ```bash
 cd <프로젝트 루트>/sample/dashboard
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m pip install -r requirements.txt
 
 test -f .env.local || cp .env.local.example .env.local
 set -a
@@ -64,6 +132,27 @@ set +a
 이미 `.venv`와 `.env.local`이 있으면 생성·복사 명령은 다시 실행하지 않아도 된다.
 서버를 다시 여는 새 터미널에서는 `source .env.local` 단계부터 다시 실행한다.
 
+### 3-3. 두 번째 실행부터
+
+터미널 A에서 상위 Trino를 확인하거나 다시 기동한다.
+
+```bash
+cd <프로젝트 루트>/sample
+docker compose up -d trino
+docker compose ps trino
+```
+
+터미널 B에서 Dashboard 환경을 다시 로드하고 앱을 실행한다. `source`로 설정한 환경변수는 새 터미널에
+자동 승계되지 않는다.
+
+```bash
+cd <프로젝트 루트>/sample/dashboard
+set -a
+source .env.local
+set +a
+.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload
+```
+
 ## 4. 접속과 정상 동작 확인
 
 브라우저 주소는 `localhost`와 섞지 말고 아래처럼 `127.0.0.1`로 통일한다.
@@ -73,13 +162,16 @@ set +a
 | 랜딩 | `http://127.0.0.1:8765/` | 로컬 일반 회원으로 자동 인식 |
 | Catalog | `http://127.0.0.1:8765/catalog` | 로그인 화면 없이 접근 |
 | Charts Studio | `http://127.0.0.1:8765/charts` | 로그인 화면 없이 접근, 레이아웃 저장 가능 |
+| Charts 셀프테스트 | `http://127.0.0.1:8765/charts?selftest=1` | 전체 통과 시 탭 제목 `SELFTEST_ALL_PASS` |
 | 프로필 | `http://127.0.0.1:8765/profile` | 로컬 계정 상태 확인 가능 |
 | 관리자 | `http://127.0.0.1:8765/admin` | 접근 거부가 정상 |
+| 상태 확인 | `http://127.0.0.1:8765/health` | 앱·인증 DB readiness |
 
 서버 상태도 확인한다.
 
 ```bash
 curl -fsS http://127.0.0.1:8765/health
+curl -fsS http://127.0.0.1:8765/api/v1/public/summary
 ```
 
 정상 기준:
@@ -89,6 +181,7 @@ curl -fsS http://127.0.0.1:8765/health
 3. 화면의 사용자는 `local-analyst`, 역할은 `일반회원`이다.
 4. 차트 페이지 편집·저장 후 새로고침해도 레이아웃이 유지된다.
 5. `/admin`은 열리지 않는다.
+6. `charts?selftest=1` 완료 후 탭 제목이 `SELFTEST_ALL_PASS`다.
 
 ## 5. 자동으로 만들어지는 것
 
@@ -130,12 +223,26 @@ curl -fsS http://127.0.0.1:8765/health
 | 저장한 레이아웃이 다른 PC/dev에 없음 | 정상이다. 로컬 SQLite 사용자 데이터는 PC별로 분리된다. |
 | 실제 가입 흐름을 시험할 수 없음 | 서버를 중지하고 `AUTH_MODE=required`인 `.env`로 새로 기동한다. |
 
-## 8. 안전 수칙
+## 8. 안전하게 종료하기
+
+1. Dashboard를 실행한 터미널에서 `Ctrl+C`로 Uvicorn을 먼저 중지한다.
+2. `sample/` 루트에서 Dashboard가 사용한 Trino만 중지한다.
+
+```bash
+cd <프로젝트 루트>/sample
+docker compose stop trino
+```
+
+컨테이너를 보존하므로 다음 `docker compose up -d trino`가 빠르다. 로컬 인증 DB와 Charts 캐시는
+Dashboard 쪽 런타임 파일이므로 Trino 중지와 함께 삭제되지 않는다.
+
+## 9. 안전 수칙
 
 - Uvicorn을 `0.0.0.0`에 bind하지 않는다.
 - 로컬 모드를 reverse proxy, SSH 공유 서버, dev/main 서버에 적용하지 않는다.
 - `.env.local`, `data/`, 세션 cookie, 실제 자격증명을 커밋하거나 공유하지 않는다.
 - dev/main runtime 파일에 `AUTH_MODE=local_auto`를 넣지 않는다. 배포 스크립트도 이를 거부한다.
+- `docker compose down -v`, `docker volume rm`, `docker volume prune`을 로컬 종료 명령으로 사용하지 않는다.
 - 로컬 DB 전체 삭제로 레이아웃 하나를 초기화하지 않는다. 먼저 Charts 화면의 대상 페이지 기능을 사용한다.
 - 전체 로컬 DB를 새로 시작해야 한다면 서버를 중지하고 정확한 DB 파일을 별도 백업 경로로 이동한 뒤 진행한다.
 

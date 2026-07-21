@@ -11,6 +11,12 @@
 Airflow DAG ─적재────────────────────→ R2/Iceberg gold
 ```
 
+로컬에서는 상위 `sample/docker-compose.yml`이 Trino를 소유하고 Dashboard는
+`http://127.0.0.1:30586`으로 재사용한다. `dashboard/deploy/trino/`는 dev 서버용 companion이며
+로컬용 두 번째 Trino가 아니다. 로컬과 dev는 컨테이너 배치가 아니라 Trino catalog·relation·질의
+계약을 동일하게 유지한다. 로컬의 완전한 최초/재실행 절차는
+[사람용 로컬 분석 가이드](local-analysis-human-guide.md)를 따른다.
+
 ---
 
 ## 1. 기동 (up)

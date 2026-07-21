@@ -46,6 +46,16 @@ repository checkout에서 다음 순서로 읽는다.
 Git branch, `AUTH_ENV != production`, 접속 URL만 보고 인증 우회를 결정하지 않는다.
 로컬 분석은 명시적인 `AUTH_MODE=local_auto`와 아래 모든 보호 조건이 필요하다.
 
+로컬 실행 토폴로지는 다음 하나로 고정한다.
+
+```text
+sample/docker-compose.yml의 trino(:30586) → dashboard/FastAPI(:8765) → loopback browser
+```
+
+상위 `sample/`이 로컬 Trino의 정본이다. `dashboard/deploy/trino/`는 dev 서버용 최소 companion이므로
+로컬에서 두 번째 Trino로 실행하지 않는다. 로컬과 dev는 topology가 아니라 Trino 버전, catalog,
+relation, 질의 제한의 데이터 계약을 맞춘다.
+
 ## 2. 변경하면 안 되는 불변식
 
 `local_auto`의 설정 검증은 다음을 모두 강제해야 한다.
@@ -76,6 +86,7 @@ Git branch, `AUTH_ENV != production`, 접속 URL만 보고 인증 우회를 결�
 사용자가 로컬 환경 준비를 요청했다면 수행 가능한 작업:
 
 - repository와 현재 변경 상태 read-only 확인
+- 기존 `sample/docker-compose.yml`의 Trino 기동·상태·read-only query 확인
 - `.env.local.example`에서 ignored `.env.local` 생성
 - 로컬 `.venv` 생성과 이미 승인된 의존성 설치
 - 로컬 SQLite schema 초기화
@@ -87,6 +98,7 @@ Git branch, `AUTH_ENV != production`, 접속 URL만 보고 인증 우회를 결�
 별도 승인 없이 수행하지 않는 작업:
 
 - 상위 `sample/.env`, Trino/R2 catalog 또는 데이터 파이프라인 변경
+- `dashboard/deploy/trino/`로 로컬 두 번째 Trino 생성
 - dev/main runtime 파일의 실제 값 변경이나 서버 배포
 - Uvicorn `0.0.0.0` bind, reverse proxy 또는 외부 tunnel 추가
 - `AUTH_MODE=local_auto`의 fail-closed 조건 완화
@@ -102,8 +114,10 @@ Git branch, `AUTH_ENV != production`, 접속 URL만 보고 인증 우회를 결�
 
 ```bash
 pwd
-git -C dashboard status --short
+git -C dashboard status --short --branch
+git submodule status dashboard
 test -f dashboard/.env.local.example
+grep -q '^AUTH_MODE=local_auto$' dashboard/.env.local.example
 test -f dashboard/app/auth/config.py
 test -f dashboard/tests/test_security_config.py
 ```
@@ -119,15 +133,31 @@ curl -fsS http://127.0.0.1:30586/v1/info
 ```
 
 Trino가 없더라도 Catalog·인증 UI 작업은 진행할 수 있다. Charts 실데이터 검증만 blocker로 구분한다.
+로컬 자동 인증 최초 반영 PR #14는 Dashboard `dev`에 merge되었지만 상위 `sample/`의 submodule pointer는
+더 오래된 commit일 수 있다. `AUTH_MODE=local_auto` 예제가 없으면 사용자 요청 범위와 clean worktree를
+확인한 뒤 Dashboard `dev`를 fast-forward한다. 상위 submodule pointer를 임의로 commit하지 않는다.
 
 ## 5. 승인된 로컬 준비와 실행
 
-사람용 가이드의 명령을 그대로 사용한다.
+사람용 가이드의 명령을 그대로 사용한다. 터미널 A에서는 `sample/`의 기존 Trino만 기동한다.
+
+```bash
+docker compose up -d trino
+docker compose ps trino
+curl -fsS http://127.0.0.1:30586/v1/info
+docker compose exec trino trino --execute 'SELECT 1'
+docker compose exec trino trino --execute 'SHOW SCHEMAS FROM iceberg_dev'
+docker compose exec trino trino --execute 'SHOW TABLES FROM iceberg_dev.commerce'
+```
+
+마지막 두 catalog query에는 `sample/.env`의 `R2_DEV_*` 설정이 필요하다. AI는 값 존재 여부나 실패를
+secret 없이 보고하고, 별도 승인 없이 값을 열람·출력·편집하지 않는다. 터미널 B에서는 Dashboard를
+준비하고 실행한다.
 
 ```bash
 cd dashboard
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m pip install -r requirements.txt
 test -f .env.local || cp .env.local.example .env.local
 
 set -a
@@ -144,6 +174,9 @@ set +a
 - 환경 파일의 실제 전체 내용을 출력하지 않는다.
 - bind 실패가 sandbox 제한이라면 정해진 승인 절차를 사용하고 보안 조건을 낮추지 않는다.
 - 서버는 실행 중인 동안 60초 이상 상태 업데이트 없이 방치하지 않는다.
+
+두 번째 실행부터는 `.venv` 생성·의존성 설치·환경 파일 복사를 생략하고, 새 Dashboard 터미널에서
+`set -a; source .env.local; set +a`를 다시 실행한 뒤 Uvicorn을 기동한다.
 
 ## 6. 검증 순서
 
@@ -162,9 +195,13 @@ curl -fsS http://127.0.0.1:8765/health
 5. 같은 origin의 정상 CSRF POST → 인증을 통과
 6. `GET /admin` → HTTP 403 또는 `/profile?denied=1` redirect
 7. non-loopback client → 자동 세션 미발급, 보호 화면 로그인 redirect/API 401
+8. `GET /charts?selftest=1` 완료 → 브라우저 탭 제목 `SELFTEST_ALL_PASS`
 
 세션 cookie나 CSRF 원문은 출력·보고하지 않는다. 임시 cookie jar를 만들었다면 작업 종료 전에
 정확한 임시 경로만 확인하고 삭제한다.
+
+작업 종료는 Uvicorn `Ctrl+C` 후 `sample/` 루트의 `docker compose stop trino`만 사용한다.
+`down -v`, volume 삭제, 전체 DB·cache 삭제는 로컬 종료 절차가 아니다.
 
 ### 6-2. 코드 변경 시 회귀 검증
 
