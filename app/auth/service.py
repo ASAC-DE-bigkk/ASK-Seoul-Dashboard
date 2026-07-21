@@ -53,6 +53,7 @@ from .models import (
 )
 from .security import (
     DUMMY_PASSWORD_HASH,
+    ROLE_RANK,
     ROLE_LABELS,
     hash_password,
     iso_utc,
@@ -718,6 +719,9 @@ def user_payload(
         "nickname": user.nickname,
         "role": user.role,
         "role_label": ROLE_LABELS.get(user.role, user.role),
+        "can_edit_charts": (
+            ROLE_RANK.get(user.role, 0) >= ROLE_RANK["member"]
+        ),
         "status": user.status,
         "email_verified": user.email_verified_at is not None,
         "mfa_enabled": user.mfa_enabled_at is not None,
@@ -842,6 +846,58 @@ class AuthService:
             raise DomainError(404, "user not found", "회원을 찾을 수 없습니다.")
         self.db.refresh(user)
 
+    def _ensure_local_analyst_chart_access(self, user: User) -> None:
+        """예약된 로컬 member의 Charts 접근을 사용자 override로 복구한다.
+
+        역할 기본 권한은 운영자가 조정할 수 있으므로 전역 member 정책은 건드리지 않는다.
+        local_auto 전용 예약 계정에만 allow를 두어 오래된 로컬 SQLite 정책에서도
+        개인 Charts 레이아웃 계약을 유지한다.
+        """
+        page = self.db.scalar(
+            select(PageResource).where(PageResource.key == "charts")
+        )
+        if page is None or not page.active:
+            raise RuntimeError("Charts 페이지 권한이 초기화되지 않았습니다.")
+        permission = self.db.scalar(
+            select(UserPagePermission).where(
+                UserPagePermission.user_id == user.id,
+                UserPagePermission.page_id == page.id,
+            )
+        )
+        repaired = False
+        if permission is None:
+            candidate = UserPagePermission(
+                user_id=user.id,
+                page_id=page.id,
+                allowed=True,
+            )
+            try:
+                with self.db.begin_nested():
+                    self.db.add(candidate)
+                    self.db.flush()
+                permission = candidate
+                repaired = True
+            except IntegrityError:
+                permission = self.db.scalar(
+                    select(UserPagePermission).where(
+                        UserPagePermission.user_id == user.id,
+                        UserPagePermission.page_id == page.id,
+                    )
+                )
+        if permission is None:
+            raise RuntimeError("로컬 분석 계정의 Charts 권한을 생성할 수 없습니다.")
+        if not permission.allowed:
+            permission.allowed = True
+            repaired = True
+        if repaired:
+            audit(
+                self.db,
+                "local_analyst_access_repaired",
+                target=user,
+                details={"auth_mode": "local_auto", "page_key": "charts"},
+            )
+        self.db.flush()
+
     def ensure_local_analyst(self) -> User:
         """로컬 자동 로그인 전용 일반 회원을 확보한다.
 
@@ -890,6 +946,7 @@ class AuthService:
             raise RuntimeError(
                 "예약된 로컬 분석 계정의 역할 또는 상태가 올바르지 않습니다."
             )
+        self._ensure_local_analyst_chart_access(user)
         return user
 
     def register(

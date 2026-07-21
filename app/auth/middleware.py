@@ -18,7 +18,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from .models import IpBlock, User, utcnow
 from .security import ip_in_networks, stable_digest, token_digest
-from .service import AccessService, AuthService
+from .service import AccessService, AuthService, LOCAL_ANALYST_EMAIL
 
 
 logger = logging.getLogger(__name__)
@@ -188,6 +188,10 @@ class AuthSecurityMiddleware(BaseHTTPMiddleware):
                 )
                 if current:
                     auth_session, user = current
+                    if settings.local_auto and user.email == LOCAL_ANALYST_EMAIL:
+                        # 이미 발급된 로컬 세션도 오래된 page permission을 즉시
+                        # 복구한다. 쿠키 만료/삭제를 기다리게 하지 않는다.
+                        user = auth.ensure_local_analyst()
                     request.state.auth_session = auth_session
                     request.state.user = user
 

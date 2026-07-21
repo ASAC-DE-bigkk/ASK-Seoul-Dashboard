@@ -7,6 +7,7 @@ from fastapi import Depends, Request
 from sqlalchemy.orm import Session
 
 from .models import AuthSession, User
+from .security import ROLE_RANK
 from .service import AccessService, DomainError
 
 
@@ -61,6 +62,16 @@ def require_page(page_key: str):
 def require_operator(user: User = Depends(current_user)) -> User:
     if user.role not in {"operator", "admin"}:
         raise DomainError(403, "forbidden", "운영자 이상의 권한이 필요합니다.")
+    return user
+
+
+def require_member(user: User = Depends(current_user)) -> User:
+    if ROLE_RANK.get(user.role, 0) < ROLE_RANK["member"]:
+        raise DomainError(
+            403,
+            "forbidden",
+            "일반회원 이상의 권한이 필요합니다.",
+        )
     return user
 
 
