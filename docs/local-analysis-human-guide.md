@@ -115,6 +115,13 @@ docker compose exec trino trino --execute 'SHOW TABLES FROM iceberg_dev.commerce
 
 작업 위치: `sample/dashboard/`
 
+실행 환경은 **Windows(PowerShell)와 macOS/Linux(bash) 둘 다** 지원한다. 자기 환경의 절차만
+사용한다. 앱은 `.env` 파일을 자동 로드하지 않으므로 `.env.local` 주입은 실행 셸의 몫이다 —
+bash 예시를 PowerShell에 그대로 붙여넣으면 `source`·`set -a`가 없어 `AUTH_MODE=local_auto`가
+주입되지 않고 로그인 화면으로 떨어진다.
+
+**macOS/Linux · Git Bash**
+
 ```bash
 cd <프로젝트 루트>/sample/dashboard
 python3 -m venv .venv
@@ -129,8 +136,31 @@ set +a
 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload
 ```
 
+**Windows PowerShell**
+
+```powershell
+cd <프로젝트 루트>\sample\dashboard
+py -3 -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+
+pwsh scripts/run_local.ps1
+```
+
+`scripts/run_local.ps1`이 `.env.local` 생성·로드 → `init_auth_db.py` → uvicorn 기동을 일괄
+수행한다. 개별 단계를 직접 실행하려면 `.env.local`을 현재 세션에 먼저 로드해야 한다.
+
+```powershell
+Get-Content .env.local | Where-Object { $_ -match '^\s*[^#].*=' } | ForEach-Object {
+  $name, $value = $_ -split '=', 2
+  Set-Item "env:$($name.Trim())" $value.Trim()
+}
+.venv\Scripts\python scripts\init_auth_db.py
+.venv\Scripts\uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload
+```
+
 이미 `.venv`와 `.env.local`이 있으면 생성·복사 명령은 다시 실행하지 않아도 된다.
-서버를 다시 여는 새 터미널에서는 `source .env.local` 단계부터 다시 실행한다.
+서버를 다시 여는 새 터미널에서는 환경 로드 단계(bash는 `source .env.local`, PowerShell은
+`run_local.ps1` 또는 위 로드 스니펫)부터 다시 실행한다.
 
 ### 3-3. 두 번째 실행부터
 
@@ -142,8 +172,10 @@ docker compose up -d trino
 docker compose ps trino
 ```
 
-터미널 B에서 Dashboard 환경을 다시 로드하고 앱을 실행한다. `source`로 설정한 환경변수는 새 터미널에
+터미널 B에서 Dashboard 환경을 다시 로드하고 앱을 실행한다. 셸에 설정한 환경변수는 새 터미널에
 자동 승계되지 않는다.
+
+macOS/Linux · Git Bash:
 
 ```bash
 cd <프로젝트 루트>/sample/dashboard
@@ -151,6 +183,13 @@ set -a
 source .env.local
 set +a
 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload
+```
+
+Windows PowerShell:
+
+```powershell
+cd <프로젝트 루트>\sample\dashboard
+pwsh scripts/run_local.ps1
 ```
 
 ## 4. 접속과 정상 동작 확인
@@ -215,7 +254,7 @@ curl -fsS http://127.0.0.1:8765/api/v1/public/summary
 
 | 증상 | 원인과 해결 |
 |---|---|
-| 로그인 화면으로 이동함 | `.env.local`을 현재 셸에 로드했는지, `AUTH_MODE=local_auto`인지 확인하고 서버를 재기동한다. |
+| 로그인 화면으로 이동함 | `.env.local`을 현재 셸에 로드했는지, `AUTH_MODE=local_auto`인지 확인하고 서버를 재기동한다. **Windows에서 bash용 `source .env.local`을 PowerShell에 붙여넣으면 로드되지 않는다** — `pwsh scripts/run_local.ps1`을 사용하거나 §3-2의 PowerShell 로드 스니펫을 실행한다. `/health` 응답이 떠도 `AUTH_MODE`가 `required`이면 로그인 화면이 정상이다. |
 | `403 origin mismatch` | `localhost:8765` 대신 설정과 같은 `http://127.0.0.1:8765`를 사용한다. 쿠키나 계정을 먼저 변경하지 않는다. |
 | `local_auto는 ... 사용할 수 없습니다`로 기동 실패 | 오류에 표시된 조건을 고친다. development, SQLite, loopback HTTP/Host, proxy header 미신뢰가 모두 필요하다. |
 | `/admin`이 열리지 않음 | 정상이다. 로컬 분석 계정은 일반 회원이며 관리 권한을 갖지 않는다. |

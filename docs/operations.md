@@ -58,6 +58,12 @@ docker compose exec trino trino --execute 'SELECT 1'  # query engine 확인
 [사람용 로컬 분석 가이드](local-analysis-human-guide.md)를 정본으로 사용한다. AI에게 준비·검증을
 맡길 때는 [AI용 로컬 분석 runbook](local-analysis-agent-runbook.md)을 함께 제공한다.
 
+실행 환경은 Windows(PowerShell)와 macOS/Linux(bash) 둘 다 지원한다. 앱은 `.env` 파일을 자동
+로드하지 않으므로 `.env.local` 주입은 실행 셸이 담당한다. bash 예시를 PowerShell에 그대로
+붙여넣으면 `source`·`set -a`가 없어 `AUTH_MODE`가 주입되지 않는다.
+
+macOS/Linux · Git Bash:
+
 ```bash
 cd sample/dashboard
 python3 -m venv .venv
@@ -66,6 +72,15 @@ test -f .env.local || cp .env.local.example .env.local
 set -a; source .env.local; set +a
 .venv/bin/python scripts/init_auth_db.py
 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload
+```
+
+Windows PowerShell:
+
+```powershell
+cd sample\dashboard
+py -3 -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+pwsh scripts/run_local.ps1   # .env.local 생성·로드 → init_auth_db → uvicorn 일괄
 ```
 
 이 경로는 로컬 SQLite의 일반 회원 세션을 자동 발급하며 관리자 권한은 제공하지 않는다.
@@ -95,12 +110,23 @@ set -a; source .env; set +a
 기동:
 
 ```bash
-# 새 로컬 셸을 열 때마다 환경을 다시 로드한다.
+# 새 로컬 셸을 열 때마다 환경을 다시 로드한다. (macOS/Linux · Git Bash)
 set -a
 source .env
 set +a
-.venv/bin/uvicorn app.main:app --port 8765            # Windows: .venv\Scripts\uvicorn
+.venv/bin/uvicorn app.main:app --port 8765
 # 개발 중이면 --reload 를 붙인다
+```
+
+Windows PowerShell에서 `.env`(실제 인증 흐름)를 로드하고 기동:
+
+```powershell
+# 새 로컬 셸을 열 때마다 환경을 다시 로드한다.
+Get-Content .env | Where-Object { $_ -match '^\s*[^#].*=' } | ForEach-Object {
+  $name, $value = $_ -split '=', 2
+  Set-Item "env:$($name.Trim())" $value.Trim()
+}
+.venv\Scripts\uvicorn app.main:app --port 8765   # 개발 중이면 --reload
 ```
 
 production은 `.env`를 source하지 않고 service manager/Secret Manager가 환경을 주입한다.

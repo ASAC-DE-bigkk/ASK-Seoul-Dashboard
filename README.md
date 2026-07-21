@@ -30,6 +30,13 @@ app/main.py(FastAPI) ──▶ /api/v1/catalog/... + / (마켓플레이스 화�
 AI에게 준비·검증을 맡길 때는
 [로컬 분석 AI runbook](docs/local-analysis-agent-runbook.md)을 함께 전달한다.
 
+> 실행 환경은 **Windows(PowerShell)와 macOS/Linux(bash) 둘 다** 지원한다. 아래 두 절차 중
+> 자기 환경의 것을 사용한다. 앱은 `.env` 파일을 자동 로드하지 않으므로 `.env.local` 주입은
+> 실행 셸이 담당한다 — bash 예시를 PowerShell에 그대로 붙여넣으면 `AUTH_MODE`가 주입되지 않아
+> 로그인 화면으로 떨어진다.
+
+**macOS/Linux · Git Bash**
+
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
@@ -37,6 +44,16 @@ test -f .env.local || cp .env.local.example .env.local
 set -a; source .env.local; set +a
 .venv/bin/python scripts/init_auth_db.py
 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload
+# → http://127.0.0.1:8765/charts
+```
+
+**Windows PowerShell**
+
+```powershell
+py -3 -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+pwsh scripts/run_local.ps1
+# run_local.ps1 이 .env.local 생성·로드 → 인증 DB 초기화 → uvicorn 기동을 일괄 수행
 # → http://127.0.0.1:8765/charts
 ```
 
