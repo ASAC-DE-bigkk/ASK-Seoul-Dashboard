@@ -197,7 +197,9 @@ powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1
 
 ## 4. 접속과 정상 동작 확인
 
-브라우저 주소는 `localhost`와 섞지 말고 아래처럼 `127.0.0.1`로 통일한다.
+브라우저는 `http://127.0.0.1:8765`와 `http://localhost:8765` **어느 쪽으로 접속해도 된다** —
+로컬 자동 인증 모드는 두 loopback host를 모두 허용하므로 차트 데이터 POST(`/api/v1/charts/query`)도
+origin 검사에 막히지 않는다. 아래 표는 `127.0.0.1` 기준으로 적었다.
 
 | 화면 | 주소 | 로컬 분석 모드의 결과 |
 |---|---|---|
@@ -261,7 +263,8 @@ curl -fsS http://127.0.0.1:8765/api/v1/public/summary
 | `pwsh 용어가 인식되지 않습니다` | `pwsh`는 PowerShell 7이다. 미설치면 기본 `powershell`을 쓴다: `powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1`. |
 | `이 시스템에서 스크립트를 실행할 수 없으므로 …` (PSSecurityException) | 실행 정책 차단이다. `-ExecutionPolicy Bypass`로 실행하거나 현재 창에서 `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` 후 `.\scripts\run_local.ps1`. |
 | `ModuleNotFoundError: No module named 'pydantic_core._pydantic_core'` | venv의 Python과 설치된 네이티브 바이너리 버전이 어긋난 것이다(예: venv는 3.14인데 `.pyd`는 3.13용). 안정 버전으로 재생성한다: `Remove-Item .venv -Recurse -Force; py -3.13 -m venv .venv; .venv\Scripts\python -m pip install -r requirements.txt`. |
-| `403 origin mismatch` | `localhost:8765` 대신 설정과 같은 `http://127.0.0.1:8765`를 사용한다. 쿠키나 계정을 먼저 변경하지 않는다. |
+| `403 origin mismatch` | 로컬 자동 인증 모드는 `127.0.0.1`과 `localhost`를 **모두 허용**하므로 둘 다 정상 동작한다. 이 오류가 계속 나면 옛 빌드를 실행 중일 수 있으니 서버를 최신 코드로 재기동한다(`Ctrl+C` 후 `run_local.ps1`). `0.0.0.0`이나 다른 host/port로 접속하면 mismatch가 정상이다. |
+| 차트 UI는 열리는데 **데이터가 안 나온다** | (1) `localhost`로 접속 중인데 데이터가 없다면 옛 빌드다 — 서버를 최신 코드로 재기동한다(구버전은 `localhost` origin을 막았다). (2) 실데이터는 Trino가 필요하다 — 상위 `sample/`에서 `docker compose up -d trino` 후 `curl http://127.0.0.1:30586/v1/info` 확인. (3) 라이브 데이터에는 `sample/.env`의 `R2_DEV_*` 값이 채워져 있어야 한다(값 확인은 `SHOW SCHEMAS FROM iceberg_dev`가 스키마를 반환하는지로). |
 | `local_auto는 ... 사용할 수 없습니다`로 기동 실패 | 오류에 표시된 조건을 고친다. development, SQLite, loopback HTTP/Host, proxy header 미신뢰가 모두 필요하다. |
 | `/admin`이 열리지 않음 | 정상이다. 로컬 분석 계정은 일반 회원이며 관리 권한을 갖지 않는다. |
 | Charts가 503 또는 stale을 표시함 | 인증 문제가 아니라 Trino/R2 경로 문제일 수 있다. 상위 `sample/`에서 Trino health와 `SELECT 1`을 확인한다. |

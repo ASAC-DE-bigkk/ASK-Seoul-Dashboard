@@ -335,15 +335,29 @@ class AuthSecurityMiddleware(BaseHTTPMiddleware):
         if source:
             source_url = urlsplit(source)
             target = urlsplit(self.settings.public_base_url)
-            if (
+            source_origin = (
                 source_url.scheme,
                 source_url.hostname,
                 source_url.port or (443 if source_url.scheme == "https" else 80),
-            ) != (
+            )
+            target_origin = (
                 target.scheme,
                 target.hostname,
                 target.port or (443 if target.scheme == "https" else 80),
-            ):
+            )
+            origin_ok = source_origin == target_origin
+            if not origin_ok and self.settings.local_auto:
+                # 로컬 자동 인증(development + loopback 전용)에서는 127.0.0.1과 localhost를
+                # 함께 허용한다. 브라우저가 어느 loopback 이름으로 접속하든 charts POST가
+                # origin mismatch로 막히지 않게 한다. scheme·port가 public_base_url과 같고
+                # host가 loopback 전용 AUTH_ALLOWED_HOSTS에 있을 때만 통과시킨다.
+                allowed_hosts = {host.casefold() for host in self.settings.allowed_hosts}
+                origin_ok = (
+                    source_origin[0] == target_origin[0]
+                    and source_origin[2] == target_origin[2]
+                    and (source_url.hostname or "").casefold() in allowed_hosts
+                )
+            if not origin_ok:
                 return problem(403, "origin mismatch", "요청 출처가 올바르지 않습니다.")
         elif self.settings.production:
             return problem(403, "origin required", "요청 출처를 확인할 수 없습니다.")
