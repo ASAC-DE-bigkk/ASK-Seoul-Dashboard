@@ -50,6 +50,7 @@
     </div>
     <span class="env">DEV</span>
     <div class="right">
+      <span class="env" id="read-only-badge" hidden>READ ONLY</span>
       <span class="sync"><span class="pulse" id="pulse"></span><span id="sync-note" class="num">connecting…</span></span>
       <span id="profile-action-slot"></span>
       <select id="refresh-sel" class="sel" title="자동 갱신 간격 — gold 를 주기적으로 재질의해 화면을 갱신합니다">
@@ -82,7 +83,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M5 20V10M12 20V4M19 20v-7"/></svg>
       </div>
       <b>아직 차트가 없습니다</b>
-      <p>오른쪽 위 <b>레이아웃 변경</b>을 누른 뒤 <b>차트 추가</b>로 gold 데이터셋을 연결하세요.</p>
+      <p id="empty-board-note">오른쪽 위 <b>레이아웃 변경</b>을 누른 뒤 <b>차트 추가</b>로 gold 데이터셋을 연결하세요.</p>
     </div>
   </div>
 </main>

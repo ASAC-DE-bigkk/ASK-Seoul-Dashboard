@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from app.auth.dependencies import current_user, get_db
+from app.auth.dependencies import current_user, get_db, require_member
 from app.auth.models import User
 from app.auth.service import AccessService
 from . import layouts, querybuilder, trino
@@ -299,7 +299,7 @@ def list_layout_pages(
 @router.post("/layouts", response_model=PageDetail, summary="레이아웃 페이지 추가")
 def create_layout_page(
     req: PageCreate,
-    user: User = Depends(current_user),
+    user: User = Depends(require_member),
     db: Session = Depends(get_db),
 ):
     try:
@@ -327,7 +327,7 @@ def get_layout_page(
 def patch_layout_page(
     page_id: str,
     req: PagePatch,
-    user: User = Depends(current_user),
+    user: User = Depends(require_member),
     db: Session = Depends(get_db),
 ):
     try:
@@ -346,7 +346,7 @@ def patch_layout_page(
                responses={404: {"description": "unknown page"}}, summary="레이아웃 페이지 삭제")
 def delete_layout_page(
     page_id: str,
-    user: User = Depends(current_user),
+    user: User = Depends(require_member),
     db: Session = Depends(get_db),
 ):
     try:
@@ -359,7 +359,7 @@ def delete_layout_page(
              responses={404: {"description": "unknown page"}}, summary="레이아웃 페이지 복제")
 def duplicate_layout_page(
     page_id: str,
-    user: User = Depends(current_user),
+    user: User = Depends(require_member),
     db: Session = Depends(get_db),
 ):
     try:
@@ -375,7 +375,7 @@ def duplicate_layout_page(
              summary="레이아웃 페이지 순서 변경")
 def reorder_layout_pages(
     req: ReorderRequest,
-    user: User = Depends(current_user),
+    user: User = Depends(require_member),
     db: Session = Depends(get_db),
 ):
     try:

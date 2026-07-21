@@ -8,12 +8,12 @@
 - 역할 기본 권한과 사용자 override를 분리한다. 사용자 `allow/deny`가 역할 기본값보다 우선한다.
 - 운영자는 게스트·일반회원만 관리하고, 최고관리자는 모든 회원·역할·페이지·시스템 정책을 관리한다.
 
-| 역할 | 기본 접근 | 관리 범위 |
-|---|---|---|
-| 게스트 | 카탈로그, 프로필, 이용권 | 본인 |
-| 일반회원 | 게스트 + Charts Studio | 본인 |
-| 운영자 | 카탈로그·차트·API 문서·운영 콘솔 | 게스트·일반회원 |
-| 최고관리자 | 전체 | 전체(자기 역할/상태 변경은 별도 차단) |
+| 역할 | 기본 접근 | Charts 레이아웃 | 관리 범위 |
+|---|---|---|---|
+| 게스트 | 카탈로그, 프로필, 이용권 | 기본 접근 없음. 별도 조회 허용을 받아도 쓰기 금지 | 본인 |
+| 일반회원 | 게스트 + Charts Studio | 자신의 레이아웃 조회·추가·수정·삭제 | 본인 |
+| 운영자 | 카탈로그·차트·API 문서·운영 콘솔 | 자신의 레이아웃 편집 | 게스트·일반회원 |
+| 최고관리자 | 전체 | 자신의 레이아웃 편집 | 전체(자기 역할/상태 변경은 별도 차단) |
 
 권한은 UI 숨김만으로 구현하지 않는다. 서버는 기본 거부(deny by default)와 매 요청 권한 검사를
 수행한다. 이는 [OWASP Authorization Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html)의
@@ -153,6 +153,15 @@ SMTP_ALLOW_PLAINTEXT=false
 일반 회원 세션을 자동 발급하며 proxy header를 신뢰하지 않는다. 배포 dev/main runtime은
 모두 `required`를 명시하고, 배포 스크립트도 다른 값을 거부한다. 브랜치 이름이나
 `AUTH_ENV != production` 조건은 인증 우회 기준으로 사용하지 않는다.
+
+예약된 로컬 분석 계정은 항상 `member/active`이며 사용자별 `charts=allow` override를 멱등적으로
+확보한다. 이는 오래된 로컬 SQLite의 역할 권한이 현재 기본값과 달라도 자신의 Charts에 진입하기 위한
+로컬 전용 복구이며, 전역 member 역할 권한이나 `required` 환경의 일반 계정을 변경하지 않는다.
+Charts 레이아웃 쓰기 API는 page 권한과 별도로 `member/operator/admin` 역할을 확인하고 모든 CRUD에
+현재 `user_id`를 사용한다. 따라서 별도 조회 권한을 받은 guest도 레이아웃을 바꿀 수 없고, member도
+다른 사용자의 페이지 ID를 조회하거나 수정할 수 없다. Charts 화면도 guest에게 `READ ONLY`를 표시하고
+레이아웃 추가·편집·이름변경·복제·삭제 UI를 숨긴다. 화면은 세션 응답의 서버 계산 capability
+`can_edit_charts`만 소비하며, 보안 정본은 UI가 아니라 서버의 역할 검사다.
 
 - `AUTH_TRUST_PROXY_HEADERS=true`는 원본 서버가 승인된 LB/WAF에서만 접근 가능하고, 해당 장비가
   전달 헤더를 덮어쓴다는 것이 보장될 때만 켠다.

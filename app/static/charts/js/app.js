@@ -7,6 +7,7 @@ const S = {
   meta: null, sources: [], srcDetails: {},
   pages: [], pageId: null, page: null,
   edit: false, dirty: false,
+  canEdit: false,
   booting: true, switching: false, saving: false, pageAction: false,
   grid: null, tiles: {},          // chartId → {el, inst, chart}
   modes: {},                      // chartId → live|cache|stale
@@ -533,10 +534,10 @@ function setSwitchBusy(busy) {
   const locked = busy || S.booting || S.saving || S.pageAction;
   $('canvas').setAttribute('aria-busy', String(busy));
   ['btn-edit', 'btn-add-chart', 'btn-cancel-edit', 'add-page', 'mobile-page-menu']
-    .forEach(id => { $(id).disabled = locked; });
+    .forEach(id => { $(id).disabled = locked || !S.canEdit; });
   document.querySelectorAll('.page-item').forEach(button => { button.disabled = locked; });
   $('mobile-page').disabled = locked;
-  $('mobile-add-page').disabled = locked;
+  $('mobile-add-page').disabled = locked || !S.canEdit;
 }
 
 async function switchPage(id, { force } = {}) {
@@ -582,7 +583,7 @@ function renderSidebar() {
     b.disabled = S.switching || S.saving || S.pageAction;
     b.innerHTML = `${PAGE_ICON}<span class="nm">${esc(p.name)}</span><span class="cnt">${p.chart_count}</span>`;
     b.onclick = () => { if (p.id !== S.pageId) switchPage(p.id); };
-    b.oncontextmenu = e => { e.preventDefault(); pageCtx(e, p, i); };
+    b.oncontextmenu = S.canEdit ? e => { e.preventDefault(); pageCtx(e, p, i); } : null;
     box.appendChild(b);
   });
   const mobile = $('mobile-page');
@@ -590,11 +591,12 @@ function renderSidebar() {
     `<option value="${esc(page.id)}" ${page.id === S.pageId ? 'selected' : ''}>${esc(page.name)} (${page.chart_count})</option>`
   ).join('');
   mobile.hidden = S.pages.length === 0;
-  $('mobile-page-menu').hidden = S.pages.length === 0;
+  $('mobile-page-menu').hidden = !S.canEdit || S.pages.length === 0;
   mobile.onchange = () => { if (mobile.value !== S.pageId) switchPage(mobile.value); };
 }
 
 function pageCtx(e, p, i) {
+  if (!S.canEdit) return;
   if (S.switching || S.saving || S.pageAction) {
     toast(S.saving ? '레이아웃을 저장하는 중입니다'
       : S.pageAction ? '레이아웃 작업을 처리하는 중입니다' : '페이지를 불러오는 중입니다');
@@ -667,6 +669,7 @@ async function movePage(i, delta) {
 }
 
 async function addLayoutPageFlow() {
+  if (!S.canEdit) { toast('일반회원 이상만 레이아웃을 추가할 수 있습니다'); return; }
   if (S.booting || S.switching || S.saving || S.pageAction) {
     toast(S.booting ? 'Charts Studio를 불러오는 중입니다' : '다른 레이아웃 작업이 끝난 뒤 추가하세요');
     return;
@@ -693,6 +696,7 @@ function setActButtons() {
     .forEach(b => { b.hidden = !S.edit; });
 }
 function enterEdit() {
+  if (!S.canEdit) { toast('일반회원 이상만 레이아웃을 변경할 수 있습니다'); return; }
   if (S.booting || S.switching) { toast('페이지를 불러온 뒤 다시 시도하세요'); return; }
   S.edit = true; S.dirty = false;
   S.grid.setStatic(false);
@@ -1589,7 +1593,13 @@ function initAutoRefresh() {
 }
 
 /* ── 부트 ─────────────────────────────────────────────────── */
-async function boot() {
+async function boot(authState) {
+  S.canEdit = authState?.user?.can_edit_charts === true;
+  $('read-only-badge').hidden = S.canEdit;
+  ['btn-edit', 'add-page', 'mobile-add-page'].forEach(id => { $(id).hidden = !S.canEdit; });
+  $('empty-board-note').textContent = S.canEdit
+    ? '오른쪽 위 레이아웃 변경을 누른 뒤 차트 추가로 gold 데이터셋을 연결하세요.'
+    : '게스트는 허용된 현재 레이아웃을 조회할 수 있으며 변경 내용은 저장할 수 없습니다.';
   const grid = GridStack.init({
     column: 12, cellHeight: 84, margin: 8, float: false,
     staticGrid: true, animate: true,
@@ -1943,8 +1953,11 @@ async function selftest() {
 
 AuthUI.bootstrapProtected().then(boot).then(async () => {
   const q = new URLSearchParams(location.search);
-  if (q.get('selftest') === '1') selftest();
-  if (q.get('uidemo')) {           // 개발/검증용: 편집모드·드로어를 열어둔 상태로 진입
+  if (q.get('selftest') === '1') {
+    if (S.canEdit) selftest();
+    else document.title = 'SELFTEST_READ_ONLY';
+  }
+  if (q.get('uidemo') && S.canEdit) { // 개발/검증용: 편집모드·드로어를 열어둔 상태로 진입
     enterEdit();
     if (q.get('uidemo') === 'drawer') openCfg('add');
     if (q.get('uidemo') === 'bind') {

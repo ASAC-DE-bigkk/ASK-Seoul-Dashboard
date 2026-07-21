@@ -159,6 +159,7 @@ def test_complete_auth_rbac_policy_and_payment_flow():
 
         user_login = login(member, "member@example.com", USER_PASSWORD)
         assert user_login["user"]["role_label"] == "게스트"
+        assert user_login["user"]["can_edit_charts"] is False
         assert user_login["user"]["masked_id"].startswith(member_id[:4])
         assert member.get("/catalog").status_code == 200
         assert member.get("/catalog").headers["cache-control"] == "no-store"
@@ -198,7 +199,8 @@ def test_complete_auth_rbac_policy_and_payment_flow():
         )
         assert promote.status_code == 200
         assert member.get("/api/v1/charts/meta").status_code == 401
-        login(member, "member@example.com", USER_PASSWORD)
+        member_login = login(member, "member@example.com", USER_PASSWORD)
+        assert member_login["user"]["can_edit_charts"] is True
         meta = member.get("/api/v1/charts/meta")
         assert meta.status_code == 200
         assert "bar" not in meta.json()["chart_types"]

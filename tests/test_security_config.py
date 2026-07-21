@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from fastapi import Depends, FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
@@ -21,13 +22,19 @@ from app.auth.middleware import (
     InMemoryRateLimiter,
     rate_limit_category,
 )
-from app.auth.models import AuthSession, User
-from app.auth.security import safe_next_path
-from app.auth.service import initialize_database
-from app.charts import querybuilder, trino
+from app.auth.models import (
+    AuthSession,
+    PageResource,
+    RolePagePermission,
+    User,
+    UserPagePermission,
+)
+from app.auth.security import safe_next_path, stable_digest
+from app.auth.service import AccessService, AuthService, DomainError, initialize_database
+from app.charts import layouts, querybuilder, trino
 from app.charts.models import ChartConfig
 from app.charts.ontology import CHART_TYPES, registry
-from app.charts.router import _validate_charts
+from app.charts.router import _validate_charts, router as charts_api_router
 from app.notifications import service as notification_module
 from app.notifications.service import NotificationMessage, NotificationService
 
@@ -133,6 +140,20 @@ def test_local_auto_issues_member_session_only_on_loopback(monkeypatch, tmp_path
     database = Database(settings.database_url, enable_sqlite_wal=False)
     initialize_database(database, settings)
 
+    # 오래된 로컬 DB의 member 역할 권한이 현재 기본값과 달라도 예약 계정만
+    # 사용자 override로 복구해야 한다. 전역 역할 정책은 바꾸지 않는다.
+    with database.session() as db:
+        charts_page = db.scalar(
+            select(PageResource).where(PageResource.key == "charts")
+        )
+        member_permission = db.scalar(
+            select(RolePagePermission).where(
+                RolePagePermission.role == "member",
+                RolePagePermission.page_id == charts_page.id,
+            )
+        )
+        member_permission.allowed = False
+
     local_app = FastAPI()
     local_app.state.auth_settings = settings
     local_app.state.database = database
@@ -165,6 +186,30 @@ def test_local_auto_issues_member_session_only_on_loopback(monkeypatch, tmp_path
     with TestClient(local_app, client=("127.0.0.1", 50000)) as client:
         first_post = client.post("/api/v1/charts/query")
         assert first_post.status_code == 401
+
+        state = client.get("/api/v1/auth/session")
+        assert state.status_code == 200
+        assert state.json()["authenticated"] is True
+        assert state.json()["user"]["role"] == "member"
+
+        # 유효한 세션이 이미 발급된 뒤 override가 다시 어긋나도 다음 요청에서
+        # 복구되어야 한다. 브라우저 쿠키 삭제나 세션 만료를 요구하지 않는다.
+        with database.session() as db:
+            analyst = db.scalar(
+                select(User).where(
+                    User.email == "local-analyst@localhost.invalid"
+                )
+            )
+            charts_page = db.scalar(
+                select(PageResource).where(PageResource.key == "charts")
+            )
+            analyst_override = db.scalar(
+                select(UserPagePermission).where(
+                    UserPagePermission.user_id == analyst.id,
+                    UserPagePermission.page_id == charts_page.id,
+                )
+            )
+            analyst_override.allowed = False
 
         response = client.get("/charts")
         assert response.status_code == 200
@@ -209,7 +254,142 @@ def test_local_auto_issues_member_session_only_on_loopback(monkeypatch, tmp_path
         assert analyst is not None
         assert analyst.role == "member"
         assert analyst.status == "active"
+        charts_page = db.scalar(
+            select(PageResource).where(PageResource.key == "charts")
+        )
+        member_permission = db.scalar(
+            select(RolePagePermission).where(
+                RolePagePermission.role == "member",
+                RolePagePermission.page_id == charts_page.id,
+            )
+        )
+        analyst_override = db.scalar(
+            select(UserPagePermission).where(
+                UserPagePermission.user_id == analyst.id,
+                UserPagePermission.page_id == charts_page.id,
+            )
+        )
+        assert member_permission.allowed is False
+        assert analyst_override is not None
+        assert analyst_override.allowed is True
+        assert AccessService(db).can_access(analyst, "charts") is True
         assert db.scalar(select(func.count(AuthSession.id))) == 2
+
+
+def test_chart_layout_writes_require_member_and_remain_user_scoped(
+    monkeypatch, tmp_path
+):
+    settings = _local_auto_env(monkeypatch, tmp_path)
+    database = Database(settings.database_url, enable_sqlite_wal=False)
+    initialize_database(database, settings)
+
+    local_app = FastAPI()
+    local_app.state.auth_settings = settings
+    local_app.state.database = database
+    local_app.include_router(charts_api_router)
+
+    @local_app.exception_handler(DomainError)
+    async def domain_error(_request: Request, exc: DomainError):
+        return JSONResponse(
+            status_code=exc.status,
+            media_type="application/problem+json",
+            content={
+                "type": "about:blank",
+                "title": exc.title,
+                "status": exc.status,
+                "detail": exc.detail,
+            },
+        )
+
+    local_app.add_middleware(AuthSecurityMiddleware, settings=settings)
+
+    with TestClient(
+        local_app,
+        client=("127.0.0.1", 50010),
+        headers={"user-agent": "member-test"},
+    ) as member:
+        pages = member.get("/api/v1/charts/layouts")
+        assert pages.status_code == 200
+        assert pages.json()
+        member_csrf = member.cookies.get(settings.csrf_cookie_name)
+        created = member.post(
+            "/api/v1/charts/layouts",
+            headers={"x-csrf-token": member_csrf},
+            json={"name": "로컬 회원 차트"},
+        )
+        assert created.status_code == 200
+        member_page_id = created.json()["id"]
+        renamed = member.patch(
+            f"/api/v1/charts/layouts/{member_page_id}",
+            headers={"x-csrf-token": member_csrf},
+            json={"name": "수정한 로컬 회원 차트"},
+        )
+        assert renamed.status_code == 200
+        assert renamed.json()["name"] == "수정한 로컬 회원 차트"
+
+        with database.session() as db:
+            guest = User(
+                email="charts-viewer@example.com",
+                password_hash="unused-test-password-hash",
+                nickname="차트조회게스트",
+                role="guest",
+                status="active",
+            )
+            db.add(guest)
+            db.flush()
+            charts_page = db.scalar(
+                select(PageResource).where(PageResource.key == "charts")
+            )
+            db.add(
+                UserPagePermission(
+                    user_id=guest.id,
+                    page_id=charts_page.id,
+                    allowed=True,
+                )
+            )
+            guest_page = layouts.create_page(db, guest.id, "게스트 읽기 전용 차트")
+            guest_token, guest_csrf, _expires = AuthService(
+                db, settings
+            ).create_session(
+                guest,
+                remember=False,
+                ip_hash=stable_digest("127.0.0.1", settings.session_pepper),
+                user_agent_hash=stable_digest(
+                    "guest-test", settings.session_pepper
+                ),
+            )
+
+        # 같은 member라도 다른 사용자의 page_public_id는 자신의 user_id 조건에서
+        # 찾지 못해야 한다.
+        other_page = member.get(
+            f"/api/v1/charts/layouts/{guest_page['id']}"
+        )
+        assert other_page.status_code == 404
+
+    with TestClient(
+        local_app,
+        client=("127.0.0.1", 50011),
+        headers={"user-agent": "guest-test"},
+    ) as guest_client:
+        guest_client.cookies.set(settings.cookie_name, guest_token)
+        guest_client.cookies.set(settings.csrf_cookie_name, guest_csrf)
+        visible = guest_client.get(
+            f"/api/v1/charts/layouts/{guest_page['id']}"
+        )
+        assert visible.status_code == 200
+        denied = guest_client.patch(
+            f"/api/v1/charts/layouts/{guest_page['id']}",
+            headers={"x-csrf-token": guest_csrf},
+            json={"name": "게스트가 바꾼 차트"},
+        )
+        assert denied.status_code == 403
+        assert denied.headers["content-type"].startswith(
+            "application/problem+json"
+        )
+
+    with database.session() as db:
+        unchanged = layouts.get_page(db, guest.id, guest_page["id"])
+        assert unchanged["name"] == "게스트 읽기 전용 차트"
 
 
 def test_bootstrap_credentials_fail_closed(monkeypatch):

@@ -94,6 +94,8 @@ R2 값의 GitHub Environment 정본·일시 주입·회전은
 - 익명은 랜딩·로그인·가입·비밀번호 재설정만 접근한다.
 - 팀원 로컬 분석에만 `AUTH_MODE=local_auto`를 사용할 수 있고, 배포 dev/main은
   `AUTH_MODE=required`로 로그인·회원가입을 강제한다.
+- 게스트의 기본 데이터 화면은 Catalog까지이며 Charts 레이아웃을 변경할 수 없다. 일반회원은
+  Charts에 진입해 자신의 레이아웃만 조회·추가·수정·삭제할 수 있고 로컬 예약 member도 같은 계약을 사용한다.
 - 게스트/일반회원/운영자/최고관리자 역할, 역할 기본 페이지 권한, 사용자 allow/deny override를 지원한다.
 - 이메일 인증 또는 관리자 승인, Argon2id 비밀번호, DB 세션·CSRF, 계정 잠금, 요청 제한을 적용한다.
 - 사용자별 온톨로지/Charts 레이아웃, 일·주·월·연 모의결제와 운영 승인, Discord/Slack/Telegram 알림을 지원한다.
