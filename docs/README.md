@@ -6,7 +6,9 @@
 
 | 문서 | 내용 | 대상 독자 |
 |---|---|---|
-| [maintanance/README.md](maintanance/README.md) | 개발 실행·최초 최고관리자 접속·필수 운영 원칙 | 개발·설치·운영 책임자 |
+| [local-analysis-human-guide.md](local-analysis-human-guide.md) | **로컬 분석 정본** — 로그인 없이 시작·확인·전환·문제 해결 | 데이터를 살펴보는 팀원 |
+| [local-analysis-agent-runbook.md](local-analysis-agent-runbook.md) | local_auto 불변식·허용/금지 작업·검증·보고 형식 | 로컬 환경을 준비하거나 코드를 수정하는 AI |
+| [maintanance/README.md](maintanance/README.md) | 로컬 자동 분석·인증 개발·최초 최고관리자 접속·필수 운영 원칙 | 개발·설치·운영 책임자 |
 | [operations.md](operations.md) | 솔루션 기동(up)/중지(down)/초기화 매뉴얼 | 운영·시연하는 사람 |
 | [deployment/end-to-end-human-runbook.md](deployment/end-to-end-human-runbook.md) | 접속 PC·GitHub·서버 위치를 분리한 dev 배포 전체 순서 | 실제 배포를 수행하는 사람 |
 | [deployment/server-setup-human.md](deployment/server-setup-human.md) | dev 서버 별도 설치·SSH/GitHub 설정·최초 배포 | 서버 소유자·저장소 관리자 |

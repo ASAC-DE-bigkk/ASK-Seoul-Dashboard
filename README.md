@@ -23,6 +23,29 @@ app/main.py(FastAPI) ──▶ /api/v1/catalog/... + / (마켓플레이스 화�
 
 ## 실행
 
+### 팀원 로컬 분석 — 로그인 생략
+
+사람이 따라 하는 전체 순서와 문제 해결은
+[로컬 데이터 분석 시작 가이드](docs/local-analysis-human-guide.md)를 정본으로 사용한다.
+AI에게 준비·검증을 맡길 때는
+[로컬 분석 AI runbook](docs/local-analysis-agent-runbook.md)을 함께 전달한다.
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+test -f .env.local || cp .env.local.example .env.local
+set -a; source .env.local; set +a
+.venv/bin/python scripts/init_auth_db.py
+.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload
+# → http://127.0.0.1:8765/charts
+```
+
+`AUTH_MODE=local_auto`는 loopback에서 최초 화면을 열 때 로컬 SQLite에 일반 회원을 만들고
+정상 세션·CSRF 쿠키를 자동 발급한다. 관리자 권한은 없으며 레이아웃은 로컬 사용자 ID로 분리된다.
+Charts 실데이터가 필요하면 상위 `sample/`에서 Trino를 먼저 기동한다.
+
+### 실제 로그인·회원가입 흐름 개발
+
 ```bash
 # 1) 설치
 python3 -m venv .venv
@@ -69,6 +92,8 @@ R2 값의 GitHub Environment 정본·일시 주입·회전은
 ## 인증·회원·권한
 
 - 익명은 랜딩·로그인·가입·비밀번호 재설정만 접근한다.
+- 팀원 로컬 분석에만 `AUTH_MODE=local_auto`를 사용할 수 있고, 배포 dev/main은
+  `AUTH_MODE=required`로 로그인·회원가입을 강제한다.
 - 게스트/일반회원/운영자/최고관리자 역할, 역할 기본 페이지 권한, 사용자 allow/deny override를 지원한다.
 - 이메일 인증 또는 관리자 승인, Argon2id 비밀번호, DB 세션·CSRF, 계정 잠금, 요청 제한을 적용한다.
 - 사용자별 온톨로지/Charts 레이아웃, 일·주·월·연 모의결제와 운영 승인, Discord/Slack/Telegram 알림을 지원한다.

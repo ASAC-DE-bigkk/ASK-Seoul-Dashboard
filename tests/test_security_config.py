@@ -8,11 +8,22 @@ import time
 from pathlib import Path
 
 import pytest
+from fastapi import Depends, FastAPI, Request
+from fastapi.testclient import TestClient
+from sqlalchemy import func, select
 
 from app.auth.config import load_settings
+from app.auth.database import Database
+from app.auth.dependencies import current_session, current_user
 from app.auth.emailer import EmailSender
-from app.auth.middleware import InMemoryRateLimiter, rate_limit_category
+from app.auth.middleware import (
+    AuthSecurityMiddleware,
+    InMemoryRateLimiter,
+    rate_limit_category,
+)
+from app.auth.models import AuthSession, User
 from app.auth.security import safe_next_path
+from app.auth.service import initialize_database
 from app.charts import querybuilder, trino
 from app.charts.models import ChartConfig
 from app.charts.ontology import CHART_TYPES, registry
@@ -28,6 +39,7 @@ def _production_env(monkeypatch):
     monkeypatch.delenv("AUTH_BOOTSTRAP_ADMIN_EMAIL", raising=False)
     monkeypatch.delenv("AUTH_BOOTSTRAP_ADMIN_PASSWORD", raising=False)
     monkeypatch.setenv("AUTH_ENV", "production")
+    monkeypatch.setenv("AUTH_MODE", "required")
     monkeypatch.setenv("DATABASE_URL", "sqlite:////private/tmp/ask-seoul-production-test.db")
     monkeypatch.setenv("AUTH_PUBLIC_BASE_URL", "https://dashboard.example.com")
     monkeypatch.setenv("AUTH_ALLOWED_HOSTS", "dashboard.example.com")
@@ -35,6 +47,22 @@ def _production_env(monkeypatch):
     monkeypatch.setenv("AUTH_SESSION_PEPPER", "p" * 48)
     monkeypatch.setenv("AUTH_MFA_MASTER_KEY", "m" * 48)
     monkeypatch.setenv("AUTH_REQUIRE_MFA_FOR_PRIVILEGED", "true")
+
+
+def _local_auto_env(monkeypatch, tmp_path):
+    monkeypatch.delenv("AUTH_BOOTSTRAP_ADMIN_EMAIL", raising=False)
+    monkeypatch.delenv("AUTH_BOOTSTRAP_ADMIN_PASSWORD", raising=False)
+    monkeypatch.setenv("AUTH_ENV", "development")
+    monkeypatch.setenv("AUTH_MODE", "local_auto")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'local-auto.db'}")
+    monkeypatch.setenv("AUTH_PUBLIC_BASE_URL", "http://127.0.0.1:8765")
+    monkeypatch.setenv("AUTH_ALLOWED_HOSTS", "127.0.0.1,localhost")
+    monkeypatch.setenv("AUTH_COOKIE_SECURE", "false")
+    monkeypatch.setenv("AUTH_TRUST_PROXY_HEADERS", "false")
+    monkeypatch.setenv("AUTH_REQUIRE_MFA_FOR_PRIVILEGED", "false")
+    monkeypatch.setenv("AUTH_SESSION_PEPPER", "local-auto-test-session-pepper-long-value")
+    monkeypatch.setenv("AUTH_MFA_MASTER_KEY", "local-auto-test-mfa-master-key-long-value")
+    return load_settings()
 
 
 def test_production_security_settings_fail_closed(monkeypatch):
@@ -60,6 +88,128 @@ def test_production_security_settings_fail_closed(monkeypatch):
     monkeypatch.setenv("AUTH_REQUIRE_MFA_FOR_PRIVILEGED", "false")
     with pytest.raises(RuntimeError, match="MFA"):
         load_settings()
+
+
+def test_local_auto_settings_fail_closed(monkeypatch, tmp_path):
+    settings = _local_auto_env(monkeypatch, tmp_path)
+    assert settings.local_auto is True
+    assert settings.mode == "local_auto"
+
+    monkeypatch.setenv("AUTH_MODE", "anonymous")
+    with pytest.raises(RuntimeError, match="AUTH_MODE"):
+        load_settings()
+
+    monkeypatch.setenv("AUTH_MODE", "local_auto")
+    monkeypatch.setenv("AUTH_ENV", "test")
+    with pytest.raises(RuntimeError, match="development"):
+        load_settings()
+
+    _local_auto_env(monkeypatch, tmp_path)
+    monkeypatch.setenv(
+        "DATABASE_URL", "postgresql+psycopg://ask_seoul:password@localhost/ask_seoul"
+    )
+    with pytest.raises(RuntimeError, match="SQLite"):
+        load_settings()
+
+    _local_auto_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("AUTH_PUBLIC_BASE_URL", "http://dev.example.com")
+    monkeypatch.setenv("AUTH_ALLOWED_HOSTS", "dev.example.com")
+    with pytest.raises(RuntimeError, match="loopback"):
+        load_settings()
+
+    _local_auto_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("AUTH_ALLOWED_HOSTS", "127.0.0.1,localhost,dev.example.com")
+    with pytest.raises(RuntimeError, match="loopback host"):
+        load_settings()
+
+    _local_auto_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("AUTH_TRUST_PROXY_HEADERS", "true")
+    with pytest.raises(RuntimeError, match="TRUST_PROXY_HEADERS=false"):
+        load_settings()
+
+
+def test_local_auto_issues_member_session_only_on_loopback(monkeypatch, tmp_path):
+    settings = _local_auto_env(monkeypatch, tmp_path)
+    database = Database(settings.database_url, enable_sqlite_wal=False)
+    initialize_database(database, settings)
+
+    local_app = FastAPI()
+    local_app.state.auth_settings = settings
+    local_app.state.database = database
+
+    @local_app.get("/charts")
+    def charts(
+        user: User = Depends(current_user),
+        auth_session: AuthSession = Depends(current_session),
+    ):
+        return {"role": user.role, "session_id": auth_session.id}
+
+    @local_app.post("/api/v1/charts/query")
+    def chart_query(user: User = Depends(current_user)):
+        return {"role": user.role}
+
+    @local_app.get("/admin")
+    def admin_page():
+        return {"unexpected": True}
+
+    @local_app.get("/api/v1/auth/session")
+    def session_info(request: Request):
+        user = request.state.user
+        return {
+            "authenticated": user is not None,
+            "user": {"role": user.role} if user is not None else None,
+        }
+
+    local_app.add_middleware(AuthSecurityMiddleware, settings=settings)
+
+    with TestClient(local_app, client=("127.0.0.1", 50000)) as client:
+        first_post = client.post("/api/v1/charts/query")
+        assert first_post.status_code == 401
+
+        response = client.get("/charts")
+        assert response.status_code == 200
+        assert response.json()["role"] == "member"
+        assert client.cookies.get(settings.cookie_name)
+        csrf = client.cookies.get(settings.csrf_cookie_name)
+        assert csrf
+
+        missing_csrf = client.post("/api/v1/charts/query")
+        assert missing_csrf.status_code == 403
+        query = client.post(
+            "/api/v1/charts/query", headers={"x-csrf-token": csrf}
+        )
+        assert query.status_code == 200
+        assert query.json()["role"] == "member"
+
+        denied = client.get(
+            "/admin", headers={"accept": "text/html"}, follow_redirects=False
+        )
+        assert denied.status_code == 303
+        assert denied.headers["location"] == "/profile?denied=1"
+
+    with TestClient(local_app, client=("198.51.100.10", 50001)) as remote:
+        response = remote.get(
+            "/charts", headers={"accept": "text/html"}, follow_redirects=False
+        )
+        assert response.status_code == 303
+        assert response.headers["location"].startswith("/auth/login")
+        assert remote.cookies.get(settings.cookie_name) is None
+
+    with TestClient(local_app, client=("127.0.0.1", 50002)) as landing:
+        state = landing.get("/api/v1/auth/session")
+        assert state.status_code == 200
+        assert state.json()["authenticated"] is True
+        assert state.json()["user"]["role"] == "member"
+        assert landing.cookies.get(settings.cookie_name)
+
+    with database.session() as db:
+        analyst = db.scalar(
+            select(User).where(User.email == "local-analyst@localhost.invalid")
+        )
+        assert analyst is not None
+        assert analyst.role == "member"
+        assert analyst.status == "active"
+        assert db.scalar(select(func.count(AuthSession.id))) == 2
 
 
 def test_bootstrap_credentials_fail_closed(monkeypatch):

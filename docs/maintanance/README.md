@@ -3,7 +3,47 @@
 > 기본 계정과 기본 비밀번호는 없다. 실제 이메일·비밀번호·MFA seed·복구 코드는
 > 저장소·문서·로그에 기록하지 않는다.
 
-## 개발 환경 빠른 시작
+## 팀원 로컬 분석 빠른 시작 — 로그인 생략
+
+로컬에서 데이터를 분석하고 Charts Studio 레이아웃을 확인하는 작업은 실제 계정 생성 없이
+시작할 수 있다. 이 모드는 배포 dev/main과 분리된 로컬 SQLite만 사용한다.
+처음 실행하는 팀원은 [사람용 로컬 분석 가이드](../local-analysis-human-guide.md)를 정본으로
+따르고, AI에게 준비를 맡길 때는 [AI용 runbook](../local-analysis-agent-runbook.md)을 사용한다.
+
+```bash
+cd <프로젝트 루트>/sample
+docker compose up -d trino
+docker compose ps trino
+curl -fsS http://127.0.0.1:30586/v1/info
+
+cd dashboard
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+test -f .env.local || cp .env.local.example .env.local
+set -a
+source .env.local
+set +a
+
+.venv/bin/python scripts/init_auth_db.py
+.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload
+```
+
+`http://127.0.0.1:8765/charts`를 열면 `local-analyst@localhost.invalid` 예약 계정이
+`member` 역할로 로컬 DB에 한 번 생성되고 정상 AuthSession과 CSRF 쿠키가 자동 발급된다.
+레이아웃은 이 사용자 ID에 저장되며 관리자 영역은 허용되지 않는다. 고정 비밀번호나 실제 이메일은 없다.
+
+다음 중 하나라도 어긋나면 앱은 `local_auto`로 기동하지 않는다.
+
+- `AUTH_ENV=development`, `AUTH_MODE=local_auto`
+- SQLite `DATABASE_URL`
+- loopback HTTP `AUTH_PUBLIC_BASE_URL`과 loopback-only `AUTH_ALLOWED_HOSTS`
+- `AUTH_TRUST_PROXY_HEADERS=false`, `AUTH_COOKIE_SECURE=false`
+- 비어 있는 `AUTH_BOOTSTRAP_ADMIN_EMAIL`·`AUTH_BOOTSTRAP_ADMIN_PASSWORD`
+
+서버를 `0.0.0.0`에 bind하거나 reverse proxy 뒤에 두지 말고 위 명령처럼 `127.0.0.1`에만 bind한다.
+실제 로그인·가입·승인·MFA 흐름을 개발할 때는 아래의 `AUTH_MODE=required` 환경을 사용한다.
+
+## 실제 인증 흐름 개발 빠른 시작
 
 Python 3.9+와 Docker가 필요하다. 로그인·회원·권한·카탈로그 화면은 Trino 없이도
 기동할 수 있다. Charts Studio의 실데이터 조회에는 Trino와 `sample/.env`에 주입된
@@ -76,6 +116,7 @@ curl -fsS http://127.0.0.1:8765/health
 다음 값은 평문 `.env`가 아니라 Secret Manager에서 주입한다.
 
 - `AUTH_ENV=production`
+- `AUTH_MODE=required`
 - HTTPS `AUTH_PUBLIC_BASE_URL`과 제한된 `AUTH_ALLOWED_HOSTS`
 - 명시적 `DATABASE_URL`과 원격 RDB 인증서·hostname 검증
   (`PostgreSQL: sslmode=verify-full`, `MySQL/MariaDB: ssl_ca + ssl_check_hostname=true`)

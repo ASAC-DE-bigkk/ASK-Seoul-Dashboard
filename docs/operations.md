@@ -46,7 +46,26 @@ docker compose exec trino trino --execute 'SELECT 1'  # query engine 확인
 
 ### 1-2. 대시보드 서버
 
-최초 1회 (가상환경):
+팀원이 로그인 없이 로컬 데이터 분석만 수행할 때:
+
+처음 실행하거나 장애를 해결할 때는
+[사람용 로컬 분석 가이드](local-analysis-human-guide.md)를 정본으로 사용한다. AI에게 준비·검증을
+맡길 때는 [AI용 로컬 분석 runbook](local-analysis-agent-runbook.md)을 함께 제공한다.
+
+```bash
+cd sample/dashboard
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+test -f .env.local || cp .env.local.example .env.local
+set -a; source .env.local; set +a
+.venv/bin/python scripts/init_auth_db.py
+.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload
+```
+
+이 경로는 로컬 SQLite의 일반 회원 세션을 자동 발급하며 관리자 권한은 제공하지 않는다.
+배포 dev/main 또는 실제 인증 흐름 검증에는 사용하지 않는다.
+
+실제 로그인·회원가입 흐름 개발을 위한 최초 1회:
 
 ```bash
 cd sample/dashboard
@@ -105,6 +124,7 @@ production은 `.env`를 source하지 않고 service manager/Secret Manager가 �
 | 변수 | 기본값 | 용도 |
 |---|---|---|
 | `AUTH_ENV` | `development` | production 보안 검증 활성화 기준 |
+| `AUTH_MODE` | `required` | `required`는 인증 필수, `local_auto`는 fail-closed 로컬 자동 회원 세션 |
 | `AUTH_ALLOWED_HOSTS` | `127.0.0.1,localhost` | 허용 Host 헤더 목록 |
 | `CHARTS_TRINO_URL` | `http://127.0.0.1:30586` | Trino 주소 |
 | `CHARTS_TRINO_USER` | `charts-studio` | X-Trino-User 헤더 |
@@ -312,6 +332,7 @@ snapshot relation 계약, 동시성·캐시·백필 경로를 함께 변경해�
 production runtime 파일의 필수 보안값은 다음과 같다.
 
 - `AUTH_ENV=production`
+- `AUTH_MODE=required`
 - HTTPS `AUTH_PUBLIC_BASE_URL`, 정확한 `AUTH_ALLOWED_HOSTS`, 동일한 `HEALTHCHECK_HOST`
 - `AUTH_COOKIE_SECURE=true`, `AUTH_REQUIRE_MFA_FOR_PRIVILEGED=true`
 - 서로 다른 32자 이상 `AUTH_SESSION_PEPPER`, `AUTH_MFA_MASTER_KEY`

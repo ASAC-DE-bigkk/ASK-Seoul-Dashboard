@@ -130,6 +130,7 @@ CSRF 기준은 [OWASP CSRF Prevention](https://cheatsheetseries.owasp.org/cheats
 
 ```dotenv
 AUTH_ENV=production
+AUTH_MODE=required
 AUTH_PUBLIC_BASE_URL=https://dashboard.example.com
 AUTH_ALLOWED_HOSTS=dashboard.example.com
 AUTH_COOKIE_SECURE=true
@@ -147,6 +148,11 @@ SMTP_USE_TLS=true
 SMTP_USE_SSL=false
 SMTP_ALLOW_PLAINTEXT=false
 ```
+
+`AUTH_MODE`의 기본값은 `required`다. `local_auto`는 팀원 PC의 loopback HTTP + SQLite에서만
+일반 회원 세션을 자동 발급하며 proxy header를 신뢰하지 않는다. 배포 dev/main runtime은
+모두 `required`를 명시하고, 배포 스크립트도 다른 값을 거부한다. 브랜치 이름이나
+`AUTH_ENV != production` 조건은 인증 우회 기준으로 사용하지 않는다.
 
 - `AUTH_TRUST_PROXY_HEADERS=true`는 원본 서버가 승인된 LB/WAF에서만 접근 가능하고, 해당 장비가
   전달 헤더를 덮어쓴다는 것이 보장될 때만 켠다.

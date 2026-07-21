@@ -19,6 +19,7 @@ os.environ["AUTH_SESSION_PEPPER"] = "test-only-session-pepper-with-enough-entrop
 os.environ["AUTH_MFA_MASTER_KEY"] = "test-only-mfa-master-key-with-enough-entropy"
 os.environ["AUTH_PUBLIC_BASE_URL"] = "http://testserver"
 os.environ["AUTH_ALLOWED_HOSTS"] = "testserver,localhost,127.0.0.1"
+os.environ["AUTH_MODE"] = "required"
 os.environ["AUTH_BOOTSTRAP_ADMIN_EMAIL"] = "root@example.com"
 os.environ["AUTH_BOOTSTRAP_ADMIN_PASSWORD"] = "Ginkgo-River-Access-2026!"
 os.environ["AUTH_AUTO_APPROVE_VERIFIED"] = "false"

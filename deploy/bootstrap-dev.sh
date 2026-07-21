@@ -37,6 +37,11 @@ if [[ -f $runtime_env_file ]]; then
     echo "existing runtime environment file is not the expected PostgreSQL dev configuration" >&2
     exit 78
   fi
+  if grep -q '^AUTH_MODE=' "$runtime_env_file" \
+    && ! grep -q '^AUTH_MODE=required$' "$runtime_env_file"; then
+    echo "existing dev runtime environment must use AUTH_MODE=required" >&2
+    exit 78
+  fi
   echo "existing dev runtime environment preserved"
   exit 0
 fi
@@ -65,6 +70,7 @@ umask 077
   echo "DATABASE_URL=postgresql+psycopg://ask_seoul:$postgres_password@postgres:5432/ask_seoul"
   echo
   echo "AUTH_ENV=development"
+  echo "AUTH_MODE=required"
   echo "AUTH_PUBLIC_BASE_URL=http://127.0.0.1:8765"
   echo "AUTH_ALLOWED_HOSTS=127.0.0.1,localhost"
   echo "AUTH_COOKIE_SECURE=false"
