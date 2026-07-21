@@ -30,6 +30,11 @@ app/main.py(FastAPI) ──▶ /api/v1/catalog/... + / (마켓플레이스 화�
 AI에게 준비·검증을 맡길 때는
 [로컬 분석 AI runbook](docs/local-analysis-agent-runbook.md)을 함께 전달한다.
 
+상위 `sample`의 고정 gitlink가 오래됐다고 해서 Dashboard 변경이 사라진 것은 아니다. 현재 feature
+checkout을 시험할 때는 그 작업본에서 바로 실행한다. 팀에 병합된 `main`을 시험할 때만 깨끗한
+`sample/` checkout에서 `./scripts/update-nested-git.sh dashboard`를 먼저 실행한다. 로컬 확인만을
+위해 상위 gitlink 갱신 PR을 만들 필요는 없다.
+
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt

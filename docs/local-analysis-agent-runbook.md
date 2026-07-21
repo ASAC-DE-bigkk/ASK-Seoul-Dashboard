@@ -125,6 +125,18 @@ test -f dashboard/tests/test_security_config.py
 `dashboard/`가 이미 현재 디렉터리라면 `git status --short`처럼 경로를 조정한다.
 기존 변경은 사용자 소유이므로 작업 범위와 겹치는지 먼저 확인한다.
 
+Dashboard revision은 목적에 따라 처리한다.
+
+- feature branch 또는 dirty worktree의 변경을 시험하는 요청이면 현재 checkout을 그대로 사용한다.
+  `git submodule update`, branch switch, pull을 실행하지 않는다.
+- 팀에 병합된 공용 Dashboard를 시험하는 요청이고 worktree가 깨끗할 때만 `sample/` 루트에서
+  `./scripts/update-nested-git.sh dashboard`를 실행한다. 이 명령은 `.gitmodules`의 `main`만
+  fast-forward하며 Dashboard 이외의 서브모듈은 건드리지 않는다.
+- 일반 `git submodule update --init dashboard`는 상위 gitlink의 고정 revision을 복원하므로
+  공용 최신 소스 확보 수단으로 사용하지 않는다.
+- 로컬 실행 revision이 상위 gitlink와 달라 `M dashboard`가 표시되는 것은 허용한다. 로컬 검증을
+  이유로 상위 gitlink를 stage·commit하지 않는다. gitlink 승격은 별도 통합 이슈/PR의 책임이다.
+
 상위 데이터 스택은 값을 읽지 말고 상태만 확인한다.
 
 ```bash
@@ -133,9 +145,9 @@ curl -fsS http://127.0.0.1:30586/v1/info
 ```
 
 Trino가 없더라도 Catalog·인증 UI 작업은 진행할 수 있다. Charts 실데이터 검증만 blocker로 구분한다.
-로컬 자동 인증 최초 반영 PR #14는 Dashboard `dev`에 merge되었지만 상위 `sample/`의 submodule pointer는
-더 오래된 commit일 수 있다. `AUTH_MODE=local_auto` 예제가 없으면 사용자 요청 범위와 clean worktree를
-확인한 뒤 Dashboard `dev`를 fast-forward한다. 상위 submodule pointer를 임의로 commit하지 않는다.
+`AUTH_MODE=local_auto` 예제가 없으면 인증 설정부터 바꾸지 말고, 먼저 현재 Dashboard revision이 사용자
+요청 대상인지 판정한다. 공용 `main` 확인 요청이면 위 선택 갱신을 사용하고, feature 작업본이면 해당
+branch의 구현 상태를 보고한다.
 
 ## 5. 승인된 로컬 준비와 실행
 

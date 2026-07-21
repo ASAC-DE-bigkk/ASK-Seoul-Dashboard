@@ -53,7 +53,14 @@ R2/Iceberg 자격증명은 상위 `sample/.env`를 통해 Trino에만 주입한�
 
 ### 2-1. Dashboard 코드 버전 확인
 
-`sample/` 루트에서 현재 Dashboard 브랜치를 먼저 확인한다.
+먼저 무엇을 시험할지 구분한다.
+
+| 목적 | 사용할 코드 | 소스 갱신 |
+|---|---|---|
+| Dashboard에서 아직 작업 중인 변경 확인 | 현재 feature branch/working tree | 갱신 명령을 실행하지 않고 현재 checkout을 그대로 실행 |
+| 팀에 병합된 공용 버전 확인 | Dashboard `main` | 아래 Dashboard 단독 갱신 실행 |
+
+`sample/` 루트에서 현재 Dashboard 상태를 확인한다.
 
 ```bash
 cd <프로젝트 루트>/sample
@@ -62,22 +69,25 @@ git submodule status dashboard
 grep -q '^AUTH_MODE=local_auto$' dashboard/.env.local.example
 ```
 
-로컬 자동 인증의 최초 반영 작업은 PR #14에서 Dashboard `dev`에 merge되었다. 다만 Git submodule인
-상위 `sample/`이 기록한 Dashboard commit은 `dashboard/dev`보다 늦게 갱신될 수 있다. 위 `grep`이
-실패하면 현재 submodule commit에는 이 기능이 없는 것이다.
+Dashboard가 feature branch이거나 수정 파일이 있다면 현재 작업본을 실행한다. 이 상태에서 소스 갱신
+명령으로 `main`을 checkout하지 않는다. 위 `grep`이 실패한다면 현재 작업본 자체에 로컬 분석 기능이
+없는 것이므로 작업 소유자와 기대 revision을 먼저 확인한다.
 
-그 경우 Dashboard 작업 트리가 깨끗한지 확인한 뒤 최신 `dev`를 받는다. 이미 수정 중인 파일이 있으면
-branch를 바꾸거나 pull하지 말고 먼저 작업 소유자와 정리한다.
+팀에 이미 병합된 Dashboard `main`을 확인하려는 경우에만 작업 트리가 깨끗한지 확인한 뒤 상위
+`sample/`의 선택 갱신 명령을 사용한다.
 
 ```bash
-git -C dashboard fetch origin
-git -C dashboard switch dev
-git -C dashboard pull --ff-only
+./scripts/update-nested-git.sh dashboard
+git -C dashboard status --short --branch
 ```
 
-상위 `sample/`이 local_auto 반영 commit으로 submodule pointer를 갱신한 뒤에는 일반적인
-`git submodule update --init dashboard`만으로 준비된다. 로컬에서 움직인 submodule pointer를 이 실행
-작업과 함께 상위 저장소에 임의로 commit하지 않는다.
+이 명령은 `.gitmodules`에 지정된 Dashboard `main`만 fetch·fast-forward하며 dirty worktree에서는
+중단한다. 일반 `git submodule update --init dashboard`를 반복 실행하면 상위 저장소가 고정한 과거
+gitlink로 되돌아갈 수 있으므로 공용 최신 버전 확인 명령으로 사용하지 않는다.
+
+갱신 후 상위 `sample`의 `git status`에 `M dashboard`가 보일 수 있다. 이는 로컬 Dashboard revision과
+고정 gitlink가 다르다는 뜻이며 정상이다. 로컬 실행마다 상위 gitlink PR을 만들 필요는 없다. gitlink는
+통합 검증한 revision을 상위 저장소의 기본 상태로 승격할 때만 별도 이슈/PR로 갱신한다.
 
 ## 3. 처음 실행하기
 

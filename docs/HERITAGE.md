@@ -51,6 +51,7 @@ Charts Studio 가 라이브 질의를 갖는 이유: 사용자가 소스·차원
 | 파이썬/실행 | Python 3.9+ 호환. FastAPI·SQLAlchemy·Argon2. 포트 관례 8765(문서)·8799(개발) |
 | 인증 DB | `DATABASE_URL`, 기본 `sqlite:///./data/ask_seoul.db`. PostgreSQL/MySQL dialect DDL도 테스트 |
 | 로컬 분석 인증 | `.env.local.example`의 `AUTH_MODE=local_auto`만 사용. loopback HTTP + SQLite + proxy header 미신뢰 조건에서 일반 회원 세션·CSRF를 자동 발급. 배포 dev/main은 `AUTH_MODE=required` |
+| 로컬 소스 revision | feature 작업은 현재 checkout을 그대로 실행. 병합된 공용 버전은 상위 `sample`의 `./scripts/update-nested-git.sh dashboard`로 Dashboard `main`만 갱신. 일반 submodule update는 고정 gitlink 복원용이며, 로컬 검증마다 상위 pointer PR을 만들지 않음 |
 | 세션 | DB에는 HMAC 해시만 저장. 절대+idle 만료와 사용자별 상한 적용. 운영은 `AUTH_SESSION_PEPPER`, HTTPS Secure cookie 필수 |
 | MFA | RFC 6238 TOTP+일회용 복구 코드. 운영자 이상 기본 강제. 하위 역할은 감사 사유 기반 관리자 초기화, 권한 계정은 CLI break-glass만 허용. `AUTH_MFA_MASTER_KEY` 장기 보관 필수 |
 | 서버 배포 | `dev`만 GitHub `development` 서버에 배포. 서비스 DB는 전용 PostgreSQL volume, 데이터는 Trino→R2/Iceberg. `main`은 build만 하고 deploy 금지 |
@@ -197,3 +198,6 @@ open "http://127.0.0.1:8765/charts?selftest=1"
 - 2026-07-21: 로컬 토폴로지를 상위 `sample/` Trino 재사용으로 명문화. 사람·AI 문서에 최초/재실행,
   R2 dev catalog 전제, 실제 query/selftest 검증, 안전 종료를 한 흐름으로 고정하고 로컬 두 번째
   Trino 실행을 금지.
+- 2026-07-21: 상위 gitlink 고정과 로컬 Dashboard 개발 revision을 분리. feature 작업본은 현재 checkout을
+  그대로 실행하고, 병합된 공용 버전만 상위 선택 갱신 명령으로 `main`을 fast-forward하며, 로컬 검증을
+  위해 상위 pointer PR을 반복 생성하지 않는 계약을 사람·AI 문서에 추가.
