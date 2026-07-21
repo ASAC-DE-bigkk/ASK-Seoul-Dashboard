@@ -42,6 +42,7 @@ def _summary(t: dict) -> dict:
         "column_count": len(t["columns"]),
         "quality_source_count": len(t["quality"]),
         "serving_tier": t.get("serving_tier"),
+        "refresh": t.get("refresh"),
         "tests": t.get("tests", []),
     }
 

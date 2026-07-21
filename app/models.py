@@ -34,6 +34,7 @@ class TableSummary(BaseModel):
     contract_enforced: bool
     materialized: str = ""
     serving_tier: str | None = None   # 도메인이 dbt config.meta 로 선언한 D1 서빙 tier
+    refresh: str | None = None        # 도메인이 config.meta.refresh 로 선언한 갱신주기(데이터 그레인)
     tests: list[str] = []             # 모델에 걸린 dbt 테스트 게이트 (정의 기준)
     row_count: int
     column_count: int

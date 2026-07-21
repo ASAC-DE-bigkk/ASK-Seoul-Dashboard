@@ -437,9 +437,9 @@ const DOMAIN_META = {
 };
 const dmeta = d => DOMAIN_META[d] || { c: '#888780', label: d };
 const fmt = n => n.toLocaleString('ko-KR');
-// 골드 빌드 갱신주기 — dbt tags(fast/slow) 기준. 선언 안 한 도메인은 '—'.
-const CADENCE = { fast: '5분', slow: '10분' };
-const cadence = tags => (tags || []).map(t => CADENCE[t]).find(Boolean) || '—';
+// 갱신주기 — 도메인이 dbt config.meta.refresh 로 선언(데이터 그레인 기준: 실시간/1시간/1일 등).
+// 선언 안 한 도메인은 '—'(각 도메인이 meta.refresh 달면 자동 채워짐).
+const cadence = t => t.refresh || '—';
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const ident = t => IDENT[t.name] || { c: dmeta(t.domain).c, cat: `${dmeta(t.domain).label} · gold` };
 
@@ -592,7 +592,7 @@ function renderCards(tables) {
         <div class="f"><span>Rows</span><b>${fmt(t.row_count)}</b></div>
         <div class="f"><span>Cols</span><b>${t.column_count}</b></div>
         <div class="f"><span title="스냅샷 시점 기준 — 데이터 범위">Coverage <sup>·스냅샷</sup></span><b>${range}</b></div>
-        <div class="f"><span title="골드 빌드 갱신주기 (dbt fast/slow)">갱신주기</span><b>${cadence(t.tags)}</b></div>
+        <div class="f"><span title="데이터 시간 단위 (config.meta.refresh)">데이터 주기</span><b>${cadence(t)}</b></div>
       </div>
       <div class="foot">${qfoot}
         ${t.serving_tier ? `<span class="pill dim">${esc(t.serving_tier)}</span>` : ''}
@@ -671,7 +671,7 @@ function renderTab() {
       <section><h3>Description</h3><p class="desc">${esc(t.description) || '—'}</p></section>
       <section><h3>Properties</h3><div class="kv">
         ${[['Rows', fmt(t.row_count)], ['Columns', t.column_count],
-           ['갱신주기 (빌드)', cadence(t.tags)],
+           ['데이터 주기', cadence(t)],
            ['Time axis', dr ? esc(dr.column) : '—'],
            ['Coverage (스냅샷 시점)', dr && dr.min ? `${dr.min} ~ ${dr.max}` : '—'],
            ['Materialized', esc(t.materialized)],

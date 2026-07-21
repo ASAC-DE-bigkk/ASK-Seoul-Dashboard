@@ -225,8 +225,9 @@ def load_basic_meta() -> dict:
                 "tags": node.get("tags", []),
                 "contract_enforced": bool(cfg.get("contract", {}).get("enforced")),
                 "materialized": cfg.get("materialized", ""),
-                # 서빙 tier — 도메인이 config.meta.serving_tier 로 선언 (citydata 규약)
+                # 서빙 tier·갱신주기 — 도메인이 config.meta 로 선언 (citydata 규약)
                 "serving_tier": (cfg.get("meta") or {}).get("serving_tier"),
+                "refresh": (cfg.get("meta") or {}).get("refresh"),
                 "tests": gates.get(uid, []),
                 # 계보 — culture rich 와 같은 upstream_layers 재사용 (도메인 manifest 내 한정)
                 "lineage": upstream_layers(uid, all_nodes),
@@ -296,6 +297,7 @@ def extract_basic_domain(domain: str, schema: str, meta_lookup: dict) -> list[di
             "contract_enforced": meta.get("contract_enforced", False),
             "materialized": meta.get("materialized", ""),
             "serving_tier": meta.get("serving_tier"),
+            "refresh": meta.get("refresh"),
             "tests": meta.get("tests", []),
             "on_table_exists": None,
             "row_count": row_count,
@@ -367,6 +369,7 @@ def main() -> None:
             "contract_enforced": bool(node.get("config", {}).get("contract", {}).get("enforced")),
             "materialized": node.get("config", {}).get("materialized", ""),
             "serving_tier": (node.get("config", {}).get("meta") or {}).get("serving_tier"),
+            "refresh": (node.get("config", {}).get("meta") or {}).get("refresh"),
             "tests": rich_gates.get(uid, []),
             "on_table_exists": node.get("config", {}).get("on_table_exists")
                                or node.get("config", {}).get("extra", {}).get("on_table_exists"),
