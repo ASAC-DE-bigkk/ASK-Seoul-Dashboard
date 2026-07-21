@@ -43,7 +43,7 @@ Charts Studio 가 라이브 질의를 갖는 이유: 사용자가 소스·차원
 
 | 사실 | 내용 |
 |---|---|
-| Trino | `http://127.0.0.1:30586` (compose 서비스, env `CHARTS_TRINO_URL` 로 오버라이드). dev 카탈로그 `iceberg_dev`, 스키마 `commerce` |
+| Trino | 로컬은 상위 `sample/docker-compose.yml`의 Trino를 `http://127.0.0.1:30586`으로 재사용하고 두 번째 companion을 띄우지 않는다. dev는 `http://trino:8080`. 카탈로그 `iceberg_dev`, 스키마 `commerce` |
 | 소스 정본 | `snapshot/catalog_snapshot.json` — **낡을 수 있다**. 실물 스키마와 다르면 갱신은 `extract.py`. 질의는 cast 기반이라 낡아도 안전(실사례: `cohort_y` varchar→integer 드리프트를 흡수) |
 | 지역 코드 | gold 데이터는 전부 **MOIS(행안부)** 체계(종로=11110). GeoJSON 자산 중 seoul_gu/seoul_dong 의 code 는 **KOSTAT(통계청)** 체계(종로=11010) — **혼용 금지**. 매칭 규칙은 `geo.js` 상단 주석과 [design-intents D-3](charts-design-intents.md) |
 | 코드값 | `major`: health/culture/industry/environment · `event_type`: opened/closed · `age_band`: `0_lt1y`~`5_ge20y` (라벨 사전은 `ontology.VALUE_LABELS`) |
@@ -194,3 +194,6 @@ open "http://127.0.0.1:8765/charts?selftest=1"
 - 2026-07-21: 로컬 분석 계약을 사람용 시작 가이드와 AI용 안전 runbook으로 분리. 사람에게는
   실행 위치·정상 결과·전환·장애 해결을, AI에게는 정본 코드·허용/금지 작업·fail-closed 검증과
   secret 없는 보고 형식을 제공하고 문서 인덱스·AGENTS 진입점에 연결.
+- 2026-07-21: 로컬 토폴로지를 상위 `sample/` Trino 재사용으로 명문화. 사람·AI 문서에 최초/재실행,
+  R2 dev catalog 전제, 실제 query/selftest 검증, 안전 종료를 한 흐름으로 고정하고 로컬 두 번째
+  Trino 실행을 금지.
