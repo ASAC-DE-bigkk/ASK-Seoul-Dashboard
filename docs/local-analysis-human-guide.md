@@ -115,6 +115,13 @@ docker compose exec trino trino --execute 'SHOW TABLES FROM iceberg_dev.commerce
 
 작업 위치: `sample/dashboard/`
 
+실행 환경은 **Windows(PowerShell)와 macOS/Linux(bash) 둘 다** 지원한다. 자기 환경의 절차만
+사용한다. 앱은 `.env` 파일을 자동 로드하지 않으므로 `.env.local` 주입은 실행 셸의 몫이다 —
+bash 예시를 PowerShell에 그대로 붙여넣으면 `source`·`set -a`가 없어 `AUTH_MODE=local_auto`가
+주입되지 않고 로그인 화면으로 떨어진다.
+
+**macOS/Linux · Git Bash**
+
 ```bash
 cd <프로젝트 루트>/sample/dashboard
 python3 -m venv .venv
@@ -129,8 +136,34 @@ set +a
 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload
 ```
 
+**Windows PowerShell**
+
+```powershell
+cd <프로젝트 루트>\sample\dashboard
+py -3.13 -m venv .venv     # 안정 버전 권장(3.14 등 최신은 pydantic_core 휠 부재 가능)
+.venv\Scripts\python -m pip install -r requirements.txt
+
+powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1
+```
+
+기본 `powershell`(5.1)은 `.ps1` 실행을 정책으로 막을 수 있어 `-ExecutionPolicy Bypass`가
+필요하다. `pwsh`(PowerShell 7)가 설치돼 있으면 `pwsh -File scripts\run_local.ps1`도 된다.
+`scripts/run_local.ps1`이 `.env.local` 생성·로드 → `init_auth_db.py` → uvicorn 기동을 일괄
+수행하며, venv가 없으면 안정 버전 Python으로 만들고 의존성까지 설치한다. 개별 단계를 직접
+실행하려면 `.env.local`을 현재 세션에 먼저 로드해야 한다.
+
+```powershell
+Get-Content .env.local | Where-Object { $_ -match '^\s*[^#].*=' } | ForEach-Object {
+  $name, $value = $_ -split '=', 2
+  Set-Item "env:$($name.Trim())" $value.Trim()
+}
+.venv\Scripts\python scripts\init_auth_db.py
+.venv\Scripts\uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload
+```
+
 이미 `.venv`와 `.env.local`이 있으면 생성·복사 명령은 다시 실행하지 않아도 된다.
-서버를 다시 여는 새 터미널에서는 `source .env.local` 단계부터 다시 실행한다.
+서버를 다시 여는 새 터미널에서는 환경 로드 단계(bash는 `source .env.local`, PowerShell은
+`run_local.ps1` 또는 위 로드 스니펫)부터 다시 실행한다.
 
 ### 3-3. 두 번째 실행부터
 
@@ -142,8 +175,10 @@ docker compose up -d trino
 docker compose ps trino
 ```
 
-터미널 B에서 Dashboard 환경을 다시 로드하고 앱을 실행한다. `source`로 설정한 환경변수는 새 터미널에
+터미널 B에서 Dashboard 환경을 다시 로드하고 앱을 실행한다. 셸에 설정한 환경변수는 새 터미널에
 자동 승계되지 않는다.
+
+macOS/Linux · Git Bash:
 
 ```bash
 cd <프로젝트 루트>/sample/dashboard
@@ -153,9 +188,18 @@ set +a
 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload
 ```
 
+Windows PowerShell:
+
+```powershell
+cd <프로젝트 루트>\sample\dashboard
+powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1
+```
+
 ## 4. 접속과 정상 동작 확인
 
-브라우저 주소는 `localhost`와 섞지 말고 아래처럼 `127.0.0.1`로 통일한다.
+브라우저는 `http://127.0.0.1:8765`와 `http://localhost:8765` **어느 쪽으로 접속해도 된다** —
+로컬 자동 인증 모드는 두 loopback host를 모두 허용하므로 차트 데이터 POST(`/api/v1/charts/query`)도
+origin 검사에 막히지 않는다. 아래 표는 `127.0.0.1` 기준으로 적었다.
 
 | 화면 | 주소 | 로컬 분석 모드의 결과 |
 |---|---|---|
@@ -215,8 +259,12 @@ curl -fsS http://127.0.0.1:8765/api/v1/public/summary
 
 | 증상 | 원인과 해결 |
 |---|---|
-| 로그인 화면으로 이동함 | `.env.local`을 현재 셸에 로드했는지, `AUTH_MODE=local_auto`인지 확인하고 서버를 재기동한다. |
-| `403 origin mismatch` | `localhost:8765` 대신 설정과 같은 `http://127.0.0.1:8765`를 사용한다. 쿠키나 계정을 먼저 변경하지 않는다. |
+| 로그인 화면으로 이동함 | `.env.local`을 현재 셸에 로드했는지, `AUTH_MODE=local_auto`인지 확인하고 서버를 재기동한다. **Windows에서 bash용 `source .env.local`을 PowerShell에 붙여넣으면 로드되지 않는다** — `powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1`을 사용하거나 §3-2의 PowerShell 로드 스니펫을 실행한다. `/health` 응답이 떠도 `AUTH_MODE`가 `required`이면 로그인 화면이 정상이다. |
+| `pwsh 용어가 인식되지 않습니다` | `pwsh`는 PowerShell 7이다. 미설치면 기본 `powershell`을 쓴다: `powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1`. |
+| `이 시스템에서 스크립트를 실행할 수 없으므로 …` (PSSecurityException) | 실행 정책 차단이다. `-ExecutionPolicy Bypass`로 실행하거나 현재 창에서 `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` 후 `.\scripts\run_local.ps1`. |
+| `ModuleNotFoundError: No module named 'pydantic_core._pydantic_core'` | venv의 Python과 설치된 네이티브 바이너리 버전이 어긋난 것이다(예: venv는 3.14인데 `.pyd`는 3.13용). 안정 버전으로 재생성한다: `Remove-Item .venv -Recurse -Force; py -3.13 -m venv .venv; .venv\Scripts\python -m pip install -r requirements.txt`. |
+| `403 origin mismatch` | 로컬 자동 인증 모드는 `127.0.0.1`과 `localhost`를 **모두 허용**하므로 둘 다 정상 동작한다. 이 오류가 계속 나면 옛 빌드를 실행 중일 수 있으니 서버를 최신 코드로 재기동한다(`Ctrl+C` 후 `run_local.ps1`). `0.0.0.0`이나 다른 host/port로 접속하면 mismatch가 정상이다. |
+| 차트 UI는 열리는데 **데이터가 안 나온다** | (1) `localhost`로 접속 중인데 데이터가 없다면 옛 빌드다 — 서버를 최신 코드로 재기동한다(구버전은 `localhost` origin을 막았다). (2) 실데이터는 Trino가 필요하다 — 상위 `sample/`에서 `docker compose up -d trino` 후 `curl http://127.0.0.1:30586/v1/info` 확인. (3) 라이브 데이터에는 `sample/.env`의 `R2_DEV_*` 값이 채워져 있어야 한다(값 확인은 `SHOW SCHEMAS FROM iceberg_dev`가 스키마를 반환하는지로). |
 | `local_auto는 ... 사용할 수 없습니다`로 기동 실패 | 오류에 표시된 조건을 고친다. development, SQLite, loopback HTTP/Host, proxy header 미신뢰가 모두 필요하다. |
 | `/admin`이 열리지 않음 | 정상이다. 로컬 분석 계정은 일반 회원이며 관리 권한을 갖지 않는다. |
 | Charts가 503 또는 stale을 표시함 | 인증 문제가 아니라 Trino/R2 경로 문제일 수 있다. 상위 `sample/`에서 Trino health와 `SELECT 1`을 확인한다. |

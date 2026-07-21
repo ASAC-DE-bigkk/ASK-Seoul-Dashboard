@@ -154,6 +154,8 @@ docker compose exec trino trino --execute 'SHOW TABLES FROM iceberg_dev.commerce
 secret 없이 보고하고, 별도 승인 없이 값을 열람·출력·편집하지 않는다. 터미널 B에서는 Dashboard를
 준비하고 실행한다.
 
+macOS/Linux · Git Bash:
+
 ```bash
 cd dashboard
 python3 -m venv .venv
@@ -168,6 +170,19 @@ set +a
 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload
 ```
 
+Windows(PowerShell):
+
+```powershell
+cd dashboard
+py -3.13 -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1
+```
+
+`run_local.ps1`이 `.env.local` 생성·로드 → `init_auth_db.py` → uvicorn을 일괄 수행한다. bash용
+`source .env.local`은 PowerShell에서 동작하지 않아 그대로 쓰면 `AUTH_MODE`가 주입되지 않는다
+(SHARE.md §0.1 참조). venv Python은 네이티브 휠이 있는 안정 버전(예: 3.13)을 쓴다.
+
 주의:
 
 - 기존 `.env.local`이 있으면 덮어쓰지 않는다.
@@ -176,7 +191,8 @@ set +a
 - 서버는 실행 중인 동안 60초 이상 상태 업데이트 없이 방치하지 않는다.
 
 두 번째 실행부터는 `.venv` 생성·의존성 설치·환경 파일 복사를 생략하고, 새 Dashboard 터미널에서
-`set -a; source .env.local; set +a`를 다시 실행한 뒤 Uvicorn을 기동한다.
+환경 로드를 다시 실행한 뒤 Uvicorn을 기동한다(bash: `set -a; source .env.local; set +a`,
+Windows: `powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1`).
 
 ## 6. 검증 순서
 
@@ -204,6 +220,8 @@ curl -fsS http://127.0.0.1:8765/health
 `down -v`, volume 삭제, 전체 DB·cache 삭제는 로컬 종료 절차가 아니다.
 
 ### 6-2. 코드 변경 시 회귀 검증
+
+Windows(PowerShell)에서는 `.venv/bin/...`을 `.venv\Scripts\...`로 바꿔 실행한다(SHARE.md §0.1).
 
 ```bash
 .venv/bin/python -m pytest -q

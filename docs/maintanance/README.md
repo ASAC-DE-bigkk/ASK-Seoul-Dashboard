@@ -10,6 +10,8 @@
 처음 실행하는 팀원은 [사람용 로컬 분석 가이드](../local-analysis-human-guide.md)를 정본으로
 따르고, AI에게 준비를 맡길 때는 [AI용 runbook](../local-analysis-agent-runbook.md)을 사용한다.
 
+macOS/Linux · Git Bash:
+
 ```bash
 cd <프로젝트 루트>/sample
 docker compose up -d trino
@@ -27,6 +29,21 @@ set +a
 .venv/bin/python scripts/init_auth_db.py
 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload
 ```
+
+Windows(PowerShell):
+
+```powershell
+cd <프로젝트 루트>\sample
+docker compose up -d trino
+
+cd dashboard
+py -3.13 -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1
+```
+
+`run_local.ps1`이 `.env.local` 생성·로드 → `init_auth_db.py` → uvicorn을 일괄 수행한다. bash용
+`set -a; source .env.local; set +a`는 PowerShell에서 동작하지 않는다(SHARE.md §0.1).
 
 `http://127.0.0.1:8765/charts`를 열면 `local-analyst@localhost.invalid` 예약 계정이
 `member` 역할로 로컬 DB에 한 번 생성되고 정상 AuthSession과 CSRF 쿠키가 자동 발급된다.
@@ -68,6 +85,22 @@ set +a
 .venv/bin/python scripts/create_admin.py
 .venv/bin/python scripts/setup_mfa.py
 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload
+```
+
+Windows(PowerShell)에서는 `run_local.ps1`(로컬 자동 인증 전용) 대신 `.env`를 직접 로드하고
+`.venv\Scripts\...`로 실행한다:
+
+```powershell
+cd <프로젝트 루트>\sample; docker compose up -d trino
+cd dashboard
+py -3.13 -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }   # 값 편집 후 아래로 로드
+Get-Content .env | Where-Object { $_ -match '^\s*[^#].*=' } | ForEach-Object { $n,$v = $_ -split '=',2; Set-Item "env:$($n.Trim())" $v.Trim() }
+.venv\Scripts\python scripts\init_auth_db.py
+.venv\Scripts\python scripts\create_admin.py
+.venv\Scripts\python scripts\setup_mfa.py
+.venv\Scripts\uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload
 ```
 
 - `create_admin.py`에서 실제 이메일과 15~128자 비밀번호를 입력한다.
