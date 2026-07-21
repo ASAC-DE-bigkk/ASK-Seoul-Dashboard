@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Windows PowerShell 로컬 실행기 — 로그인 없이 member 권한으로 Dashboard를 띄운다.
 
