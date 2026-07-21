@@ -76,23 +76,32 @@ dev에는 공개 도메인, HTTPS reverse proxy, host PostgreSQL을 추가하지
 | 완료 | `gh`의 Exisign 인증과 `repo`·`workflow` scope 재확인 |
 | 완료 | 서버에 Trino 배포 asset과 검토용 Docker 설치 script 전송 |
 | 완료 | GitHub Actions, Dashboard/PostgreSQL Compose, 최소 Trino companion, rollback 구성 작성 |
-| 보류 | R2 Environment secret 6개 등록 |
-| 보류 | 현재 변경 검토·commit·push·PR merge. 현재 로컬 branch는 `feat/3-secure-auth-rbac` |
-| 보류 | 최초 `dev` workflow 성공과 Dashboard/PostgreSQL/Trino 실제 기동 |
+| 완료 | GitHub `development` Environment에 R2 secret 6개와 SSH secret 2개 등록 |
+| 완료 | 배포 PR #4와 snapshot 복구 PR #9를 `dev`에 merge |
+| 완료 | Actions run `29774594820` attempt 2 성공, `main` 배포 job은 설계대로 실행되지 않음 |
+| 완료 | Trino·PostgreSQL·Dashboard 기동과 `elt_net`, loopback port, health 실서버 검증 |
+| 완료 | 실제 `iceberg_dev.commerce.gold_license_data_quality` relation 152행 조회 확인 |
+| 완료 | 실행별 `.runtime.*.env` 0개 확인 및 이전 `trino-dev.env` 삭제 후 Trino 재조회 확인 |
 | 보류 | 최초 관리자 생성, MFA 등록, DB backup, SSH tunnel 브라우저 검증 |
-| 조건부 보류 | 첫 GitHub-managed Trino 성공 후 이전 `/home/exi/.config/ask-seoul/trino-dev.env` 삭제 |
 
-2026-07-21 재확인 시 GitHub에는 SSH secret 2개만 있고 R2 secret 6개는 없었다. 서버에는
-장기 migration 파일 `/home/exi/.config/ask-seoul/trino-dev.env`가 mode `0600`으로 남아 있고,
-Trino container·`elt_net`·실행별 `.runtime.*.env`는 없었다.
+첫 배포 이력은 다음과 같다.
 
-현재 구현은 아직 `dev`에 merge되지 않았으므로 GitHub Actions 배포도 활성 상태가 아니다.
-**지금 바로 해야 할 일**은 다음 순서다.
+1. PR #4 merge 후 run `29773607264`가 dev snapshot의 commerce 누락을 검사 단계에서 탐지했다.
+2. issue #8/PR #9에서 현재 Trino를 기준으로 commerce만 원자적으로 갱신하고 전체 검사를 통과시켰다.
+3. run `29774594820` attempt 1은 GitHub의 잘못된 SSH private key로 서버 접속 전에 실패했다.
+4. 사람이 `SSH_PRIVATE_KEY`를 다시 등록한 뒤 attempt 2가 build, Trino, PostgreSQL, Dashboard 배포와
+   cleanup까지 모두 통과했다.
 
-1. `[접속 PC]` 8단계의 `gh auth status`와 R2 secret 6개 등록
-2. `[접속 PC → 대상 서버]` 9-3단계의 기존 Docker 상태만 재검증
-3. `[접속 PC]` 11단계의 변경 검증·PR review 후 `dev` merge
-4. `[GitHub 웹]` 12단계의 첫 workflow 관찰
+2026-07-21 실서버 재확인 결과 Dashboard `/health`는 HTTP 200, Dashboard와 Trino는 각각
+`127.0.0.1:8765`, `127.0.0.1:30586`에만 bind되어 있다. PostgreSQL은 host port를 공개하지
+않으며 18개 application table이 생성됐다. Dashboard runtime env는 mode `0600`이고,
+GitHub-managed Trino가 사용한 실행별 R2 env 파일과 이전 수동 migration 파일은 모두 남아 있지 않다.
+
+자동 배포와 secret migration은 완료됐다. **사람이 이어서 해야 할 일**은 다음 순서다.
+
+1. `[접속 PC → 대상 서버]` 15단계의 최초 관리자 생성과 MFA 등록
+2. `[접속 PC]` 14단계의 SSH tunnel을 유지하고 브라우저 로그인·Charts Studio 확인
+3. `[접속 PC → 대상 서버]` 16단계의 최초 PostgreSQL backup 생성·보호·반출
 
 ## 3. 접속 PC 준비
 
@@ -122,9 +131,9 @@ git -C dashboard branch --show-current
 git -C dashboard status --short
 ```
 
-현재 이어서 작업하는 경우 branch는 `feat/3-secure-auth-rbac`여야 한다. 다른 checkout에서
-처음 수행한다면 기존 issue/PR branch를 먼저 받아서 전환한다. `.env`와 실제 secret 파일은
-Dashboard commit 대상이 아니다.
+최초 구축은 `feat/3-secure-auth-rbac`와 `fix/8-dev-snapshot-commerce`에서 완료됐다. 이후 변경은
+merge가 끝난 branch를 재사용하지 말고 새 issue에서 `<type>/<issue>-<slug>` branch를 만든다.
+`.env`와 실제 secret 파일은 Dashboard commit 대상이 아니다.
 
 ## 4. 배포 전용 SSH key 생성
 
@@ -513,7 +522,8 @@ git diff -- .github/workflows/deploy.yaml deploy docs/deployment
 
 **작업 위치: `[접속 PC]`**
 
-현재 issue/branch 규칙을 유지해 검토된 파일만 stage한다.
+아래는 최초 구축 변경을 사람이 재현할 때의 예시다. 새 작업에서는 `<ISSUE_BRANCH>`, commit
+message, issue 번호를 실제 새 issue에 맞게 바꾸고 검토된 파일만 stage한다.
 
 ```bash
 git add \
@@ -530,8 +540,8 @@ git add \
 
 git diff --cached --check
 git diff --cached --name-only
-git commit -m "feat: add secure dev server deployment"
-git push -u origin feat/3-secure-auth-rbac
+git commit -m "<type>: <summary> (#<issue>)"
+git push -u origin <ISSUE_BRANCH>
 ```
 
 기존 PR이 있으면 갱신하고, 없으면 `dev` base로 PR을 만든다. PR 본문에는 해당 issue를
@@ -540,13 +550,13 @@ git push -u origin feat/3-secure-auth-rbac
 ```bash
 gh pr create \
   --base dev \
-  --head feat/3-secure-auth-rbac \
-  --title "feat: add secure dev server deployment" \
-  --body "Closes #3"
+  --head <ISSUE_BRANCH> \
+  --title "<type>: <summary>" \
+  --body "Closes #<issue>"
 ```
 
-PR에서 test, secret 경계, server 경로, `main` 배포 금지를 검토한 뒤 merge한다. 이 문서 작성
-작업 자체는 commit·push·merge를 자동 수행하지 않는다.
+PR에서 test, secret 경계, server 경로, `main` 배포 금지를 검토한 뒤 merge한다. 최초 구축에서는
+PR #4와 snapshot 복구 PR #9가 이 절차로 merge됐다.
 
 ## 12. `dev` merge 이후 자동 배포 관찰
 
