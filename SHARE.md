@@ -459,6 +459,35 @@ git diff --check
    - `demo: 요약 — 상세`
 5. PR 제목 권장: `type(scope): 한국어 요약 (#issue)`
 6. PR 본문에 `Closes #<issue-number>`를 넣어 머지 시 이슈를 자동 종료한다.
+7. **라벨**: 이슈·PR 에 `type:` 1개 + `area:` 1개 이상을 단다(문서 변경이면 `documentation` 병기).
+   이슈 제목 접두(`[Feat]`/`[Bug]`/`[Docs]`/`[Chore]`)와 `type:` 라벨을 일치시킨다. 표준은 §12.1.
+
+### 12.1 라벨 표준 (ASAC-DAG/DBT 와 정합: `type:` + `area:`)
+
+라벨은 **운영 자산(실제 GitHub 라벨)인 동시에 문서**다 — 이 표가 정본이며, 새 라벨이 필요하면
+이 표에 추가하고 **같은 PR 에서 `gh label create` 로 실제 라벨도 만든다**(코드-문서 동기).
+
+**`type:` (작업 종류 — 이슈·PR 당 1개)** · 색상은 시맨틱
+
+| 라벨 | 색 | 용도(이슈 접두) |
+|---|---|---|
+| `type: feature` | `#a2eeef` | 기능 개발 (`[Feat]`) |
+| `type: bug` | `#d73a4a` | 버그 수정 (`[Bug]`) |
+| `type: refactor` | `#fbca04` | 리팩터·구조 개선(동작 불변) |
+| `type: chore` | `#fef2c0` | 설정·잡무·정리·의존성 (`[Chore]`) |
+| `type: security` | `#b60205` | 보안 강화·취약점 대응 |
+| `documentation` | `#0075ca` | 문서 추가·개선 (`[Docs]`, GitHub 기본 라벨 유지) |
+
+**`area:` (컴포넌트 — 1개 이상)** · 색상 균일 `#5319e7`(prefix 그룹핑)
+
+| 라벨 | 범위 |
+|---|---|
+| `area: charts` | Charts Studio(온톨로지·querybuilder·필터·다중 백엔드) — `app/charts/`·`app/static/charts/` |
+| `area: catalog` | 데이터 카탈로그 API·화면 |
+| `area: auth` | 인증·권한·계정·결제 — `app/auth/` |
+| `area: snapshot` | 스냅샷·extract 추출 — `extract.py`·`snapshot/` |
+| `area: frontend` | 정적 화면·JS·UI — `app/static/` |
+| `area: infra` | 배포·Compose·운영·CI |
 
 `test/...` 브랜치는 dev에 바로 합치지 않기로 명시적으로 격리한 실험에만 사용한다.
 정식 PR을 올릴 때는 추적 가능한 이슈 번호 브랜치로 정리한다.
