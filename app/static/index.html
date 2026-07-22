@@ -422,10 +422,18 @@ const IDENT = {
   gold_culture_sports_schedule:       { c: '#e34948', cat: 'Sports · 일정' },
 };
 const Q_META = {
-  dong_precise: { label: '행정동 정밀', cls: 'g' },
+  dong_precise: { label: '행정동 정밀', cls: 'g' },   // culture — 공간 매칭 정밀도
   gu_only:      { label: '구 수준만',   cls: 'w' },
   unmatched:    { label: '매칭 실패',   cls: 's' },
+  ok:              { label: '정상',         cls: 'g' },   // basic — 행 단위 결측 품질 (extractor 즉석 분류)
+  no_service:      { label: '심야 무운행(정상)', cls: 'g' },
+  partial:         { label: '부분 결측',     cls: 'w' },
+  partial_segment: { label: '세그먼트 결측', cls: 'w' },
+  partial_geo:     { label: '좌표 결측',     cls: 'w' },
+  missing_core:    { label: '핵심 결측',     cls: 's' },
 };
+const Q_GOOD = new Set(['dong_precise', 'ok', 'no_service']);  // 미터의 '좋음' 비율 분자 (무운행=정상 결측)
+const SERVING_BASE = 'https://ask-seoul-citydata-api.dy950328.workers.dev';  // 공개 D1 서빙 API
 /* 도메인 색 — culture 만 rich 메타(dbt 아티팩트), 나머지는 Trino 실측 basic */
 const DOMAIN_META = {
   culture:  { c: '#4a3aa7', label: 'Culture'  },
@@ -437,6 +445,9 @@ const DOMAIN_META = {
 };
 const dmeta = d => DOMAIN_META[d] || { c: '#888780', label: d };
 const fmt = n => n.toLocaleString('ko-KR');
+// 갱신주기 — 도메인이 dbt config.meta.refresh 로 선언(데이터 그레인 기준: 실시간/1시간/1일 등).
+// 선언 안 한 도메인은 '—'(각 도메인이 meta.refresh 달면 자동 채워짐).
+const cadence = t => t.refresh || '—';
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const ident = t => IDENT[t.name] || { c: dmeta(t.domain).c, cat: `${dmeta(t.domain).label} · gold` };
 
@@ -541,7 +552,8 @@ function qualityAgg(name) {
   const agg = {};
   d.quality.forEach(q => Object.entries(q.distribution).forEach(([k, v]) => agg[k] = (agg[k] || 0) + v));
   const total = Object.values(agg).reduce((a, b) => a + b, 0);
-  return total ? { agg, total, precise: (agg.dong_precise || 0) / total } : null;
+  const good = Object.entries(agg).reduce((a, [k, v]) => a + (Q_GOOD.has(k) ? v : 0), 0);
+  return total ? { agg, total, precise: good / total } : null;
 }
 
 function renderStats() {
@@ -550,7 +562,7 @@ function renderStats() {
   let pTot = 0, pPrec = 0; const seen = new Set();
   Object.values(details).forEach(d => d.quality.forEach(q => {
     if (seen.has(q.table)) return; seen.add(q.table);
-    Object.entries(q.distribution).forEach(([k, v]) => { pTot += v; if (k === 'dong_precise') pPrec += v; });
+    Object.entries(q.distribution).forEach(([k, v]) => { pTot += v; if (Q_GOOD.has(k)) pPrec += v; });
   }));
   const rate = pTot ? Math.round(pPrec / pTot * 1000) / 10 : 0;
   const domainCount = new Set(summaries.map(t => t.domain)).size;
@@ -558,7 +570,7 @@ function renderStats() {
     { label: 'Published Datasets', value: summaries.length, sub: `${domainCount}개 도메인 · gold layer` },
     { label: 'Total Rows', value: fmt(totalRows), sub: 'Trino 실측 (스냅샷)' },
     { label: 'Contract Coverage', value: `${contract}/${summaries.length}`, sub: 'dbt contract enforced (culture)' },
-    { label: 'Spatial Precision', value: rate + '<span class="unit">%</span>', sub: `행정동 정밀 · culture silver ${seen.size}개` },
+    { label: 'Row Quality', value: rate + '<span class="unit">%</span>', sub: `정밀·정상 행 비율 · silver ${seen.size}개 계측` },
   ].map(s => `<div class="stat"><div class="label">${s.label}</div>
       <div class="value num">${s.value}</div><div class="sub">${s.sub}</div></div>`).join('');
 }
@@ -619,13 +631,15 @@ function renderCards(tables) {
            <span class="qtext num"><b>${(q.precise * 100).toFixed(1)}%</b> 정밀</span></div>`
       : `<div class="qwrap"><span class="qtext">${t.domain === 'culture' ? '검수 seed 기반' : 'quality 미계측'}</span></div>`;
     return `<article class="card" role="button" tabindex="0" style="--c:${id.c}" data-open-drawer="${esc(t.name)}">
+
       <div class="cat"><span class="dot"></span>${esc(dmeta(t.domain).label)}${IDENT[t.name] ? ' · ' + esc(id.cat) : ''}<span class="upd num">updated ${relTime(generatedAt)}</span></div>
       <div class="nm">${esc(t.name)}</div>
       <p class="desc">${esc(t.description) || '설명 없음'}</p>
       <div class="facts num">
         <div class="f"><span>Rows</span><b>${fmt(t.row_count)}</b></div>
         <div class="f"><span>Cols</span><b>${t.column_count}</b></div>
-        <div class="f"><span>Coverage</span><b>${esc(range)}</b></div>
+        <div class="f"><span title="스냅샷 시점 기준 — 데이터 범위">Coverage <sup>·스냅샷</sup></span><b>${esc(range)}</b></div>
+        <div class="f"><span title="데이터 시간 단위 (config.meta.refresh)">데이터 주기</span><b>${cadence(t)}</b></div>
       </div>
       <div class="foot">${qfoot}
         ${t.external === false ? '<span class="pill int" title="내부·팀 전용 — 외부 카탈로그 비공개">내부</span>' : ''}
@@ -660,7 +674,8 @@ function renderList(tables) {
 }
 
 /* ── drawer ── */
-const TABS = t => [['개요', null], ['스키마', t.columns.length], ['품질', t.quality.length],
+const TABS = t => [['개요', null], ['스키마', t.columns.length],
+                   ['품질', t.quality.length || (t.tests || []).length || null],
                    ['샘플', t.sample.length], ['계보', null], ['API', 4]];
 
 function openDrawer(name) {
@@ -704,11 +719,14 @@ function renderTab() {
       <section><h3>Description</h3><p class="desc">${esc(t.description) || '—'}</p></section>
       <section><h3>Properties</h3><div class="kv">
         ${[['Rows', fmt(t.row_count)], ['Columns', t.column_count],
+           ['데이터 주기', cadence(t)],
            ['Time axis', dr ? esc(dr.column) : '—'],
-           ['Coverage', dr && dr.min ? `${esc(dr.min)} ~ ${esc(dr.max)}` : '—'],
+           ['Coverage (스냅샷 시점)', dr && dr.min ? `${esc(dr.min)} ~ ${esc(dr.max)}` : '—'],
            ['Materialized', esc(t.materialized)],
            ['Contract', t.contract_enforced ? 'enforced' : '—'],
-           ['Quality src', `silver × ${t.quality.length}`],
+           ['Serving tier', t.serving_tier ? esc(t.serving_tier) : '—'],
+           ['Quality src', t.quality.length ? `silver × ${t.quality.length}`
+                           : ((t.tests || []).length ? `test gates × ${t.tests.length}` : '—')],
            ['Layer', 'gold (published)']]
           .map(([k, v]) => `<div class="item"><span class="k">${k}</span><span class="v">${v}</span></div>`).join('')}
       </div></section>`;
@@ -732,8 +750,14 @@ function renderTab() {
         </div>`;
       }).join('') : (t.domain === 'culture'
         ? '<p class="desc">상류 quality_status 없음 — 검수된 seed 기반 테이블</p>'
-        : '<p class="desc">이 도메인은 quality_status 미계측 — 행 단위 품질 지표는 culture만 공개 중</p>')}
-    </section>`;
+        : ((t.tests || []).length ? '' :
+           '<p class="desc">이 도메인은 quality_status 미계측 — 행 단위 품질 지표는 culture만 공개 중</p>'))}
+    </section>
+    ${(t.tests || []).length ? `<section><h3>dbt 테스트 게이트 · ${t.tests.length}종</h3>
+      <p class="desc">매 run 파이프라인에서 검증되는 계약(정의 기준). unique_grain = grain 중복 0 보장.</p>
+      <div class="kv">${t.tests.map(g =>
+        `<div class="item"><span class="v mono">${esc(g)}</span></div>`).join('')}</div>
+    </section>` : ''}`;
   } else if (activeTab === 3) {
     const cols = t.sample.length ? Object.keys(t.sample[0]) : [];
     b.innerHTML = `<section><h3>Sample · 5 rows (실데이터)</h3>
@@ -762,7 +786,13 @@ function renderTab() {
           culture처럼 dbt 아티팩트를 등록하면 raw→gold 계보가 자동 채워집니다.</p></section>`;
   } else {
     const eps = [['', '상세 전부'], ['/schema', '스키마'], ['/quality', '품질 분포'], ['/sample', '샘플 5행']];
-    b.innerHTML = `<section><h3>REST API · v1</h3><div class="api-list">
+    const timeAxis = t.date_range && t.date_range.column;
+    // 실데이터 조회 예시 — 시간축 있으면 기간 필터를, 없으면 limit 만.
+    const serveEx = t.served_url
+      ? t.served_url + (timeAxis ? '?from=2026-07-13&to=2026-07-20&limit=100' : '?limit=100')
+      : null;
+    b.innerHTML = `<section><h3>카탈로그 API · v1 <span class="what">— 메타 조회(스키마·품질·샘플)</span></h3>
+      <div class="api-list">
       ${eps.map(([sfx, what]) => {
         const p = `/api/v1/catalog/tables/${encodeURIComponent(t.name)}${sfx}`;
         return `<div class="api-item"><span class="verb">GET</span>
@@ -772,7 +802,23 @@ function renderTab() {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 011-1h10"/></svg>
           </button></div>`;
       }).join('')}
-    </div></section>`;
+    </div></section>
+    <section><h3>실데이터 API <span class="what">— 공개 서빙 (Cloudflare D1 · 조회 전용)</span></h3>
+      ${serveEx ? `<div class="api-list">
+        <div class="api-item"><span class="verb">GET</span>
+          <a class="path" href="${serveEx}" target="_blank">${serveEx}</a>
+          <span class="what">필터·기간 조회${timeAxis ? ' (from/to=' + esc(timeAxis) + ')' : ''}</span>
+          <button class="copy-btn" onclick="event.stopPropagation();copyText('${serveEx}')" title="URL 복사">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 011-1h10"/></svg>
+          </button></div>
+        <div class="api-item"><span class="verb">GET</span>
+          <a class="path" href="${SERVING_BASE}/catalog" target="_blank">${SERVING_BASE}/catalog</a>
+          <span class="what">Agent 진입점 — 전체 서빙 목록</span></div>
+      </div>
+      <p class="desc">노트북과 무관하게 상시 가동. 컬럼명=필터, from/to=기간, limit(기본 500·최대 5000).</p>`
+      : `<p class="desc">이 데이터셋은 아직 공개 서빙에 미적재 — ${t.serving_tier === 'hold'
+          ? '대용량으로 서빙 보류(기간 조회는 일별/시간별 골드 사용)' : '다음 export 확장 예정'}.</p>`}
+    </section>`;
   }
 }
 

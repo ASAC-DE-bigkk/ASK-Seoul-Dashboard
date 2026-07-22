@@ -147,6 +147,150 @@
    ]
   },
   {
+   "id": "seed-citydata-live",
+   "name": "도시 실시간 (citydata)",
+   "charts": [
+    {
+     "id": "cd-stat-ppltn",
+     "title": "핫플 추정 인구 합 (현재)",
+     "type": "stat",
+     "source": "gold_citydata_place_latest",
+     "bindings": {"value": "area_ppltn_max"},
+     "agg": "sum",
+     "filters": [],
+     "options": {},
+     "grid": {"x": 0, "y": 0, "w": 3, "h": 2}
+    },
+    {
+     "id": "cd-stat-pm25",
+     "title": "평균 초미세먼지 (㎍/㎥)",
+     "type": "stat",
+     "source": "gold_citydata_place_latest",
+     "bindings": {"value": "pm25"},
+     "agg": "avg",
+     "filters": [],
+     "options": {},
+     "grid": {"x": 3, "y": 0, "w": 3, "h": 2}
+    },
+    {
+     "id": "cd-pie-congest",
+     "title": "혼잡도 수준별 인구 구성 (현재)",
+     "type": "pie",
+     "source": "gold_citydata_place_latest",
+     "bindings": {"axis": "area_congest_lvl", "value": "area_ppltn_max"},
+     "agg": "sum",
+     "filters": [],
+     "options": {"donut": true},
+     "grid": {"x": 6, "y": 0, "w": 6, "h": 4}
+    },
+    {
+     "id": "cd-map-gu",
+     "title": "자치구별 현재 추정 인구",
+     "type": "map_seoul",
+     "source": "gold_citydata_place_latest",
+     "bindings": {"region": "gu", "value": "area_ppltn_max"},
+     "agg": "sum",
+     "filters": [],
+     "options": {},
+     "grid": {"x": 0, "y": 2, "w": 6, "h": 5}
+    },
+    {
+     "id": "cd-bar-hot",
+     "title": "뜨는 상권 TOP 15 (hot_index)",
+     "type": "bar",
+     "source": "gold_citydata_hot_commerce",
+     "bindings": {"axis": "area_nm", "value": "hot_index"},
+     "agg": "avg",
+     "filters": [],
+     "options": {"top_n": 15},
+     "grid": {"x": 6, "y": 4, "w": 6, "h": 5}
+    },
+    {
+     "id": "cd-bar-anomaly",
+     "title": "평소 대비 급증 TOP 15 (%)",
+     "type": "bar",
+     "source": "gold_citydata_ppltn_anomaly",
+     "bindings": {"axis": "area_nm", "value": "pct_vs_normal"},
+     "agg": "avg",
+     "filters": [],
+     "options": {"top_n": 15},
+     "grid": {"x": 0, "y": 7, "w": 6, "h": 4}
+    },
+    {
+     "id": "cd-points",
+     "title": "핫플 좌표 · 인구 밀도",
+     "type": "map_points",
+     "source": "gold_citydata_place_latest",
+     "bindings": {"lat": "latitude", "lng": "longitude", "value": "area_ppltn_max"},
+     "agg": "sum",
+     "filters": [],
+     "options": {},
+     "grid": {"x": 6, "y": 9, "w": 6, "h": 5}
+    }
+   ]
+  },
+  {
+   "id": "seed-citydata-history",
+   "name": "인구 이력·구매력 (citydata)",
+   "charts": [
+    {
+     "id": "cd-line-daily",
+     "title": "일별 평균 붐빔 추이 (장소 평균)",
+     "type": "line",
+     "source": "gold_citydata_ppltn_daily",
+     "bindings": {"axis": "event_date", "value": "average_population"},
+     "agg": "avg",
+     "filters": [],
+     "options": {"smooth": true},
+     "grid": {"x": 0, "y": 0, "w": 6, "h": 4}
+    },
+    {
+     "id": "cd-line-forecast",
+     "title": "시간대별 기대 붐빔 — 주말 vs 평일",
+     "type": "line",
+     "source": "gold_citydata_ppltn_forecast",
+     "bindings": {"axis": "hr", "value": "expected_ppltn", "series": "is_weekend"},
+     "agg": "avg",
+     "filters": [],
+     "options": {"smooth": true},
+     "grid": {"x": 6, "y": 0, "w": 6, "h": 4}
+    },
+    {
+     "id": "cd-bar-spend",
+     "title": "구매력 지수 TOP 15 (spend_per_crowd)",
+     "type": "bar",
+     "source": "gold_citydata_purchasing_power_daily",
+     "bindings": {"axis": "area_nm", "value": "spend_per_crowd_idx"},
+     "agg": "avg",
+     "filters": [],
+     "options": {"top_n": 15},
+     "grid": {"x": 0, "y": 4, "w": 6, "h": 4}
+    },
+    {
+     "id": "cd-map-dong-comm",
+     "title": "행정동별 영업 상가 밀도",
+     "type": "map_seoul_dong",
+     "source": "gold_citydata_ppltn_x_commerce_dong",
+     "bindings": {"region": "admin_dong", "value": "license_active"},
+     "agg": "sum",
+     "filters": [],
+     "options": {},
+     "grid": {"x": 6, "y": 4, "w": 6, "h": 5}
+    },
+    {
+     "id": "cd-table-score",
+     "title": "장소 스코어카드 TOP 30",
+     "type": "table",
+     "source": "gold_citydata_place_scorecard",
+     "bindings": {"axis": "area_nm", "value": "area_ppltn_max"},
+     "agg": "sum",
+     "filters": [],
+     "options": {"top_n": 30},
+     "grid": {"x": 0, "y": 8, "w": 6, "h": 4}
+    }
+   ]
+  },
+  {
    "id": "seed-geo",
    "name": "지역 심층",
    "charts": [
