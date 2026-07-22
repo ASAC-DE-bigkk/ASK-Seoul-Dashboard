@@ -247,7 +247,15 @@ def test_roles_and_recommendation_metadata_cover_non_commerce_fields() -> None:
     assert by_name(active_city)["event_count"]["cumulative_safe"] is False
     assert by_name(proven_flow)["cnt"]["cumulative_safe"] is True
     assert by_name(city)["hr"]["allowed_filter_ops"] == [
-        "eq", "neq", "gte", "lte", "between", "in", "not_in"
+        "eq", "neq", "gt", "gte", "lt", "lte", "between", "not_between",
+        "in", "not_in", "is_null", "not_null",
+    ]
+    # time+granularity 필드는 last_n(최근 N) 이 열린다 — 필드 메타 의존 계약
+    ym_ops = {f["name"]: f for f in registry.get("gold_license_flow_monthly")["fields"]}
+    assert "last_n" in ym_ops["ym"]["allowed_filter_ops"]
+    # 고정폭 코드는 동등/집합/NULL 만 — 대소·패턴 차단
+    assert by_name(commerce_summary)["gu_code"]["allowed_filter_ops"] == [
+        "eq", "neq", "in", "not_in", "is_null", "not_null",
     ]
 
 

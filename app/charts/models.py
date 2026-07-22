@@ -6,9 +6,11 @@ IDENT 패턴, id 는 SAFE_SEGMENT, 사람이 읽는 제목/이름은 SAFE_TEXT(�
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Annotated, Any, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import (
+    BaseModel, ConfigDict, Discriminator, Field, Tag, field_validator,
+)
 
 from app.inputguard import assert_safe_text
 
@@ -84,6 +86,51 @@ class FilterSpec(BaseModel):
     value: Any = None  # LITERAL — querybuilder._lit 이 제어문자 거부+이스케이프로 조립
 
 
+class FilterGroup(BaseModel):
+    """OR/AND 그룹 — 안은 leaf 전용(2단 계약: 그룹 안 그룹 금지 = 깊이 폭탄 구조 차단).
+
+    extra=forbid: {field, op, logic} 혼합 dict 는 판별자('logic' 존재)가 그룹으로
+    보낸 뒤 잔여 field/op 키가 여기서 422 — 모호 통과가 구조적으로 불가능하다.
+    """
+    model_config = ConfigDict(extra="forbid")
+    logic: Literal["and", "or"]
+    filters: list[FilterSpec] = Field(min_length=1, max_length=20)
+
+
+def _filter_kind(value: Any) -> str:
+    """판별자 — 'logic' 키 존재가 유일 기준(querybuilder._is_group·프론트 isGroup 과 동일).
+
+    스마트 union 백트래킹(그 자체가 DoS 표면)을 차단하고 leaf/group 경로를 결정적으로 만든다.
+    """
+    if isinstance(value, dict):
+        return "group" if "logic" in value else "leaf"
+    return "group" if isinstance(value, FilterGroup) else "leaf"
+
+
+FilterNode = Annotated[
+    Union[Annotated[FilterGroup, Tag("group")], Annotated[FilterSpec, Tag("leaf")]],
+    Discriminator(_filter_kind),
+]
+
+MAX_FILTER_LEAVES = 50  # 트리 전체 leaf 총량 — querybuilder 와 이중검증(심층방어)
+
+
+def _bound_filter_leaves(nodes: list) -> list:
+    """총 leaf 예산 — 최상위 max_length 는 '노드 수'만 세므로 그룹 증폭을 여기서 막는다."""
+    total = sum(len(n.filters) if isinstance(n, FilterGroup) else 1 for n in nodes)
+    if total > MAX_FILTER_LEAVES:
+        raise ValueError(f"필터 조건은 총 {MAX_FILTER_LEAVES}개 이하여야 합니다")
+    return nodes
+
+
+class HavingSpec(BaseModel):
+    """집계 결과 조건(HAVING) — 집계식은 SELECT 와 동일 화이트리스트로 재조립된다."""
+    field: Optional[str] = Field(default=None, max_length=120, pattern=IDENT_PATTERN)
+    agg: str = Field(default="count", max_length=30, pattern=r"^[a-z_]+$")
+    op: str = Field(default="gte", max_length=20, pattern=r"^[a-z_]+$")
+    value: Any = None  # 숫자 또는 between [최소, 최대] — querybuilder._numeric 검증
+
+
 class OrderSpec(BaseModel):
     field: str = Field(min_length=1, max_length=120, pattern=ALIAS_PATTERN)
     dir: str = Field(default="asc", max_length=4, pattern=r"^(asc|desc)$")
@@ -108,10 +155,19 @@ class QueryRequest(BaseModel):
                 raise ValueError(f"dims 식별자 형식이 올바르지 않습니다: {d[:40]!r}")
         return dims
     measures: list[MeasureSpec] = Field(default_factory=list, min_length=1, max_length=20)
-    filters: list[FilterSpec] = Field(default_factory=list, max_length=50)
+    # 필터 트리(2단) — 원소는 leaf 또는 {logic, filters:[leaf...]} 그룹. 최상위 결합은
+    # filters_logic(기본 and — 종전 평면 배열과 하위호환). 총 leaf 예산은 별도 검증.
+    filters: list[FilterNode] = Field(default_factory=list, max_length=50)
+    filters_logic: Literal["and", "or"] = "and"
+    having: list[HavingSpec] = Field(default_factory=list, max_length=10)
     order_by: list[OrderSpec] = Field(default_factory=list, max_length=20)
     limit: int = Field(default=1000, ge=1, le=5000)
     force: bool = False  # 신선 캐시 무시하고 라이브 재질의 ('다시 조회')
+
+    @field_validator("filters")
+    @classmethod
+    def _filters_budget(cls, nodes: list) -> list:
+        return _bound_filter_leaves(nodes)
 
 
 class QueryResponse(BaseModel):
@@ -133,11 +189,18 @@ class ChartConfig(BaseModel):
     source: str = Field(min_length=1, max_length=120, pattern=IDENT_PATTERN)
     bindings: dict[str, str] = Field(default_factory=dict)
     agg: str = Field(default="sum", max_length=30, pattern=r"^[a-z_]+$")
-    filters: list[FilterSpec] = Field(default_factory=list, max_length=50)
+    filters: list[FilterNode] = Field(default_factory=list, max_length=50)
+    filters_logic: Literal["and", "or"] = "and"   # 최상위 결합 — v1 UI 미노출(계약 선점)
+    having: list[HavingSpec] = Field(default_factory=list, max_length=10)
     options: dict[str, Any] = Field(default_factory=dict)
     grid: dict[str, int] = Field(default_factory=dict)  # {x, y, w, h}
     # 구간 폭(슬롯명 → 폭) — binnable 슬롯에 measure 를 바인딩할 때 필수(히스토그램 축)
     bins: dict[str, float] = Field(default_factory=dict)
+
+    @field_validator("filters")
+    @classmethod
+    def _filters_budget(cls, nodes: list) -> list:
+        return _bound_filter_leaves(nodes)
 
     @field_validator("title")
     @classmethod

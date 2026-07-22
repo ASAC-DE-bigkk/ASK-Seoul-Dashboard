@@ -25,6 +25,11 @@
 
 SQL 경계 불변식(charts): 식별자=레지스트리 화이트리스트+quote, 값=LITERAL/바인딩,
 연산자·집계=ENUM — 사용자 문자열이 SQL 구조로 승격되는 경로가 존재하지 않는다.
+필터 트리(2026-07-23 확장)도 동일 경계 안이다: 재귀 그룹은 leaf 마다 같은 화이트리스트
+(_condition), 그룹 결합은 괄호 + ENUM logic(GROUP_LOGICS), HAVING 집계는 SELECT 와
+동일한 _measure_expr 화이트리스트를 재사용하며, 트리 구조 자체는 2단 강제 +
+MAX_FILTER_LEAVES(50)·MAX_GROUP_CONDITIONS(20) 상한(NUMBER/INT 류 — _bin_width 와
+같은 이중검증 방식)으로 봉인된다. contains 계열의 LIKE 이스케이프 문자는 서버 상수다.
 auth 경계 불변식: 전 쿼리 SQLAlchemy 바인드 파라미터(정적 감사 no_sql_text_injection).
 """
 from __future__ import annotations

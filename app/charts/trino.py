@@ -169,6 +169,25 @@ def _cache_read(sql: str) -> dict | None:
         return None
 
 
+MAX_CACHE_FILES = int(os.environ.get("CHARTS_CACHE_MAX_FILES", "2000"))
+
+
+def _evict_cache_if_needed() -> None:
+    """캐시 엔트리 수 상한 — 필터 조합 확장(그룹·연산자)으로 distinct SQL 이 늘어도
+    디스크가 무한 증가하지 않게 오래된 것부터 걷어낸다(호출측이 _lock 보유)."""
+    try:
+        entries = sorted(CACHE_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime)
+    except OSError:
+        return
+    if len(entries) <= MAX_CACHE_FILES:
+        return
+    for stale in entries[: len(entries) - int(MAX_CACHE_FILES * 0.9)]:
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+
+
 def _cache_write(sql: str, columns: list[str], rows: list[list]) -> None:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     entry = {"cached_at": time.time(), "columns": columns, "rows": rows}
@@ -176,6 +195,7 @@ def _cache_write(sql: str, columns: list[str], rows: list[list]) -> None:
     with _lock:
         tmp.write_text(json.dumps(entry, ensure_ascii=False), encoding="utf-8")
         tmp.replace(_cache_path(sql))
+        _evict_cache_if_needed()
 
 
 def execute(sql: str, max_rows: int = MAX_ROWS, force: bool = False) -> dict:

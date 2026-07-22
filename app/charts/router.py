@@ -168,11 +168,18 @@ def _validate_charts(charts) -> None:
                 raise querybuilder.SpecError(
                     f"{field_name} 필드에는 {chart.agg} 집계를 사용할 수 없습니다"
                 )
-        for item in chart.filters:
-            if item.field not in fields or item.op not in querybuilder.OPS:
-                raise querybuilder.SpecError("차트 필터 필드 또는 연산자가 올바르지 않습니다")
-            # 레이아웃 저장 시에도 query 단계와 같은 값 형식 검사를 수행한다.
-            querybuilder.validate_filter(item.model_dump(), fields)
+        # 레이아웃 저장 시에도 query 단계와 **같은 워커**로 검증한다 — 저장/조회 경로가
+        # 다른 walker 를 가지면 '저장은 되는데 조회가 400' 계약 분열이 생긴다.
+        try:
+            querybuilder.validate_filter_tree(
+                [node.model_dump() for node in chart.filters], fields)
+            querybuilder.validate_having(
+                [h.model_dump() for h in chart.having], fields)
+        except querybuilder.SpecError:
+            raise
+        if chart.having and chart.type == "stat":
+            raise querybuilder.SpecError(
+                "집계 조건(having)은 축이 있는 도표에서만 쓸 수 있습니다")
         if set(chart.grid) - {"x", "y", "w", "h"}:
             raise querybuilder.SpecError("grid에는 x, y, w, h만 사용할 수 있습니다")
         if any(

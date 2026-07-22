@@ -369,14 +369,23 @@ dashboard/
 | `IDENT` | SQL 식별자 후보 | `^[A-Za-z_][A-Za-z0-9_]*$` 패턴(1차) + REGISTRY(2차) |
 | `SAFE_SEGMENT` | id/슬러그 | `^[A-Za-z0-9_-]+$` |
 | `SAFE_TEXT` | 제목·이름 등 표시 텍스트 | 제어문자(개행 포함) 거부 + 길이. 표시 시 프론트 `esc()` 이중 |
-| `ENUM` | op/agg/domain/status | 고정 화이트리스트 |
-| `INT`/`BOOL`/`NUMBER` | 수치·플래그 | 타입 강제 + 범위(구간 폭은 유한 양수 — `_bin_width`) |
-| `LITERAL` | 필터 '값' | 제어문자 거부 + `''` 이스케이프(`_lit`) 또는 ORM 바인드 — 값이 식별자로 승격되는 경로 없음 |
+| `ENUM` | op/agg/domain/status/그룹 logic | 고정 화이트리스트(`OPS`·`HAVING_OPS`·`GROUP_LOGICS`) |
+| `INT`/`BOOL`/`NUMBER` | 수치·플래그 | 타입 강제 + 범위(구간 폭 `_bin_width`·last_n 1~3650 정수) |
+| `LITERAL` | 필터 '값' | 제어문자 거부 + `''` 이스케이프(`_lit`) 또는 ORM 바인드 — 값이 식별자로 승격되는 경로 없음. contains 계열은 서버가 `\`→`%`→`_` 순서로 이스케이프 후 `ESCAPE '\'`(상수) 부착 |
 | `OPAQUE` | 토큰·비밀 | 해시 비교, 로그 금지 |
 
 - **모든 라우트×입력은 `ROUTE_INPUT_FILTERS`에 등록한다.** `tests/test_input_guard.py`가
   실제 라우트를 인트로스펙션해 매핑과 대조하므로, **등록 없는 새 입력부는 테스트가 실패**한다.
   같은 테스트가 SQL 주입·제어문자·경로조작 페이로드 배터리로 각 필터를 실측 검증한다.
+- **필터 조건 계약(2026-07-23 확장)**: WHERE 는 leaf 조건과 **그룹**({logic: and|or,
+  filters: [leaf…]}) 의 2단 트리 — 그룹 안 그룹 금지(깊이 폭탄 구조 차단), 그룹은 항상
+  괄호, 최상위 결합은 `filters_logic`(기본 and). 총 leaf ≤ 50·그룹당 ≤ 20 을
+  pydantic(422)과 querybuilder(SpecError)가 이중검증한다. 연산자 화이트리스트는
+  `querybuilder.OPS`(비교 6종·범위 2종·집합 2종·문자열 5종·NULL 2종·last_n) —
+  `is_null` 은 원본 컬럼 기준, 고정폭 코드/id 는 문자열 엄격 비교, HAVING 은 SELECT 와
+  동일한 `_measure_expr` 화이트리스트를 재사용한다(금지 집계 우회 불가). 기존 평면
+  배열 저장물은 무마이그레이션 하위호환이며 **평면 필터의 SQL 렌더링은 byte-동일 유지**
+  (캐시 키 = SQL 해시). 계약 테스트: `tests/test_filter_contract.py`.
 
 ---
 

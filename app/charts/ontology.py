@@ -661,7 +661,9 @@ class Registry:
                     **_measure_semantics(t["name"], c["name"], role),
                     "recommendation_priority": _recommendation_priority(c["name"], role),
                     "chartable": _is_chartable(c["name"], role),
-                    "allowed_filter_ops": allowed_filter_ops({"role": role}),
+                    # granularity(time)·role 을 함께 넘긴다 — last_n 등 op 목록이 필드
+                    # 메타에 의존한다(부분 dict 를 넘기면 조용히 누락된다)
+                    "allowed_filter_ops": allowed_filter_ops({"role": role, **extra}),
                     # 실측 통계(extract) — 저카디널리티 groupby 개방·구간화 기본 폭 제안의 근거
                     **({"distinct_count": int(distinct)} if distinct is not None else {}),
                     **({"min": c["min"]} if c.get("min") is not None else {}),
