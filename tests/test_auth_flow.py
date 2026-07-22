@@ -1505,3 +1505,29 @@ def test_undefined_api_flood_suspends_authenticated_user_account():
         )
         assert release.status_code == 200
         login(rejoin, email, password)
+
+
+
+def test_local_analyst_is_provisioned_and_repaired_as_operator():
+    from dataclasses import replace
+    from app.auth.service import AccessService, AuthService, LOCAL_ANALYST_EMAIL
+
+    local_settings = replace(
+        app.state.auth_settings, mode="local_auto", env="development"
+    )
+    with app.state.database.session() as db:
+        analyst = AuthService(db, local_settings).ensure_local_analyst()
+        assert analyst.role == "operator"
+        assert analyst.status == "active"
+        # 운영자는 관리 페이지 키에 접근할 수 있어야 한다(권한별 화면 관리는 admin_access).
+        allowed = set(AccessService(db).allowed_pages(analyst))
+        assert {"admin_users", "admin_access", "service_health"} <= allowed
+
+        # 구버전에서 member/비활성으로 남은 예약 계정도 운영자·활성으로 자동 승격된다.
+        analyst.role = "member"
+        analyst.status = "suspended"
+        db.flush()
+        repaired = AuthService(db, local_settings).ensure_local_analyst()
+        assert repaired.role == "operator"
+        assert repaired.status == "active"
+        assert repaired.email == LOCAL_ANALYST_EMAIL

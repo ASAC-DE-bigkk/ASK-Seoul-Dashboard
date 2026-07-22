@@ -975,10 +975,12 @@ class AuthService:
         self.db.flush()
 
     def ensure_local_analyst(self) -> User:
-        """로컬 자동 로그인 전용 일반 회원을 확보한다.
+        """로컬 자동 로그인 전용 운영자 계정을 확보한다.
 
         이 계정은 비밀번호로 로그인하지 않으며 local_auto의 fail-closed 설정과
         loopback 요청 검사를 모두 통과한 미들웨어에서만 세션을 발급받는다.
+        운영자 권한이므로 관리 콘솔과 '권한별 화면 관리'(게스트/멤버 화면 미리보기)를
+        로컬에서 그대로 사용할 수 있다.
         """
         if not self.settings.local_auto:
             raise RuntimeError("로컬 분석 계정은 AUTH_MODE=local_auto에서만 사용할 수 있습니다.")
@@ -994,7 +996,7 @@ class AuthService:
                 email=LOCAL_ANALYST_EMAIL,
                 password_hash=hash_password(random_token(48)),
                 nickname=nickname,
-                role="member",
+                role="operator",
                 status="active",
                 email_verified_at=now,
                 approved_at=now,
@@ -1010,7 +1012,7 @@ class AuthService:
                     self.db,
                     "local_analyst_created",
                     target=user,
-                    details={"auth_mode": "local_auto"},
+                    details={"auth_mode": "local_auto", "role": "operator"},
                 )
             except IntegrityError:
                 user = self.db.scalar(
@@ -1018,11 +1020,19 @@ class AuthService:
                 )
         if user is None:
             raise RuntimeError("로컬 분석 계정을 생성할 수 없습니다.")
-        if user.role != "member" or user.status != "active":
-            raise RuntimeError(
-                "예약된 로컬 분석 계정의 역할 또는 상태가 올바르지 않습니다."
+        # 구버전에서 member로 만들어진 기존 로컬 예약 계정도 운영자로 승격한다.
+        if user.role != "operator":
+            user.role = "operator"
+            audit(
+                self.db,
+                "local_analyst_promoted",
+                target=user,
+                details={"auth_mode": "local_auto", "role": "operator"},
             )
+        if user.status != "active":
+            user.status = "active"
         self._ensure_local_analyst_chart_access(user)
+        self.db.flush()
         return user
 
     def register(

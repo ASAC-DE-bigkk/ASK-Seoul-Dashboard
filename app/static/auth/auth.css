@@ -145,6 +145,11 @@ a { color:var(--accent-deep); }
 .pass-card small { color:var(--ink-3); display:block; margin-top:2px; }
 .pass-card .days { margin-left:auto; text-align:right; }
 .pass-card .days b { font-size:19px; color:var(--accent-deep); }
+/* 권한별 화면 미리보기 카드 */
+.preview-card { display:flex; flex-direction:column; gap:6px; text-decoration:none; color:var(--ink); }
+.preview-card:hover { border-color:var(--accent); background:var(--accent-soft); }
+.preview-card b { font-size:14px; }
+.preview-card small { color:var(--ink-3); }
 .toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:14px; }
 .toolbar .btn { width:auto; }
 .table-wrap { overflow:auto; border:1px solid var(--line-soft); border-radius:10px; margin-top:14px; }

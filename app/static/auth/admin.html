@@ -14,6 +14,7 @@
     <nav class="console-nav" id="admin-nav">
       <a href="#users" data-tab="users" data-page-key="admin_users">회원 관리</a>
       <a href="#access" data-tab="access" data-page-key="admin_access">접근 관리</a>
+      <a href="#preview" data-tab="preview" data-page-key="admin_access">권한별 화면 관리</a>
       <a href="#autoblocks" data-tab="autoblocks" data-page-key="admin_security">자동 차단 목록</a>
       <a href="#payments" data-tab="payments" data-page-key="admin_payments">결제 관리</a>
       <a href="#policies" data-tab="policies" data-page-key="admin_policies">정책·IP</a>
@@ -43,6 +44,29 @@
       <section class="section admin-panel" id="panel-access" hidden>
         <h2>역할 기본 접근</h2><p class="desc">역할별 초기 접근 영역입니다. 사용자별 override가 있으면 override가 우선합니다.</p>
         <div id="access-matrix" class="table-wrap"></div>
+      </section>
+
+      <section class="section admin-panel" id="panel-preview" hidden>
+        <h2>권한별 화면 관리</h2>
+        <p class="desc">운영자·최고관리자는 게스트/일반회원 권한에서 데이터 화면이 어떻게 보이는지 미리 확인할 수 있습니다. 미리보기는 화면 표시만 바꾸며 실제 권한·데이터는 변경되지 않습니다(새 탭에서 열립니다).</p>
+        <div class="grid-2">
+          <a class="data-card preview-card" href="/catalog?preview=guest" target="_blank" rel="noopener noreferrer">
+            <span class="badge muted"><span class="dot"></span>게스트</span>
+            <b>카탈로그</b><small>게스트가 보는 마켓플레이스 — Charts 메뉴 없음</small>
+          </a>
+          <a class="data-card preview-card" href="/catalog?preview=member" target="_blank" rel="noopener noreferrer">
+            <span class="badge good"><span class="dot"></span>일반회원</span>
+            <b>카탈로그</b><small>일반회원이 보는 마켓플레이스 — Charts 메뉴 포함</small>
+          </a>
+          <a class="data-card preview-card" href="/charts?preview=guest" target="_blank" rel="noopener noreferrer">
+            <span class="badge muted"><span class="dot"></span>게스트</span>
+            <b>Charts Studio · 뷰어</b><small>읽기 전용 — 편집·레이아웃 추가/변경 비활성</small>
+          </a>
+          <a class="data-card preview-card" href="/charts?preview=member" target="_blank" rel="noopener noreferrer">
+            <span class="badge good"><span class="dot"></span>일반회원</span>
+            <b>Charts Studio · 편집</b><small>레이아웃 추가·편집이 가능한 회원 화면</small>
+          </a>
+        </div>
       </section>
 
       <section class="section admin-panel" id="panel-autoblocks" hidden>

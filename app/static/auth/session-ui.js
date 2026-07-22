@@ -112,9 +112,57 @@ window.AuthUI = (() => {
     }
   }
 
+  // 운영자·최고관리자가 하위 역할 화면을 미리 보는 '권한별 화면 관리' 미리보기.
+  // 화면 표시(네비·차트 편집 가능 여부)만 바꾸며 서버 권한·데이터는 그대로다.
+  const PREVIEW_ROLES = {
+    guest: { role_label: '게스트', can_edit_charts: false, allowed_pages: ['catalog', 'profile', 'billing'] },
+    member: { role_label: '일반회원', can_edit_charts: true, allowed_pages: ['catalog', 'charts', 'profile', 'billing'] },
+  };
+
+  function activePreviewRole(user) {
+    const target = new URLSearchParams(location.search).get('preview');
+    const onDataScreen = ['/catalog', '/charts'].includes(location.pathname);
+    const isOperator = ['operator', 'admin'].includes(user && user.role);
+    return onDataScreen && isOperator && PREVIEW_ROLES[target] ? target : null;
+  }
+
+  function applyPreview(user) {
+    const target = activePreviewRole(user);
+    if (!target) return user;
+    showPreviewBanner(PREVIEW_ROLES[target].role_label);
+    return { ...user, ...PREVIEW_ROLES[target], role: target, previewing: target };
+  }
+
+  function showPreviewBanner(label) {
+    if (document.getElementById('preview-banner')) return;
+    const bar = document.createElement('div');
+    bar.id = 'preview-banner';
+    bar.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:9998;'
+      + 'display:flex;align-items:center;gap:12px;padding:10px 16px;border-radius:999px;'
+      + 'background:#1c5cab;color:#fff;font:13px/1.4 system-ui,sans-serif;box-shadow:0 10px 34px rgba(8,16,32,.4)';
+    const text = document.createElement('span');
+    text.textContent = `\u{1F50D} ${label} 권한 화면 미리보기 (운영자 미리보기)`;
+    const exit = document.createElement('button');
+    exit.type = 'button';
+    exit.textContent = '미리보기 종료';
+    exit.style.cssText = 'border:1px solid rgba(255,255,255,.55);background:transparent;color:#fff;'
+      + 'border-radius:7px;padding:4px 11px;cursor:pointer;font:inherit';
+    exit.addEventListener('click', () => {
+      const url = new URL(location.href);
+      url.searchParams.delete('preview');
+      location.href = url.pathname + url.search;
+    });
+    bar.append(text, exit);
+    document.body.appendChild(bar);
+  }
+
   async function bootstrapProtected() {
     const state = await session();
-    if (state.authenticated) decorate(state.user);
+    if (state.authenticated) {
+      const user = applyPreview(state.user);
+      decorate(user);
+      return { ...state, user };
+    }
     return state;
   }
 

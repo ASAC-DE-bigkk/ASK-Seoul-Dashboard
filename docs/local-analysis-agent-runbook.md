@@ -204,12 +204,12 @@ curl -fsS http://127.0.0.1:8765/health
 
 브라우저 또는 cookie를 안전하게 처리하는 HTTP client로 다음을 확인한다.
 
-1. `GET /api/v1/auth/session` → HTTP 200, `authenticated=true`, `role=member`
+1. `GET /api/v1/auth/session` → HTTP 200, `authenticated=true`, `role=operator`
 2. `GET /catalog` → HTTP 200
 3. `GET /api/v1/charts/meta` → HTTP 200
 4. CSRF 없는 인증 후 Charts POST → HTTP 403
 5. 같은 origin의 정상 CSRF POST → 인증을 통과
-6. `GET /admin` → HTTP 403 또는 `/profile?denied=1` redirect
+6. `GET /admin` → HTTP 200 (운영자 권한 — 관리 콘솔·권한별 화면 관리 접근 가능)
 7. non-loopback client → 자동 세션 미발급, 보호 화면 로그인 redirect/API 401
 8. `GET /charts?selftest=1` 완료 → 브라우저 탭 제목 `SELFTEST_ALL_PASS`
 

@@ -135,7 +135,7 @@ def test_local_auto_settings_fail_closed(monkeypatch, tmp_path):
         load_settings()
 
 
-def test_local_auto_issues_member_session_only_on_loopback(monkeypatch, tmp_path):
+def test_local_auto_issues_operator_session_only_on_loopback(monkeypatch, tmp_path):
     settings = _local_auto_env(monkeypatch, tmp_path)
     database = Database(settings.database_url, enable_sqlite_wal=False)
     initialize_database(database, settings)
@@ -171,7 +171,7 @@ def test_local_auto_issues_member_session_only_on_loopback(monkeypatch, tmp_path
 
     @local_app.get("/admin")
     def admin_page():
-        return {"unexpected": True}
+        return {"admin_reached": True}
 
     @local_app.get("/api/v1/auth/session")
     def session_info(request: Request):
@@ -190,7 +190,7 @@ def test_local_auto_issues_member_session_only_on_loopback(monkeypatch, tmp_path
         state = client.get("/api/v1/auth/session")
         assert state.status_code == 200
         assert state.json()["authenticated"] is True
-        assert state.json()["user"]["role"] == "member"
+        assert state.json()["user"]["role"] == "operator"
 
         # 유효한 세션이 이미 발급된 뒤 override가 다시 어긋나도 다음 요청에서
         # 복구되어야 한다. 브라우저 쿠키 삭제나 세션 만료를 요구하지 않는다.
@@ -213,7 +213,7 @@ def test_local_auto_issues_member_session_only_on_loopback(monkeypatch, tmp_path
 
         response = client.get("/charts")
         assert response.status_code == 200
-        assert response.json()["role"] == "member"
+        assert response.json()["role"] == "operator"
         assert client.cookies.get(settings.cookie_name)
         csrf = client.cookies.get(settings.csrf_cookie_name)
         assert csrf
@@ -224,13 +224,14 @@ def test_local_auto_issues_member_session_only_on_loopback(monkeypatch, tmp_path
             "/api/v1/charts/query", headers={"x-csrf-token": csrf}
         )
         assert query.status_code == 200
-        assert query.json()["role"] == "member"
+        assert query.json()["role"] == "operator"
 
-        denied = client.get(
+        admin = client.get(
             "/admin", headers={"accept": "text/html"}, follow_redirects=False
         )
-        assert denied.status_code == 303
-        assert denied.headers["location"] == "/profile?denied=1"
+        # 로컬 분석 계정은 운영자이므로 관리 콘솔에 접근할 수 있다.
+        assert admin.status_code == 200
+        assert admin.json()["admin_reached"] is True
 
     with TestClient(local_app, client=("198.51.100.10", 50001)) as remote:
         response = remote.get(
@@ -244,7 +245,7 @@ def test_local_auto_issues_member_session_only_on_loopback(monkeypatch, tmp_path
         state = landing.get("/api/v1/auth/session")
         assert state.status_code == 200
         assert state.json()["authenticated"] is True
-        assert state.json()["user"]["role"] == "member"
+        assert state.json()["user"]["role"] == "operator"
         assert landing.cookies.get(settings.cookie_name)
 
     with database.session() as db:
@@ -252,7 +253,7 @@ def test_local_auto_issues_member_session_only_on_loopback(monkeypatch, tmp_path
             select(User).where(User.email == "local-analyst@localhost.invalid")
         )
         assert analyst is not None
-        assert analyst.role == "member"
+        assert analyst.role == "operator"
         assert analyst.status == "active"
         charts_page = db.scalar(
             select(PageResource).where(PageResource.key == "charts")

@@ -46,8 +46,10 @@ powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1
 `set -a; source .env.local; set +a`는 PowerShell에서 동작하지 않는다(SHARE.md §0.1).
 
 `http://127.0.0.1:8765/charts`를 열면 `local-analyst@localhost.invalid` 예약 계정이
-`member` 역할로 로컬 DB에 한 번 생성되고 정상 AuthSession과 CSRF 쿠키가 자동 발급된다.
-레이아웃은 이 사용자 ID에 저장되며 관리자 영역은 허용되지 않는다. 고정 비밀번호나 실제 이메일은 없다.
+`operator` 역할로 로컬 DB에 한 번 생성되고 정상 AuthSession과 CSRF 쿠키가 자동 발급된다.
+레이아웃은 이 사용자 ID에 저장된다. 운영자 권한이라 운영 콘솔과 '권한별 화면 관리'(게스트/멤버
+화면 미리보기)를 사용할 수 있으며, 최고관리자 전용 기능(IP 자동차단 해제·MFA 강제 초기화 등)만
+제한된다. 고정 비밀번호나 실제 이메일은 없다.
 
 다음 중 하나라도 어긋나면 앱은 `local_auto`로 기동하지 않는다.
 

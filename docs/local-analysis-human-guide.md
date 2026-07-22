@@ -222,7 +222,7 @@ curl -fsS http://127.0.0.1:8765/api/v1/public/summary
 
 1. `/health`가 HTTP 200이고 `database`가 `ok`다.
 2. `/charts` 접근 때 로그인·회원가입 화면으로 이동하지 않는다.
-3. 화면의 사용자는 `local-analyst`, 역할은 `일반회원`이다.
+3. 화면의 사용자는 `local-analyst`, 역할은 `운영자`다(관리 콘솔·권한별 화면 관리 사용 가능).
 4. 차트 페이지 편집·저장 후 새로고침해도 레이아웃이 유지된다.
 5. `/admin`은 열리지 않는다.
 6. `charts?selftest=1` 완료 후 탭 제목이 `SELFTEST_ALL_PASS`다.
@@ -233,7 +233,7 @@ curl -fsS http://127.0.0.1:8765/api/v1/public/summary
 |---|---|---|
 | 로컬 인증 DB | `data/ask_seoul.local.db` | 개인 PC의 런타임 파일, Git 커밋 금지 |
 | 로컬 계정 | `local-analyst@localhost.invalid` | 실제 이메일이 아닌 예약 식별자 |
-| 역할 | `member` | Catalog·Charts 사용 가능, 관리자 권한 없음 |
+| 역할 | `operator` | Catalog·Charts + 운영 콘솔·권한별 화면 관리 사용 가능(최고관리자 전용 기능 제외) |
 | 세션 | DB에는 HMAC hash만 저장 | 일반 로그인과 같은 만료·CSRF 규칙 적용 |
 | 레이아웃 | 로컬 DB에서 위 사용자 ID에 귀속 | 다른 팀원 PC나 dev 서버와 공유되지 않음 |
 | Charts 캐시 | `app/charts/data/cache/` | 런타임 파일, Git 커밋 금지 |

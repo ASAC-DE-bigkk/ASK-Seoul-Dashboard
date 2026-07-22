@@ -25,17 +25,17 @@ function badge(value) {
 function showPanel(name) {
   const allowed = new Set(adminState.user.allowed_pages || []);
   const map = {
-    users:'admin_users', access:'admin_access', autoblocks:'admin_security',
-    payments:'admin_payments', policies:'admin_policies', audit:'admin_audit',
-    health:'service_health',
+    users:'admin_users', access:'admin_access', preview:'admin_access',
+    autoblocks:'admin_security', payments:'admin_payments', policies:'admin_policies',
+    audit:'admin_audit', health:'service_health',
   };
   if (!allowed.has(map[name])) name = Object.keys(map).find(key => allowed.has(map[key])) || 'users';
   document.querySelectorAll('.admin-panel').forEach(panel => panel.hidden = panel.id !== `panel-${name}`);
   document.querySelectorAll('[data-tab]').forEach(link => link.classList.toggle('on', link.dataset.tab === name));
   if (location.hash !== `#${name}`) history.replaceState(null, '', `#${name}`);
   ({
-    users:loadUsers, access:loadAccess, autoblocks:loadAutoBlocks, payments:loadPayments,
-    policies:loadPolicies, audit:() => loadAudit(false), health:loadHealth,
+    users:loadUsers, access:loadAccess, preview:loadPreview, autoblocks:loadAutoBlocks,
+    payments:loadPayments, policies:loadPolicies, audit:() => loadAudit(false), health:loadHealth,
   }[name])().catch(error => adminMessage(error.message, 'bad'));
 }
 
@@ -208,6 +208,10 @@ async function loadIpBlocks() {
     try { await AuthUI.api(`/api/v1/admin/ip-blocks/${button.dataset.disableIp}`, {method:'DELETE'}); await loadIpBlocks(); }
     catch (error) { adminMessage(error.message, 'bad'); }
   });
+}
+
+async function loadPreview() {
+  // 정적 미리보기 링크만 있는 탭 — 별도 로드 없음.
 }
 
 async function loadAutoBlocks() {
