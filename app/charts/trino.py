@@ -55,6 +55,12 @@ class QueryFailed(RuntimeError):
     """SQL 자체가 거부됨 — 폴백하지 않고 그대로 알린다."""
 
 
+# gold 전량 재생성(dbt table, on_table_exists=rename)은 rename 2회 사이 짧은 '테이블 없음'
+# 창을 만든다. 이 순간의 조회 실패는 SQL 결함이 아니라 재빌드 타이밍이므로, 캐시가 있으면
+# stale 로 폴백해 화면이 죽지 않게 한다(그 외 QueryFailed 는 그대로 알린다 — 진짜 오류 은폐 금지).
+_TABLE_MISSING_RE = re.compile(r"(does not exist|TABLE_NOT_FOUND)", re.IGNORECASE)
+
+
 class _Busy503(RuntimeError):
     """Trino 프로토콜상 503 = '같은 URI 로 잠시 후 재시도' 신호 (실패 아님)."""
 
@@ -218,6 +224,12 @@ def execute(sql: str, max_rows: int = MAX_ROWS, force: bool = False) -> dict:
                 columns, rows = _run(sql, max_rows)
             except TrinoUnavailable:
                 if cached:  # 죽은 Trino 보다 낡은 데이터가 낫다 — mode 로 낡음을 정직하게 표기
+                    return {"columns": cached["columns"], "rows": cached["rows"],
+                            "mode": "stale", "cached_at": cached["cached_at"], "elapsed_ms": 0}
+                raise
+            except QueryFailed as exc:
+                # gold 재빌드 창(테이블 없음)만 stale 폴백 — 직전 정상 스냅샷이 0행/에러보다 낫다
+                if cached and _TABLE_MISSING_RE.search(str(exc)):
                     return {"columns": cached["columns"], "rows": cached["rows"],
                             "mode": "stale", "cached_at": cached["cached_at"], "elapsed_ms": 0}
                 raise
