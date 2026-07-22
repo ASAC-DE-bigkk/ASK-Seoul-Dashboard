@@ -143,8 +143,18 @@
                     font-size: 11px; color: var(--ink-4); }
   .card .nm { font-family: var(--mono); font-size: 13.5px; font-weight: 650; letter-spacing: -0.01em;
               overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .card p.desc { font-size: 12px; color: var(--ink-2); line-height: 1.55; min-height: 37px;
-                 display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  /* 외부 전시 문구가 있는 카드: 한글 상품명이 주(主), 테이블명은 식별용 보조 줄 */
+  .card .dn { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.3;
+              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .nm.sub { font-size: 11px; font-weight: 500; color: var(--ink-3); margin-top: 2px; }
+  .card p.desc { font-size: 12px; color: var(--ink-2); line-height: 1.55; min-height: 56px;
+                 display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .caveat { display: flex; gap: 8px; font-size: 12px; line-height: 1.55; color: var(--ink-2);
+            background: #fff8e6; border: 1px solid #f0dfae; border-radius: 8px; padding: 10px 12px; }
+  .caveat b { color: #8a6a12; font-weight: 700; flex: none; }
+  .cases { display: flex; flex-wrap: wrap; gap: 6px; }
+  .cases span { font-size: 11.5px; background: var(--line-soft); color: var(--ink-2);
+                border-radius: 999px; padding: 4px 10px; }
   .card .facts { display: grid; grid-template-columns: 1fr 0.6fr 1.4fr; border-top: 1px solid var(--line-soft);
                  border-bottom: 1px solid var(--line-soft); padding: 8px 0; }
   .card .facts .f + .f { border-left: 1px solid var(--line-soft); padding-left: 12px; }
@@ -533,7 +543,9 @@ function filtered() {
   const q = document.getElementById('search').value.trim().toLowerCase();
   let arr = summaries.filter(t =>
     (domainFilter === 'all' || t.domain === domainFilter) &&
-    (t.name + ' ' + t.description + ' ' + t.domain + ' ' + ident(t).cat).toLowerCase().includes(q));
+    (t.name + ' ' + (t.display_name || '') + ' ' + (t.summary || '') + ' ' +
+     (t.use_cases || []).join(' ') + ' ' +
+     t.description + ' ' + t.domain + ' ' + ident(t).cat).toLowerCase().includes(q));
   if (sortKey) arr = [...arr].sort((a, b) => {
     const va = sortKey === 'name' ? a.name : a.row_count;
     const vb = sortKey === 'name' ? b.name : b.row_count;
@@ -633,8 +645,10 @@ function renderCards(tables) {
     return `<article class="card" role="button" tabindex="0" style="--c:${id.c}" data-open-drawer="${esc(t.name)}">
 
       <div class="cat"><span class="dot"></span>${esc(dmeta(t.domain).label)}${IDENT[t.name] ? ' · ' + esc(id.cat) : ''}<span class="upd num">updated ${relTime(generatedAt)}</span></div>
-      <div class="nm">${esc(t.name)}</div>
-      <p class="desc">${esc(t.description) || '설명 없음'}</p>
+      ${t.display_name
+        ? `<div class="dn">${esc(t.display_name)}</div><div class="nm sub">${esc(t.name)}</div>`
+        : `<div class="nm">${esc(t.name)}</div>`}
+      <p class="desc">${esc(t.summary || t.description) || '설명 없음'}</p>
       <div class="facts num">
         <div class="f"><span>Rows</span><b>${fmt(t.row_count)}</b></div>
         <div class="f"><span>Cols</span><b>${t.column_count}</b></div>
@@ -664,7 +678,7 @@ function renderList(tables) {
     const range = t.date_range && t.date_range.min ? `${t.date_range.min} ~ ${t.date_range.max}` : '—';
     return `<div class="lrow" role="button" tabindex="0" style="--c:${id.c}" data-open-drawer="${esc(t.name)}">
       <div class="nmcell"><span class="dot"></span>
-        <div style="min-width:0"><div class="id">${esc(t.name)}</div><div class="ds">${esc(t.description) || '설명 없음'}</div></div></div>
+        <div style="min-width:0"><div class="id">${esc(t.display_name || t.name)}</div><div class="ds">${esc(t.summary || t.description) || '설명 없음'}</div></div></div>
       <div class="cell-num">${fmt(t.row_count)}</div>
       <div class="cell-num">${t.column_count}</div>
       <div class="cell-dim">${esc(range)}</div>${qcell}
@@ -716,7 +730,12 @@ function renderTab() {
   if (activeTab === 0) {
     const dr = t.date_range;
     b.innerHTML = `
-      <section><h3>Description</h3><p class="desc">${esc(t.description) || '—'}</p></section>
+      <section><h3>Description</h3>
+        <p class="desc">${esc(t.summary || t.description) || '—'}</p>
+        ${t.caveat ? `<div class="caveat" style="margin-top:10px"><b>알아두세요</b><span>${esc(t.caveat)}</span></div>` : ''}
+        ${(t.use_cases && t.use_cases.length)
+          ? `<div class="cases" style="margin-top:12px">${t.use_cases.map(u => `<span>${esc(u)}</span>`).join('')}</div>` : ''}
+      </section>
       <section><h3>Properties</h3><div class="kv">
         ${[['Rows', fmt(t.row_count)], ['Columns', t.column_count],
            ['데이터 주기', cadence(t)],
