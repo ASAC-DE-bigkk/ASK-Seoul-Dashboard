@@ -5,7 +5,7 @@ response_model 로 선언된 스키마를 어기면 서버가 에러를 내고,
 """
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ColumnInfo(BaseModel):
@@ -36,10 +36,14 @@ class TableSummary(BaseModel):
     display_name: str | None = None
     summary: str | None = None
     caveat: str | None = None
-    use_cases: list[str] = []
-    tags: list[str] = []
+    use_cases: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
     contract_enforced: bool
     materialized: str = ""
+    serving_tier: str | None = None   # 도메인이 dbt config.meta 로 선언한 D1 서빙 tier
+    refresh: str | None = None        # 도메인이 config.meta.refresh 로 선언한 갱신주기(데이터 그레인)
+    tests: list[str] = []             # 모델에 걸린 dbt 테스트 게이트 (정의 기준)
+    served_url: str | None = None     # 공개 D1 서빙 API URL (미적재면 None)
     row_count: int
     column_count: int
     date_range: DateRange | None = None
@@ -56,9 +60,17 @@ class TableDetail(TableSummary):
 class CatalogResponse(BaseModel):
     generated_at: str
     domain: str
-    domains: dict[str, int] = {}
+    domains: dict[str, int] = Field(default_factory=dict)
     table_count: int
     tables: list[TableSummary]
+
+
+class CatalogSnapshotResponse(BaseModel):
+    generated_at: str
+    domain: str
+    domains: dict[str, int] = Field(default_factory=dict)
+    table_count: int
+    tables: list[TableDetail]
 
 
 class SchemaResponse(BaseModel):
@@ -69,6 +81,7 @@ class SchemaResponse(BaseModel):
 class QualityResponse(BaseModel):
     name: str
     quality: list[QualityEntry]
+    tests: list[str] = []
 
 
 class SampleResponse(BaseModel):

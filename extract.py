@@ -18,14 +18,29 @@ Airflow 태스크(또는 transform 후속 스텝)가 될 부분의 데모 축소
 """
 from __future__ import annotations
 
+import argparse
 import json
+import os
 import subprocess
 import sys
+import tempfile
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 
 HERE = Path(__file__).parent
-SAMPLE_DIR = HERE.parent / "sample"
+
+
+def resolve_sample_dir(here: Path) -> Path:
+    """Dashboard standalone checkout과 sample/dashboard submodule 배치를 모두 지원한다."""
+    candidates = (here.parent, here.parent / "sample")
+    for candidate in candidates:
+        if (candidate / "docker-compose.yml").is_file() and (candidate / "dbt").is_dir():
+            return candidate
+    return here.parent / "sample"
+
+
+SAMPLE_DIR = resolve_sample_dir(HERE)
 TARGET_DIR = SAMPLE_DIR / "dbt" / "domains" / "culture" / "target"
 DBT_DOMAINS_DIR = SAMPLE_DIR / "dbt" / "domains"
 OUT_PATH = HERE / "snapshot" / "catalog_snapshot.json"
@@ -73,6 +88,56 @@ def display_meta(node: dict) -> dict:
 BASIC_MANIFEST_PROJECTS = ("commerce", "citydata", "traffic_weather", "transit")
 
 MAX_SAMPLE_TEXT = 120  # 샘플 셀 문자열 절단 길이 (UI 가독성)
+
+# ── 공개 D1 서빙 API (sample/serving, ASAC-DAG#445) ─────────────────
+# citydata_serving_export DAG 가 D1 에 올린 골드 = 카탈로그 화면에서 '실데이터 조회' 링크를
+# 걸 대상. 목록의 정본은 그 DAG(FAST_TABLES+DAILY_TABLES) — 여기 12종은 그 사본이다.
+# by_time(서빙 보류)·hourly 3종·demographics 는 아직 미적재(다음 확장 시 목록에 추가).
+SERVING_API_BASE = "https://ask-seoul-citydata-api.dy950328.workers.dev"
+SERVED_TABLES = {
+    "gold_citydata_place_latest", "gold_citydata_place_scorecard", "gold_citydata_hot_commerce",
+    "gold_citydata_ppltn_trend", "gold_citydata_ppltn_anomaly", "gold_citydata_ppltn_forecast",
+    "gold_citydata_ppltn_x_commerce_dong", "gold_citydata_charger_availability",
+    "gold_citydata_ppltn_daily", "gold_citydata_cmrcl_daily",
+    "gold_citydata_purchasing_power_daily", "gold_citydata_ppltn_x_culture_daily",
+}
+
+# ── 무스키마 행 단위 품질 규칙 (basic 도메인) ─────────────────────────
+# culture 는 silver 에 quality_status 컬럼을 박지만(공간 매칭 정밀도),
+# citydata 는 공간축이 seed 사전매핑이라 그 라벨이 무의미하다. 대신 도메인이
+# 의미 있는 행 단위 품질(핵심 신호 결측·부분 결측)을 CASE 식으로 선언하면
+# extractor 가 추출 시점에 즉석 분류한다 — silver 스키마 변경 없음.
+# 라벨 어휘: ok / partial* (부분 결측) / missing_core (핵심 결측) — 화면 Q_META 와 동기.
+BASIC_QUALITY_RULES: dict[str, str] = {
+    "silver_citydata_ppltn": (
+        "CASE WHEN area_ppltn_min IS NULL OR area_ppltn_max IS NULL OR area_congest_lvl IS NULL "
+        "THEN 'missing_core' WHEN male_ppltn_rate IS NULL OR ppltn_rate_20 IS NULL "
+        "THEN 'partial_segment' ELSE 'ok' END"
+    ),
+    "silver_citydata_air": (
+        "CASE WHEN pm25 IS NULL OR pm10 IS NULL THEN 'missing_core' "
+        "WHEN air_idx IS NULL OR temperature IS NULL THEN 'partial' ELSE 'ok' END"
+    ),
+    "silver_citydata_cmrcl": (
+        "CASE WHEN payment_count IS NULL OR cmrcl_lvl IS NULL THEN 'missing_core' "
+        "WHEN rate_20 IS NULL OR male_rate IS NULL THEN 'partial_segment' ELSE 'ok' END"
+    ),
+    "silver_citydata_sbike": (
+        "CASE WHEN parking_count IS NULL OR rack_count IS NULL THEN 'missing_core' "
+        "WHEN spot_longitude IS NULL OR spot_latitude IS NULL THEN 'partial_geo' ELSE 'ok' END"
+    ),
+    "silver_citydata_charger": (
+        "CASE WHEN charger_stat IS NULL THEN 'missing_core' "
+        "WHEN output_kw IS NULL OR stat_longitude IS NULL THEN 'partial' ELSE 'ok' END"
+    ),
+    # 30분 승하차 NULL 은 새벽 1~4시에 집중(2~4시 100%) = 심야 운행 중단의 정상 결측.
+    # 실측(2026-07-18): 시간대별 NULL 분포로 확인 — 수집기간 차이 아님.
+    "silver_citydata_transit_ppltn": (
+        "CASE WHEN gton_30min_max IS NULL AND gtoff_30min_max IS NULL THEN "
+        "(CASE WHEN hour(observed_at) BETWEEN 1 AND 4 THEN 'no_service' ELSE 'missing_core' END) "
+        "WHEN station_count IS NULL OR station_count = 0 THEN 'partial' ELSE 'ok' END"
+    ),
+}
 
 # dbt 아티팩트가 없는 도메인 — Trino 실측만으로 basic 카탈로그 구성. 라벨 → dev 스키마.
 OTHER_DOMAINS = {
@@ -182,10 +247,28 @@ def measure(rel: str, columns: list[dict]) -> tuple[int, dict | None, list[dict]
     return row_count, date_range, sample
 
 
+def test_gates(manifest: dict) -> dict[str, list[str]]:
+    """모델 uid → 그 모델에 걸린 dbt 테스트 라벨 목록 (예 'unique_grain', 'not_null(area_cd)').
+    실행 결과가 아니라 **정의된 게이트**다 — CI/DAG 에서 매 run 검증되는 계약의 가시화."""
+    gates: dict[str, list[str]] = {}
+    for node in manifest.get("nodes", {}).values():
+        if node.get("resource_type") != "test":
+            continue
+        attached = node.get("attached_node")
+        if not attached:
+            continue
+        tm = node.get("test_metadata") or {}
+        label = tm.get("name") or node.get("name", "test")
+        column = (tm.get("kwargs") or {}).get("column_name")
+        gates.setdefault(attached, []).append(f"{label}({column})" if column else label)
+    return {uid: sorted(set(v)) for uid, v in gates.items()}
+
+
 def load_basic_meta() -> dict:
-    """basic 도메인 모델의 description·컬럼설명·tags·contract 를 각 도메인 manifest 에서
-    병합해 name → 메타 dict 로. 모델명 전역 유일 전제(gold_citydata_*·gold_traffic_* 등).
-    manifest 는 도메인 dbt 를 `dbt deps && dbt parse` 하면 생긴다(gitignore 산출물)."""
+    """basic 도메인 모델의 description·컬럼설명·tags·contract·serving_tier·테스트게이트 를
+    각 도메인 manifest 에서 병합해 name → 메타 dict 로. 모델명 전역 유일 전제
+    (gold_citydata_*·gold_traffic_* 등). manifest 는 도메인 dbt 를
+    `dbt deps && dbt parse` 하면 생긴다(gitignore 산출물)."""
     lookup: dict[str, dict] = {}
     for proj in BASIC_MANIFEST_PROJECTS:
         path = DBT_DOMAINS_DIR / proj / "target" / "manifest.json"
@@ -194,6 +277,7 @@ def load_basic_meta() -> dict:
             continue
         manifest = json.loads(path.read_text(encoding="utf-8"))
         all_nodes = {**manifest.get("nodes", {}), **manifest.get("sources", {})}
+        gates = test_gates(manifest)
         for uid, node in manifest.get("nodes", {}).items():
             if node.get("resource_type") != "model":
                 continue
@@ -207,6 +291,12 @@ def load_basic_meta() -> dict:
                 "tags": node.get("tags", []),
                 "contract_enforced": bool(cfg.get("contract", {}).get("enforced")),
                 "materialized": cfg.get("materialized", ""),
+                "external": bool(cfg.get("meta", {}).get("external", True)),
+                # 서빙 tier·갱신주기 — config.meta.serving_tier / refresh (citydata D1 서빙 상세, drawer 표시).
+                #   카드 pill 은 external(#269) — external=카탈로그 노출, serving_tier=D1 적재 tier(별개).
+                "serving_tier": (cfg.get("meta") or {}).get("serving_tier"),
+                "refresh": (cfg.get("meta") or {}).get("refresh"),
+                "tests": gates.get(uid, []),
                 # 계보 — culture rich 와 같은 upstream_layers 재사용 (도메인 manifest 내 한정)
                 "lineage": upstream_layers(uid, all_nodes),
                 # 타 도메인이 자기 yml 에 단 meta 를 그대로 존중한다. external 은 지금까지
@@ -217,9 +307,32 @@ def load_basic_meta() -> dict:
     return lookup
 
 
+def basic_quality(silver_names: list[str], schema: str, cache: dict) -> list[dict]:
+    """계보상 상류 silver 중 품질 규칙이 선언된 것의 즉석 분포. 실패는 스킵(품질은 부가정보)."""
+    out = []
+    for name in silver_names:
+        expr = BASIC_QUALITY_RULES.get(name)
+        if not expr:
+            continue
+        if name not in cache:
+            try:
+                dist = trino_rows(
+                    f"SELECT {expr} AS quality_status, count(*) AS c "
+                    f"FROM iceberg_dev.{schema}.{name} GROUP BY 1 ORDER BY 2 DESC"
+                )
+                cache[name] = {"table": name, "distribution": {d["quality_status"]: d["c"] for d in dist}}
+            except RuntimeError as exc:
+                print(f"  ! quality skip({name}): {exc}")
+                cache[name] = None
+        if cache[name]:
+            out.append(cache[name])
+    return out
+
+
 def extract_basic_domain(domain: str, schema: str, meta_lookup: dict) -> list[dict]:
-    """dbt 계보·quality 는 아직 미추출(culture 전용)이나, 도메인 manifest 에서
-    description·컬럼설명·tags·contract 는 채운다(dbt docs 투자분 반영)."""
+    """dbt 계보 기반으로 description·컬럼설명·tags·contract·serving_tier·테스트게이트를 채우고,
+    품질 규칙이 선언된 도메인은 상류 silver 의 행 단위 품질도 즉석 계측한다."""
+    quality_cache: dict[str, dict | None] = {}
     names = sorted(
         r["Table"] for r in trino_rows(f"SHOW TABLES FROM iceberg_dev.{schema}")
         if r["Table"].startswith("gold_")
@@ -257,16 +370,138 @@ def extract_basic_domain(domain: str, schema: str, meta_lookup: dict) -> list[di
             "tags": meta.get("tags", []),
             "contract_enforced": meta.get("contract_enforced", False),
             "materialized": meta.get("materialized", ""),
+            "serving_tier": meta.get("serving_tier"),
+            "refresh": meta.get("refresh"),
+            "tests": meta.get("tests", []),
+            "served_url": f"{SERVING_API_BASE}/data/{name}" if name in SERVED_TABLES else None,
             "on_table_exists": None,
             "row_count": row_count,
             "date_range": date_range,
             "columns": columns,
-            "quality": [],
+            "quality": basic_quality(meta.get("lineage", {}).get("silver", []), schema, quality_cache),
             "lineage": meta.get("lineage", {}),
             "sample": sample,
             **display_meta({"config": {"meta": {"display": meta.get("display", {})}}}),
         })
     return tables
+
+
+def write_snapshot(snapshot: dict) -> None:
+    """완성된 JSON만 원자적으로 교체해 중간 실패 시 기존 snapshot을 보존한다."""
+    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n"
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=OUT_PATH.parent,
+            prefix=f".{OUT_PATH.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+            temp_path = Path(handle.name)
+        temp_path.chmod(0o644)
+        os.replace(temp_path, OUT_PATH)
+    finally:
+        if temp_path is not None and temp_path.exists():
+            temp_path.unlink()
+
+
+def merge_basic_domains(
+    snapshot: dict,
+    replacements: dict[str, list[dict]],
+    observed_at: str,
+) -> dict:
+    """기존 snapshot의 비대상 domain을 보존하고 지정 basic domain만 교체한다."""
+    if not replacements:
+        raise ValueError("at least one basic domain replacement is required")
+    unknown = set(replacements) - set(OTHER_DOMAINS)
+    if unknown:
+        raise ValueError(f"unknown basic domains: {sorted(unknown)}")
+    for domain, tables in replacements.items():
+        if not tables:
+            raise ValueError(f"refusing to replace {domain} with an empty table set")
+        if any(table.get("domain") != domain for table in tables):
+            raise ValueError(f"replacement contains a table from another domain: {domain}")
+
+    merged = deepcopy(snapshot)
+    replaced_domains = set(replacements)
+    tables = [
+        table
+        for table in merged.get("tables", [])
+        if table.get("domain") not in replaced_domains
+    ]
+    for domain in OTHER_DOMAINS:
+        tables.extend(replacements.get(domain, []))
+
+    domain_order = {"culture": 0, **{
+        domain: index
+        for index, domain in enumerate(OTHER_DOMAINS, start=1)
+    }}
+    tables.sort(key=lambda table: (
+        domain_order.get(table.get("domain", ""), len(domain_order)),
+        table.get("name", ""),
+    ))
+
+    previous_generated_at = merged.get("generated_at", observed_at)
+    previous_domains = merged.get("domains", {})
+    domain_generated_at = {
+        domain: previous_generated_at
+        for domain in previous_domains
+    }
+    domain_generated_at.update(merged.get("domain_generated_at", {}))
+    domain_generated_at.update({
+        domain: observed_at
+        for domain in replacements
+    })
+
+    domains: dict[str, int] = {}
+    for table in tables:
+        domain = table.get("domain", "")
+        domains[domain] = domains.get(domain, 0) + 1
+
+    merged.update({
+        "generated_at": observed_at,
+        "domain_generated_at": domain_generated_at,
+        "domains": domains,
+        "table_count": len(tables),
+        "tables": tables,
+        "refresh": {
+            "mode": "partial_basic",
+            "source_system": "trino",
+            "catalog": "iceberg_dev",
+            "domains": list(replacements),
+            "observed_at": observed_at,
+        },
+    })
+    return merged
+
+
+def refresh_basic_domains(domains: list[str]) -> None:
+    """culture artifact 없이도 현재 Trino의 지정 basic domain만 안전하게 갱신한다."""
+    if not OUT_PATH.is_file():
+        raise FileNotFoundError(f"base snapshot does not exist: {OUT_PATH}")
+    unique_domains = list(dict.fromkeys(domains))
+    metadata = load_basic_meta()
+    replacements: dict[str, list[dict]] = {}
+    for domain in unique_domains:
+        tables = extract_basic_domain(domain, OTHER_DOMAINS[domain], metadata)
+        if not tables:
+            raise RuntimeError(f"no Gold tables discovered for basic domain: {domain}")
+        replacements[domain] = tables
+
+    observed_at = datetime.now(timezone.utc).isoformat()
+    current = json.loads(OUT_PATH.read_text(encoding="utf-8"))
+    snapshot = merge_basic_domains(current, replacements, observed_at)
+    write_snapshot(snapshot)
+    print(
+        f"✓ refreshed {','.join(unique_domains)} in {OUT_PATH} "
+        f"({OUT_PATH.stat().st_size:,} bytes, tables={len(snapshot['tables'])})"
+    )
 
 
 def main() -> None:
@@ -280,6 +515,7 @@ def main() -> None:
     print(f"gold models: {len(golds)}")
 
     quality_cache: dict[str, dict] = {}  # silver uid → 분포 (골드끼리 공유)
+    rich_gates = test_gates(manifest)
     tables = []
     for uid, node in sorted(golds.items(), key=lambda kv: kv[1]["name"]):
         name, rel = node["name"], node["relation_name"]
@@ -327,6 +563,10 @@ def main() -> None:
             "tags": node.get("tags", []),
             "contract_enforced": bool(node.get("config", {}).get("contract", {}).get("enforced")),
             "materialized": node.get("config", {}).get("materialized", ""),
+            "serving_tier": (node.get("config", {}).get("meta") or {}).get("serving_tier"),
+            "refresh": (node.get("config", {}).get("meta") or {}).get("refresh"),
+            "tests": rich_gates.get(uid, []),
+            "served_url": f"{SERVING_API_BASE}/data/{name}" if name in SERVED_TABLES else None,
             "on_table_exists": node.get("config", {}).get("on_table_exists")
                                or node.get("config", {}).get("extra", {}).get("on_table_exists"),
             "row_count": row_count,
@@ -346,18 +586,38 @@ def main() -> None:
     for t in tables:
         domains[t["domain"]] = domains.get(t["domain"], 0) + 1
 
+    generated_at = datetime.now(timezone.utc).isoformat()
     snapshot = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": generated_at,
+        "domain_generated_at": {
+            domain: generated_at
+            for domain in domains
+        },
         "domain": "all",
         "domains": domains,
         "dbt_project": manifest.get("metadata", {}).get("project_name", ""),
         "table_count": len(tables),
         "tables": tables,
     }
-    OUT_PATH.parent.mkdir(exist_ok=True)
-    OUT_PATH.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_snapshot(snapshot)
     print(f"✓ wrote {OUT_PATH} ({OUT_PATH.stat().st_size:,} bytes, tables={len(tables)})")
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="ASK SEOUL catalog snapshot extractor")
+    parser.add_argument(
+        "--refresh-basic-domain",
+        action="append",
+        choices=tuple(OTHER_DOMAINS),
+        default=[],
+        help="전체 culture artifact 없이 지정 basic domain만 현재 Trino에서 갱신",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    if args.refresh_basic_domain:
+        refresh_basic_domains(args.refresh_basic_domain)
+    else:
+        main()

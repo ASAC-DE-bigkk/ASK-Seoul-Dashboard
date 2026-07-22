@@ -1,0 +1,14 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>로그인 · ASK SEOUL</title><link rel="stylesheet" href="/static/auth/auth.css"></head>
+<body><div class="auth-page"><nav class="auth-nav"><a class="brand" href="/"><span class="brand-mark">AS</span>ASK SEOUL</a>
+<div class="right"><a href="/auth/register">회원가입</a></div></nav>
+<main class="auth-main"><section class="auth-card"><div class="eyebrow">Secure access</div><h1>로그인</h1>
+<p class="lead">승인된 계정만 데이터 마켓플레이스와 Charts Studio에 접근할 수 있습니다.</p>
+<div id="message" class="message info" hidden></div>
+<form id="login-form" class="form"><div class="field"><label for="email">이메일</label><input id="email" name="email" type="email" autocomplete="username" required></div>
+<div class="field"><label for="password">비밀번호</label><input id="password" name="password" type="password" autocomplete="current-password" maxlength="128" required></div>
+<label class="check"><input name="remember" type="checkbox">이 기기에서 로그인 상태 유지</label>
+<button class="btn primary" type="submit">로그인</button></form>
+<div class="auth-links"><a href="/auth/forgot-password">비밀번호 찾기</a><a href="/auth/register">계정 만들기</a></div>
+</section></main><footer class="auth-foot">세션 토큰은 HttpOnly 쿠키로만 보관되며 비밀번호 원문은 저장하지 않습니다.</footer></div>
+<script src="/static/auth/session-ui.js"></script><script src="/static/auth/auth-pages.js"></script><script>setupLogin()</script></body></html>

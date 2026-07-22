@@ -1,0 +1,403 @@
+name: Test, build, and deploy
+
+on:
+  push:
+    branches:
+      - dev
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: dashboard-deploy-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref_name == 'dev' || github.ref_name == 'main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_ref: ${{ steps.image.outputs.image_ref }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Build and run tests
+        run: |
+          set -Eeuo pipefail
+          docker build --pull --target test --tag "ask-seoul-dashboard-test:${GITHUB_SHA}" .
+          docker run --rm "ask-seoul-dashboard-test:${GITHUB_SHA}"
+          bash -n \
+            deploy/deploy.sh \
+            deploy/bootstrap-dev.sh \
+            deploy/install-docker-rocky.sh \
+            deploy/trino/deploy.sh
+
+      - name: Validate Compose contracts
+        run: |
+          set -Eeuo pipefail
+          export IMAGE_REF="ghcr.io/example/ask-seoul-dashboard:${GITHUB_SHA}"
+          export RUNTIME_ENV_FILE="$GITHUB_WORKSPACE/deploy/runtime.dev.env.example"
+          docker compose \
+            --env-file deploy/runtime.dev.env.example \
+            --file deploy/compose.yaml \
+            config --quiet
+          DASHBOARD_DATA_NETWORK=elt_net docker compose \
+            --env-file deploy/runtime.dev.env.example \
+            --file deploy/compose.yaml \
+            --file deploy/compose.data-network.yaml \
+            config --quiet
+          docker compose \
+            --env-file deploy/trino/runtime.env.example \
+            --project-name ask-seoul-trino-check \
+            --file deploy/trino/compose.yaml \
+            config --quiet
+
+      - name: Define immutable image reference
+        id: image
+        run: |
+          set -Eeuo pipefail
+          repository="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "image_ref=${repository}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          printf '%s' "$GHCR_TOKEN" |
+            docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build runtime image
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.image_ref }}
+        run: |
+          set -Eeuo pipefail
+          docker build \
+            --target runtime \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --tag "$IMAGE_REF" \
+            .
+
+      - name: Smoke test runtime Compose
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.image_ref }}
+          RUNTIME_ENV_FILE: ${{ runner.temp }}/ask-seoul-dashboard-ci.env
+          DASHBOARD_PORT: "38765"
+        run: |
+          set -Eeuo pipefail
+          deploy/bootstrap-dev.sh "$RUNTIME_ENV_FILE"
+          compose=(
+            docker compose
+            --env-file "$RUNTIME_ENV_FILE"
+            --project-name ask-seoul-dashboard-ci
+            --file deploy/compose.yaml
+          )
+          cleanup() {
+            "${compose[@]}" down --volumes --remove-orphans
+            rm -f "$RUNTIME_ENV_FILE"
+          }
+          trap cleanup EXIT
+
+          "${compose[@]}" --profile tools run --rm migrate
+          "${compose[@]}" up -d dashboard notification-worker
+
+          healthy=false
+          for _ in {1..30}; do
+            if curl -fsS http://127.0.0.1:38765/health >/dev/null; then
+              healthy=true
+              break
+            fi
+            sleep 2
+          done
+          [[ "$healthy" == true ]]
+          "${compose[@]}" ps
+
+      - name: Push runtime image
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.image_ref }}
+        run: |
+          set -Eeuo pipefail
+          docker push "$IMAGE_REF"
+
+  deploy:
+    needs: build
+    if: github.ref_name == 'dev'
+    runs-on: ubuntu-latest
+    environment: development
+    permissions:
+      contents: read
+      packages: read
+    env:
+      IMAGE_REF: ${{ needs.build.outputs.image_ref }}
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+      DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+      DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+      COMPOSE_PROJECT_NAME: ${{ vars.COMPOSE_PROJECT_NAME }}
+      RUNTIME_ENV_FILE: ${{ vars.RUNTIME_ENV_FILE }}
+      DASHBOARD_DATA_NETWORK: ${{ vars.DASHBOARD_DATA_NETWORK }}
+      TRINO_DEPLOY_PATH: ${{ vars.TRINO_DEPLOY_PATH }}
+      TRINO_COMPOSE_PROJECT_NAME: ${{ vars.TRINO_COMPOSE_PROJECT_NAME }}
+      TRINO_REMOTE_RUNTIME_FILE: ${{ vars.TRINO_DEPLOY_PATH }}/.runtime.${{ github.run_id }}.${{ github.run_attempt }}.env
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+      GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout deployment files
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Validate deployment configuration
+        run: |
+          set -Eeuo pipefail
+          : "${DEPLOY_HOST:?Set DEPLOY_HOST in the GitHub Environment}"
+          : "${DEPLOY_USER:?Set DEPLOY_USER in the GitHub Environment}"
+          : "${DEPLOY_PATH:?Set DEPLOY_PATH in the GitHub Environment}"
+          : "${COMPOSE_PROJECT_NAME:?Set COMPOSE_PROJECT_NAME in the GitHub Environment}"
+          : "${RUNTIME_ENV_FILE:?Set RUNTIME_ENV_FILE in the GitHub Environment}"
+          : "${DASHBOARD_DATA_NETWORK:?Set DASHBOARD_DATA_NETWORK in the GitHub Environment}"
+          : "${TRINO_DEPLOY_PATH:?Set TRINO_DEPLOY_PATH in the GitHub Environment}"
+          : "${TRINO_COMPOSE_PROJECT_NAME:?Set TRINO_COMPOSE_PROJECT_NAME in the GitHub Environment}"
+          : "${SSH_PRIVATE_KEY:?Set SSH_PRIVATE_KEY in the GitHub Environment secrets}"
+          : "${SSH_KNOWN_HOSTS:?Set SSH_KNOWN_HOSTS in the GitHub Environment secrets}"
+          DEPLOY_PORT="${DEPLOY_PORT:-22}"
+          [[ "$DEPLOY_PORT" =~ ^[0-9]{1,5}$ ]]
+          (( 10#$DEPLOY_PORT >= 1 && 10#$DEPLOY_PORT <= 65535 ))
+          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]{0,252}$ ]]
+          [[ "$DEPLOY_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]
+          [[ "$DEPLOY_PATH" =~ ^/[a-zA-Z0-9._/-]+$ ]]
+          [[ "$RUNTIME_ENV_FILE" =~ ^/[a-zA-Z0-9._/-]+$ ]]
+          [[ "$TRINO_DEPLOY_PATH" =~ ^/[a-zA-Z0-9._/-]+$ ]]
+          [[ "$TRINO_REMOTE_RUNTIME_FILE" =~ ^/[a-zA-Z0-9._/-]+$ ]]
+          [[ "$COMPOSE_PROJECT_NAME" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]]
+          [[ "$TRINO_COMPOSE_PROJECT_NAME" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]]
+          if [[ -n "$DASHBOARD_DATA_NETWORK" ]]; then
+            [[ "$DASHBOARD_DATA_NETWORK" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$ ]]
+          fi
+          echo "DEPLOY_PORT=$DEPLOY_PORT" >> "$GITHUB_ENV"
+
+      - name: Configure pinned SSH host identity
+        run: |
+          set -Eeuo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/deploy_key"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/deploy_key" "$HOME/.ssh/known_hosts"
+
+      - name: Prepare remote deployment directory
+        run: |
+          set -Eeuo pipefail
+          ssh -i "$HOME/.ssh/deploy_key" -p "$DEPLOY_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "install -d -m 700 \
+               '$DEPLOY_PATH' \
+               '$TRINO_DEPLOY_PATH' \
+               '$TRINO_DEPLOY_PATH/catalog'"
+
+      - name: Authenticate target server to GHCR
+        run: |
+          set -Eeuo pipefail
+          printf '%s' "$GHCR_TOKEN" |
+            ssh -i "$HOME/.ssh/deploy_key" -p "$DEPLOY_PORT" \
+              -o BatchMode=yes -o IdentitiesOnly=yes \
+              "$DEPLOY_USER@$DEPLOY_HOST" \
+              "docker login ghcr.io --username '$GITHUB_ACTOR' --password-stdin"
+
+      - name: Upload Compose deployment candidates
+        run: |
+          set -Eeuo pipefail
+          scp -i "$HOME/.ssh/deploy_key" -P "$DEPLOY_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            deploy/compose.yaml \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/compose.yaml.candidate"
+          scp -i "$HOME/.ssh/deploy_key" -P "$DEPLOY_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            deploy/compose.data-network.yaml \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/compose.data-network.yaml.candidate"
+          scp -i "$HOME/.ssh/deploy_key" -P "$DEPLOY_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            deploy/deploy.sh \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/deploy.sh.candidate"
+          scp -i "$HOME/.ssh/deploy_key" -P "$DEPLOY_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            deploy/runtime.dev.env.example \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/runtime.dev.env.example"
+          scp -i "$HOME/.ssh/deploy_key" -P "$DEPLOY_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            deploy/bootstrap-dev.sh \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/bootstrap-dev.sh.candidate"
+
+      - name: Upload Trino companion configuration
+        run: |
+          set -Eeuo pipefail
+          scp -i "$HOME/.ssh/deploy_key" -P "$DEPLOY_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            deploy/trino/compose.yaml \
+            deploy/trino/config.properties \
+            deploy/trino/jvm.config \
+            deploy/trino/resource-groups.properties \
+            deploy/trino/resource-groups.json \
+            deploy/trino/deploy.sh \
+            "$DEPLOY_USER@$DEPLOY_HOST:$TRINO_DEPLOY_PATH/"
+          scp -i "$HOME/.ssh/deploy_key" -P "$DEPLOY_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            deploy/trino/catalog/iceberg_dev.properties \
+            "$DEPLOY_USER@$DEPLOY_HOST:$TRINO_DEPLOY_PATH/catalog/"
+          ssh -i "$HOME/.ssh/deploy_key" -p "$DEPLOY_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "chmod 700 '$TRINO_DEPLOY_PATH/deploy.sh'; \
+             chmod 600 \
+               '$TRINO_DEPLOY_PATH/compose.yaml' \
+               '$TRINO_DEPLOY_PATH/config.properties' \
+               '$TRINO_DEPLOY_PATH/jvm.config' \
+               '$TRINO_DEPLOY_PATH/resource-groups.properties' \
+               '$TRINO_DEPLOY_PATH/resource-groups.json' \
+               '$TRINO_DEPLOY_PATH/catalog/iceberg_dev.properties'"
+
+      - name: Verify and bootstrap dev target
+        run: |
+          set -Eeuo pipefail
+          ssh -i "$HOME/.ssh/deploy_key" -p "$DEPLOY_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "set -eu; \
+             test \"\$(uname -m)\" = x86_64; \
+             docker compose version >/dev/null; \
+             command -v flock >/dev/null; \
+             command -v openssl >/dev/null; \
+             chmod 700 '$DEPLOY_PATH/bootstrap-dev.sh.candidate'; \
+             '$DEPLOY_PATH/bootstrap-dev.sh.candidate' '$RUNTIME_ENV_FILE'; \
+             test \"\$(stat -c '%a' '$RUNTIME_ENV_FILE')\" = 600"
+
+      - name: Deploy Trino with ephemeral R2 credentials
+        env:
+          R2_DEV_DATA_CATALOG_URI: ${{ secrets.R2_DEV_DATA_CATALOG_URI }}
+          R2_DEV_DATA_CATALOG_WAREHOUSE: ${{ secrets.R2_DEV_DATA_CATALOG_WAREHOUSE }}
+          R2_DEV_DATA_CATALOG_TOKEN: ${{ secrets.R2_DEV_DATA_CATALOG_TOKEN }}
+          R2_DEV_ENDPOINT: ${{ secrets.R2_DEV_ENDPOINT }}
+          R2_DEV_ACCESS_KEY_ID: ${{ secrets.R2_DEV_ACCESS_KEY_ID }}
+          R2_DEV_SECRET_ACCESS_KEY: ${{ secrets.R2_DEV_SECRET_ACCESS_KEY }}
+        run: |
+          set -Eeuo pipefail
+          required=(
+            R2_DEV_DATA_CATALOG_URI
+            R2_DEV_DATA_CATALOG_WAREHOUSE
+            R2_DEV_DATA_CATALOG_TOKEN
+            R2_DEV_ENDPOINT
+            R2_DEV_ACCESS_KEY_ID
+            R2_DEV_SECRET_ACCESS_KEY
+          )
+          for key in "${required[@]}"; do
+            value=${!key:-}
+            [[ -n "$value" ]]
+            [[ "$value" != *$'\n'* ]]
+            [[ "$value" != *$'\r'* ]]
+          done
+
+          config_revision=$(
+            sha256sum \
+              deploy/trino/compose.yaml \
+              deploy/trino/config.properties \
+              deploy/trino/jvm.config \
+              deploy/trino/resource-groups.properties \
+              deploy/trino/resource-groups.json \
+              deploy/trino/catalog/iceberg_dev.properties |
+              sha256sum |
+              cut -d ' ' -f 1
+          )
+          local_runtime=$(mktemp "$RUNNER_TEMP/trino-runtime.XXXXXX")
+          cleanup_local() {
+            rm -f "$local_runtime"
+          }
+          trap cleanup_local EXIT
+          umask 077
+          {
+            for key in "${required[@]}"; do
+              printf '%s=%s\n' "$key" "${!key}"
+            done
+            printf 'TRINO_CONFIG_REVISION=%s\n' "$config_revision"
+            printf '%s\n' \
+              'TRINO_MEMORY_LIMIT=9g' \
+              'TRINO_CPUS=4.0' \
+              'TRINO_PIDS_LIMIT=1024' \
+              'TRINO_TASK_CONCURRENCY=2' \
+              'TRINO_QUERY_MAX_MEMORY_PER_NODE=2GB' \
+              'TRINO_MEMORY_HEAP_HEADROOM_PER_NODE=2GB' \
+              'TRINO_QUERY_MAX_MEMORY=2GB' \
+              'TRINO_QUERY_MAX_TOTAL_MEMORY=4GB'
+          } > "$local_runtime"
+          chmod 600 "$local_runtime"
+
+          scp -i "$HOME/.ssh/deploy_key" -P "$DEPLOY_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            "$local_runtime" \
+            "$DEPLOY_USER@$DEPLOY_HOST:$TRINO_REMOTE_RUNTIME_FILE"
+          ssh -i "$HOME/.ssh/deploy_key" -p "$DEPLOY_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "chmod 600 '$TRINO_REMOTE_RUNTIME_FILE' && \
+             '$TRINO_DEPLOY_PATH/deploy.sh' \
+               '$TRINO_REMOTE_RUNTIME_FILE' \
+               '$TRINO_COMPOSE_PROJECT_NAME' \
+               '$DASHBOARD_DATA_NETWORK'"
+
+      - name: Deploy and verify health
+        run: |
+          set -Eeuo pipefail
+          ssh -i "$HOME/.ssh/deploy_key" -p "$DEPLOY_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "chmod 700 '$DEPLOY_PATH/deploy.sh.candidate' && \
+             '$DEPLOY_PATH/deploy.sh.candidate' \
+             '$IMAGE_REF' '$COMPOSE_PROJECT_NAME' '$RUNTIME_ENV_FILE' \
+             '$DASHBOARD_DATA_NETWORK'"
+
+      - name: Remove short-lived registry credential from target
+        if: always()
+        continue-on-error: true
+        run: |
+          set -Eeuo pipefail
+          if [[ ! -f "$HOME/.ssh/deploy_key" || -z "$DEPLOY_HOST" || -z "$DEPLOY_USER" ]]; then
+            exit 0
+          fi
+          ssh -i "$HOME/.ssh/deploy_key" -p "${DEPLOY_PORT:-22}" \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+              "docker logout ghcr.io >/dev/null 2>&1 || true"
+
+      - name: Remove any remaining short-lived Trino runtime
+        if: always()
+        continue-on-error: true
+        run: |
+          set -Eeuo pipefail
+          if [[ ! -f "$HOME/.ssh/deploy_key" \
+             || -z "$DEPLOY_HOST" \
+             || -z "$DEPLOY_USER" \
+             || -z "$TRINO_DEPLOY_PATH" \
+             || "$TRINO_REMOTE_RUNTIME_FILE" != "$TRINO_DEPLOY_PATH"/.runtime.*.env ]]; then
+            exit 0
+          fi
+          ssh -i "$HOME/.ssh/deploy_key" -p "${DEPLOY_PORT:-22}" \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "rm -f '$TRINO_REMOTE_RUNTIME_FILE'"
+
+  main-deployment-disabled:
+    needs: build
+    if: github.ref_name == 'main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Confirm production deployment is disabled
+        run: |
+          echo "main image was tested and published, but production deployment is intentionally disabled."

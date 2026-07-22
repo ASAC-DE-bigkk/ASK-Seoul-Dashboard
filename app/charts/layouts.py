@@ -1,118 +1,194 @@
-"""레이아웃 페이지 저장소 — JSON 파일 하나로 관리하는 얇은 영속 계층.
+"""사용자별 Charts Studio 레이아웃 RDB 저장소.
 
-runtime 파일(data/layouts.json)은 gitignore 대상, 시드(data/layouts.seed.json)는 커밋 대상.
-첫 기동 시 시드를 복사해 시작한다. 쓰기는 락 + 임시파일 원자 교체.
+첫 접근 시 커밋된 layouts.seed.json을 사용자 전용 행으로 복제한다. 이후 모든 CRUD는
+사용자 ID를 조건으로 실행하므로 다른 사용자의 레이아웃을 추측하거나 덮어쓸 수 없다.
 """
 from __future__ import annotations
 
 import json
-import threading
 import uuid
 from pathlib import Path
 
-DATA_DIR = Path(__file__).parent / "data"
-RUNTIME_PATH = DATA_DIR / "layouts.json"
-SEED_PATH = DATA_DIR / "layouts.seed.json"
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
-_lock = threading.Lock()
+from app.auth.models import DashboardLayout
+
+
+SEED_PATH = Path(__file__).parent / "data" / "layouts.seed.json"
 
 
 class NotFound(KeyError):
     pass
 
 
+class LimitExceeded(ValueError):
+    pass
+
+
+MAX_PAGES = 50
+
+
 def _new_id() -> str:
-    return uuid.uuid4().hex[:10]
+    return uuid.uuid4().hex[:12]
 
 
-def _load() -> dict:
-    if RUNTIME_PATH.exists():
-        return json.loads(RUNTIME_PATH.read_text(encoding="utf-8"))
+def _seed_user(db: Session, user_id: int) -> None:
+    exists = db.scalar(
+        select(DashboardLayout.id).where(DashboardLayout.user_id == user_id).limit(1)
+    )
+    if exists:
+        return
     if SEED_PATH.exists():
-        doc = json.loads(SEED_PATH.read_text(encoding="utf-8"))
+        pages = json.loads(SEED_PATH.read_text(encoding="utf-8")).get("pages", [])
     else:
-        doc = {"version": 1, "pages": []}
-    _save(doc)
-    return doc
+        pages = []
+    try:
+        with db.begin_nested():
+            for index, page in enumerate(pages[:MAX_PAGES]):
+                charts = json.loads(json.dumps(page.get("charts", [])[:50], ensure_ascii=False))
+                db.add(
+                    DashboardLayout(
+                        user_id=user_id,
+                        page_public_id=page.get("id") or _new_id(),
+                        name=(page.get("name") or "새 레이아웃")[:80],
+                        order_index=index,
+                        charts=charts,
+                    )
+                )
+            db.flush()
+    except IntegrityError:
+        # 동일 사용자의 첫 접근이 동시에 실행되면 unique 제약에서 한 쪽만 남긴다.
+        return
 
 
-def _save(doc: dict) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = RUNTIME_PATH.with_suffix(".tmp")
-    tmp.write_text(json.dumps(doc, ensure_ascii=False, indent=1), encoding="utf-8")
-    tmp.replace(RUNTIME_PATH)
+def _rows(
+    db: Session, user_id: int, *, for_update: bool = False
+) -> list[DashboardLayout]:
+    _seed_user(db, user_id)
+    query = (
+        select(DashboardLayout)
+        .where(DashboardLayout.user_id == user_id)
+        .order_by(DashboardLayout.order_index, DashboardLayout.id)
+    )
+    if for_update:
+        query = query.with_for_update()
+    return db.scalars(query).all()
 
 
-def _find(doc: dict, page_id: str) -> dict:
-    for p in doc["pages"]:
-        if p["id"] == page_id:
-            return p
-    raise NotFound(page_id)
+def _find(
+    db: Session, user_id: int, page_id: str, *, for_update: bool = False
+) -> DashboardLayout:
+    query = select(DashboardLayout).where(
+        DashboardLayout.user_id == user_id,
+        DashboardLayout.page_public_id == page_id,
+    )
+    if for_update:
+        query = query.with_for_update()
+    row = db.scalar(query)
+    if row is None:
+        raise NotFound(page_id)
+    return row
 
 
-def list_pages() -> list[dict]:
-    with _lock:
-        doc = _load()
-        return [{"id": p["id"], "name": p["name"], "chart_count": len(p.get("charts", []))}
-                for p in doc["pages"]]
+def _detail(row: DashboardLayout) -> dict:
+    return {
+        "id": row.page_public_id,
+        "name": row.name,
+        "charts": row.charts or [],
+    }
 
 
-def get_page(page_id: str) -> dict:
-    with _lock:
-        return _find(_load(), page_id)
+def _summary(row: DashboardLayout) -> dict:
+    return {
+        "id": row.page_public_id,
+        "name": row.name,
+        "chart_count": len(row.charts or []),
+    }
 
 
-def create_page(name: str, charts: list[dict] | None = None) -> dict:
-    with _lock:
-        doc = _load()
-        page = {"id": _new_id(), "name": name.strip() or "새 레이아웃", "charts": charts or []}
-        doc["pages"].append(page)
-        _save(doc)
-        return page
+def list_pages(db: Session, user_id: int) -> list[dict]:
+    return [_summary(row) for row in _rows(db, user_id)]
 
 
-def update_page(page_id: str, name: str | None = None, charts: list[dict] | None = None) -> dict:
-    with _lock:
-        doc = _load()
-        page = _find(doc, page_id)
-        if name is not None:
-            page["name"] = name.strip() or page["name"]
-        if charts is not None:
-            page["charts"] = charts
-        _save(doc)
-        return page
+def get_page(db: Session, user_id: int, page_id: str) -> dict:
+    _seed_user(db, user_id)
+    return _detail(_find(db, user_id, page_id))
 
 
-def delete_page(page_id: str) -> None:
-    with _lock:
-        doc = _load()
-        page = _find(doc, page_id)
-        doc["pages"].remove(page)
-        _save(doc)
+def create_page(
+    db: Session, user_id: int, name: str, charts: list[dict] | None = None
+) -> dict:
+    rows = _rows(db, user_id, for_update=True)
+    if len(rows) >= MAX_PAGES:
+        raise LimitExceeded(f"레이아웃은 최대 {MAX_PAGES}개까지 만들 수 있습니다.")
+    row = DashboardLayout(
+        user_id=user_id,
+        page_public_id=_new_id(),
+        name=name.strip() or "새 레이아웃",
+        order_index=len(rows),
+        charts=charts or [],
+    )
+    db.add(row)
+    db.flush()
+    return _detail(row)
 
 
-def duplicate_page(page_id: str) -> dict:
-    with _lock:
-        doc = _load()
-        src = _find(doc, page_id)
-        copy = json.loads(json.dumps(src, ensure_ascii=False))
-        copy["id"] = _new_id()
-        copy["name"] = src["name"] + " (사본)"
-        for chart in copy.get("charts", []):
-            chart["id"] = _new_id()
-        doc["pages"].insert(doc["pages"].index(src) + 1, copy)
-        _save(doc)
-        return copy
+def update_page(
+    db: Session,
+    user_id: int,
+    page_id: str,
+    name: str | None = None,
+    charts: list[dict] | None = None,
+) -> dict:
+    row = _find(db, user_id, page_id, for_update=True)
+    if name is not None:
+        row.name = name.strip() or row.name
+    if charts is not None:
+        row.charts = charts
+    db.flush()
+    return _detail(row)
 
 
-def reorder(ids: list[str]) -> list[dict]:
-    with _lock:
-        doc = _load()
-        by_id = {p["id"]: p for p in doc["pages"]}
-        # 길이까지 검사 — 중복 id 가 set 비교를 통과해 페이지가 복제 저장되는 것을 막는다
-        if len(ids) != len(doc["pages"]) or set(ids) != set(by_id):
-            raise NotFound("reorder id 목록이 현재 페이지와 다릅니다")
-        doc["pages"] = [by_id[i] for i in ids]
-        _save(doc)
-        return [{"id": p["id"], "name": p["name"], "chart_count": len(p.get("charts", []))}
-                for p in doc["pages"]]
+def delete_page(db: Session, user_id: int, page_id: str) -> None:
+    row = _find(db, user_id, page_id, for_update=True)
+    db.delete(row)
+    db.flush()
+    for index, item in enumerate(_rows(db, user_id)):
+        item.order_index = index
+
+
+def duplicate_page(db: Session, user_id: int, page_id: str) -> dict:
+    rows = _rows(db, user_id, for_update=True)
+    if len(rows) >= MAX_PAGES:
+        raise LimitExceeded(f"레이아웃은 최대 {MAX_PAGES}개까지 만들 수 있습니다.")
+    source = _find(db, user_id, page_id, for_update=True)
+    charts = json.loads(json.dumps(source.charts or [], ensure_ascii=False))
+    for chart in charts:
+        chart["id"] = _new_id()
+    insert_at = source.order_index + 1
+    for row in rows:
+        if row.order_index >= insert_at:
+            row.order_index += 1
+    copy = DashboardLayout(
+        user_id=user_id,
+        page_public_id=_new_id(),
+        name=source.name + " (사본)",
+        order_index=insert_at,
+        charts=charts,
+    )
+    db.add(copy)
+    db.flush()
+    return _detail(copy)
+
+
+def reorder(db: Session, user_id: int, ids: list[str]) -> list[dict]:
+    rows = _rows(db, user_id, for_update=True)
+    by_id = {row.page_public_id: row for row in rows}
+    if len(ids) != len(rows) or set(ids) != set(by_id):
+        raise NotFound("reorder id 목록이 현재 페이지와 다릅니다")
+    for index, page_id in enumerate(ids):
+        by_id[page_id].order_index = index
+    db.flush()
+    return [_summary(by_id[page_id]) for page_id in ids]

@@ -9,12 +9,14 @@
 ## 1. 이 프로젝트가 무엇인가
 
 **ASK SEOUL** — 서울 오픈데이터 레이크하우스(dbt·Trino·Iceberg·Airflow·R2) 위의 데모 대시보드.
-상위 저장소 `sample/` 의 서브모듈이며(github.com/ASAC-DE-bigkk/ASK-Seoul-Dashboard), 두 화면을 서빙한다:
+상위 저장소 `sample/` 의 서브모듈이며(github.com/ASAC-DE-bigkk/ASK-Seoul-Dashboard), 아래 화면을 서빙한다:
 
 | 화면 | 경로 | 사상 |
 |---|---|---|
 | 데이터 마켓플레이스(카탈로그) | `/catalog` | **"계산은 파이프라인이 미리, API 는 얇게"** — extract.py 가 박제한 스냅샷 JSON 만 서빙 |
 | **Charts Studio** | `/charts` | 예외적으로 **gold 라이브 집계** — 단, 화이트리스트 SQL + 디스크 캐시 + stale 폴백으로 얇음을 유지 |
+| 인증·프로필 | `/auth/*`, `/profile` | 승인형 가입, DB 세션, 개인 온톨로지·이용권 |
+| 운영 콘솔 | `/admin` | 회원·페이지 권한·정책·IP·모의결제 승인 |
 
 Charts Studio 가 라이브 질의를 갖는 이유: 사용자가 소스·차원·집계를 조합해 만드는 질의는
 미리 계산해둘 수 없기 때문. 대신 캐시(TTL 600s)와 stale 폴백으로 "요청마다 Trino 를 두드리는
@@ -31,18 +33,27 @@ Charts Studio 가 라이브 질의를 갖는 이유: 사용자가 소스·차원
 - **데이터 규정(상위 커머스 번들 계승)**: 원본 값을 파괴하지 않는다 — 코드값은 표시 라벨로만 번역하고,
   집계·필터는 재현 가능해야 한다(응답에 SQL 포함). 시크릿을 코드·로그·커밋에 넣지 않는다.
 - **문서 체인**: [docs/README.md](README.md)(인덱스) → [operations.md](operations.md)(기동/중지) ·
+  [local-analysis-human-guide.md](local-analysis-human-guide.md)(팀원 로컬 분석 정본) ·
+  [local-analysis-agent-runbook.md](local-analysis-agent-runbook.md)(AI 권한 경계·검증) ·
+  [deployment/README.md](deployment/README.md)(사람/AI 서버 배포 문서 분리) ·
+  [maintanance/README.md](maintanance/README.md)(개발 실행·최초 접속·운영 원칙) ·
   [charts-user-guide.md](charts-user-guide.md)(사용법) · [charts-design-intents.md](charts-design-intents.md)(의도 A~F) · 본 문서(계승).
 
 ## 3. 환경 사실 (하드코딩된 지식 — 모르면 사고 나는 것들)
 
 | 사실 | 내용 |
 |---|---|
-| Trino | `http://127.0.0.1:30586` (compose 서비스, env `CHARTS_TRINO_URL` 로 오버라이드). dev 카탈로그 `iceberg_dev`, 스키마 `commerce` |
+| Trino | 로컬은 상위 `sample/docker-compose.yml`의 Trino를 `http://127.0.0.1:30586`으로 재사용하고 두 번째 companion을 띄우지 않는다. dev는 `http://trino:8080`. 카탈로그 `iceberg_dev`, 스키마 `commerce` |
 | 소스 정본 | `snapshot/catalog_snapshot.json` — **낡을 수 있다**. 실물 스키마와 다르면 갱신은 `extract.py`. 질의는 cast 기반이라 낡아도 안전(실사례: `cohort_y` varchar→integer 드리프트를 흡수) |
 | 지역 코드 | gold 데이터는 전부 **MOIS(행안부)** 체계(종로=11110). GeoJSON 자산 중 seoul_gu/seoul_dong 의 code 는 **KOSTAT(통계청)** 체계(종로=11010) — **혼용 금지**. 매칭 규칙은 `geo.js` 상단 주석과 [design-intents D-3](charts-design-intents.md) |
 | 코드값 | `major`: health/culture/industry/environment · `event_type`: opened/closed · `age_band`: `0_lt1y`~`5_ge20y` (라벨 사전은 `ontology.VALUE_LABELS`) |
 | 결측 표기 | 지역 코드 결측은 문자열 `'UNK'` — 지도 매칭에서 제외된다 |
-| 파이썬/실행 | `.venv`(python3.12, fastapi+uvicorn 만). 포트 관례 8765(문서)·8799(개발) |
+| 파이썬/실행 | Python 3.9+ 호환. FastAPI·SQLAlchemy·Argon2. 포트 관례 8765(문서)·8799(개발) |
+| 인증 DB | `DATABASE_URL`, 기본 `sqlite:///./data/ask_seoul.db`. PostgreSQL/MySQL dialect DDL도 테스트 |
+| 로컬 분석 인증 | `.env.local.example`의 `AUTH_MODE=local_auto`만 사용. loopback HTTP + SQLite + proxy header 미신뢰 조건에서 일반 회원 세션·CSRF를 자동 발급. 배포 dev/main은 `AUTH_MODE=required` |
+| 세션 | DB에는 HMAC 해시만 저장. 절대+idle 만료와 사용자별 상한 적용. 운영은 `AUTH_SESSION_PEPPER`, HTTPS Secure cookie 필수 |
+| MFA | RFC 6238 TOTP+일회용 복구 코드. 운영자 이상 기본 강제. 하위 역할은 감사 사유 기반 관리자 초기화, 권한 계정은 CLI break-glass만 허용. `AUTH_MFA_MASTER_KEY` 장기 보관 필수 |
+| 서버 배포 | `dev`만 GitHub `development` 서버에 배포. 서비스 DB는 전용 PostgreSQL volume, 데이터는 Trino→R2/Iceberg. `main`은 build만 하고 deploy 금지 |
 
 ## 4. 파일 지도 — 무엇을 고치려면 어디를 보나
 
@@ -51,32 +62,41 @@ app/charts/                    ← 백엔드 번들 (격리)
   ontology.py    role 추론·CHART_TYPES 슬롯 계약·VALUE_LABELS·CURATED  ← 온톨로지의 정본
   querybuilder.py 화이트리스트 SQL 조립 (식별자=레지스트리 실재 필드만, cast/try_cast 필터)
   trino.py       REST 실행기 (503 재시도·취소·120s 데드라인) + 디스크 캐시(TTL·stale·force)
-  layouts.py     레이아웃 페이지 JSON 영속 (락 + 원자 교체, 시드→런타임 복사)
+  layouts.py     사용자별 RDB 레이아웃 영속 (첫 접근 시 시드 복제)
   router.py      /api/v1/charts/* (meta·sources·query·layouts CRUD) — RFC7807 에러
   models.py      요청/응답 Pydantic 계약
-  data/layouts.seed.json  기본 4페이지 (커밋 대상. layouts.json·cache/ 는 런타임)
+  data/layouts.seed.json  기본 5페이지(상권 4 + 전 도메인 1, 커밋 대상. cache/ 는 런타임)
+app/auth/                      ← 인증·회원·RBAC·정책·결제 모델/서비스/API/미들웨어
+app/notifications/             ← Discord·Slack·Telegram 운영 알림 인터페이스
 app/static/charts/             ← 프론트 번들 (격리)
-  index.html     스튜디오 셸 (CDN: Pretendard·echarts@5.5·gridstack@10.3)
+  index.html     스튜디오 셸 (버전 고정+SRI CDN: Pretendard·echarts@5.5·gridstack@10.3)
   charts.css     디자인 토큰 = 마켓플레이스 index.html 과 동일 헤리티지
   js/api.js      fetch 래퍼 (problem+json → Error)
   js/recommend.js 자동 추천 — role·이름패턴 기반 도표/조합 제안 (테이블 하드코딩 금지)
   js/geo.js      지도 자산 로딩·등록·지역 매칭 (MOIS_GU 사전, 동명 유일화·모호 제외)
   js/render.js   도표 렌더러 — 슬롯만 보고 그린다. 팔레트·피벗·정렬·null 규칙 여기
   js/app.js      상태·그리드(gridstack)·편집모드·드로어·사이드탭·자동갱신·셀프테스트
-app/main.py      본체 접점 (include_router + /charts 라우트 — 이 이상 늘리지 말 것)
-docs/            본 문서들
+app/static/auth/               ← 로그인·가입·재설정·프로필·운영 콘솔
+app/main.py      본체 접점 (카탈로그 + auth/charts router + 정적 화면)
+docs/additional_doc/           ← 인증/RDB/알림/클라우드 WAF 운영 문서
+docs/deployment/               ← 사람용 서버 준비 + 서버 AI용 제한적 실행 runbook
+docs/local-analysis-human-guide.md  ← 팀원용 로컬 분석 시작·문제 해결 정본
+docs/local-analysis-agent-runbook.md ← AI용 local_auto 불변식·안전 실행·보고 계약
 ```
 
 ## 5. 설계 의도 요약 (정본: [charts-design-intents.md](charts-design-intents.md))
 
 1. **격리(A)** — 번들 밖을 만지지 않는다.
 2. **온톨로지(B)** — 도표↔소스 연결은 컬럼명이 아니라 **role**. 저장물은 바인딩 선언뿐이고
-   렌더 시점마다 재해석·폴백된다. 컬럼/값 변경에 구애받지 않는 것이 이 화면의 존재 이유다.
+   렌더 시점마다 재해석·폴백된다. 지원 판정은 필수 슬롯마다 서로 다른 실재 필드를 배정할 수
+   있어야 하며, 필드별 가산성·허용 집계도 같은 계약에 포함된다.
 3. **안전한 질의(C)** — 식별자 화이트리스트, 값 이스케이프, 프로토콜 준수, 캐시는 정직하게(mode 표기).
 4. **읽히는 도표(D)** — 검증된 8색 고정 팔레트, 색-의미 고정, 결측≠0, 비가산 집계는 접지 않음,
-   MOIS/KOSTAT 구분, 커버리지 표기.
+   원형=sum/count, 누적 가능성과 가산성 분리, MOIS/KOSTAT 구분, 커버리지 표기.
+   소스 선택 때 실데이터 `count(field)`로 전부-null 필드를 슬롯·필터에서 제거하며 1행 소스는 통계·표만 노출.
 5. **모드 분리 UX(E)** — 평시 고정, 편집 모드에서만 배치, 명시적 저장.
-6. **기계 검증(F)** — 고치면 셀프테스트와 스크린샷으로 다시 증명한다.
+6. **기계 검증(F)** — 고치면 6개 도메인 서버 계약 테스트, 3페르소나 브라우저 셀프테스트,
+   대표 Gold 실제 질의와 스크린샷으로 다시 증명한다.
 
 ## 6. 확장 레시피 — 자주 있을 작업의 표준 절차
 
@@ -106,9 +126,11 @@ docs/            본 문서들
 ```bash
 # 1) 문법
 node --check app/static/charts/js/*.js
-# 2) 서버 기동 후 브라우저 셀프테스트 — 탭 제목 SELFTEST_ALL_PASS 확인
+# 2) 서버 계약(모든 Gold 지원 타입·시드·집계 제약)
+python3 -m pytest -q
+# 3) 서버 기동 후 브라우저 셀프테스트 — 탭 제목 SELFTEST_ALL_PASS 확인
 open "http://127.0.0.1:8765/charts?selftest=1"
-# 3) 화면 확인 (헤드리스 가능)
+# 4) 화면 확인 (헤드리스 가능)
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \
   --window-size=1600,1100 --virtual-time-budget=20000 \
   --screenshot=/tmp/p1.png "http://127.0.0.1:8765/charts?page=seed-overview"
@@ -124,7 +146,10 @@ open "http://127.0.0.1:8765/charts?selftest=1"
 | 이름 기반 동 단위 그룹핑은 동명이동을 서버에서 합칠 수 있음 | dims 가 단일 필드라서. 지도는 모호 제외로 방어하지만 테이블/막대는 합산된다. 근본 해결은 코드+이름 복합 dim 지원 |
 | 행정동 지도 코드 매칭 미지원 | 자산 코드가 KOSTAT 이라 MOIS 10자리와 호환 불가 — 이름 매칭만. MOIS 경계 GeoJSON 확보 시 교체 |
 | 가중 평균 미지원 | 집계가 단일 필드 함수뿐. 비율의 정확한 재집계(ratio-of-sums)가 필요하면 파생 measure 지원을 설계할 것. 그때까지 시드는 "단순평균" 명시·표본 필터로 정직하게 |
-| 인증 없음·로컬 데모 | 공개 배포 전에는 인증/CORS/rate-limit 필요 |
+| 앱 rate limit은 프로세스 로컬 | 운영의 정본은 AWS WAF/GCP Cloud Armor/Cloudflare. Trino live 질의는 별도 동시 실행 상한 적용, 필요 시 Redis 공용 limiter |
+| CSP inline style 허용 잔존 | inline script는 응답 hash, event handler는 `script-src-attr 'none'`. 기존 inline style은 공개 운영 전 CSS class로 이동 |
+| MFA master key 무중단 회전 미지원 | 키 변경 시 기존 TOTP 재등록 필요. secret manager 백업과 복구 코드를 우선 운영 |
+| 알림은 DB outbox+주기 worker | exactly-once 외부 전달은 보장하지 않음. 장기 장애에는 backoff·최대 시도·DLQ 추가 |
 | 스냅샷 신선도 수동 | `extract.py` 수동 실행. W3 본작업에서 Airflow 태스크로 승격 예정(상위 README 참조) |
 
 ## 9. 이력 요약
@@ -136,3 +161,39 @@ open "http://127.0.0.1:8765/charts?selftest=1"
   셀프테스트 17항목으로 확장.
 - 2026-07-17: 타임랩스 경주(race) 도표 — 시간 프레임 자동 재생·클릭 일시정지·누적/구간 모드,
   시드 4페이지(타임랩스) 추가. 셀프테스트 18항목.
+- 2026-07-17: 독립 인증·회원·RBAC·정책·사용자별 레이아웃·모의결제·운영 알림과 클라우드 WAF
+  운영 문서를 추가. 레이아웃 저장소를 전역 JSON에서 사용자별 RDB로 전환.
+- 2026-07-17: 인증 hardening — TOTP MFA·복구 코드, idle/session 상한, 안전한 token 소비,
+  전역 관리자 전이 직렬화, 결제 단일 pending, 알림 outbox/복구 worker, schema v6와 개인정보 보존
+  운영 문서를 추가.
+- 2026-07-17: Charts Studio 전 도메인화 — 문화·교통·날씨·도시데이터·대중교통 시드/실질의,
+  실제 필드 매칭·가산성 기반 온톨로지, count-only 일정, 툴팁 수명주기, 미리보기 성공 전 적용 차단,
+  페이지/소스/질의 경합 방어, null 보존, 타임랩스 프레임·속도 컨트롤과 3페르소나 셀프테스트 추가.
+  후속 재검토에서 원형/누적 수학 제약, 기술시각·풍향·비가산 농도 차단, 저장/취소 직렬화,
+  모바일 페이지 관리, 필터 값 사전과 전부-null 미리보기 거부까지 보강. 최종 회귀 검토에서
+  coverage 비가산성·누적 flow allowlist·role별 서버 필터·availability rate/singleflight와
+  사용자 레이아웃을 건드리지 않는 임시 페이지 셀프테스트를 추가.
+- 2026-07-19: 인증 DB 운영 검증 — SQLite/PostgreSQL/MySQL 실제 초기화·로그인·관리 API·레이아웃
+  smoke test를 통과. DB-aware health, SQLite 비공개 권한, production MFA/CLI bootstrap fail-closed,
+  쓰기 없는 maintenance dry-run과 최초 접속 운영 문서를 추가.
+- 2026-07-20: 최초 MFA CLI의 미flush challenge 오류를 수정. challenge 즉시 가시성, 사람 입력 전
+  트랜잭션 종료, 6자리 비표시·최대 5회 재시도와 seed 폐기 운영 절차를 추가.
+- 2026-07-20: `dev`/`main` push 기반 서버 배포 추가. Docker runtime 이미지, GitHub Environment별
+  SSH 배포, 단일 DB migration, notification worker, health gate와 직전 앱 rollback을 구성.
+- 2026-07-21: dev 서버의 최소 Trino companion과 R2 secret 관리 계약 추가. R2 6개 값은
+  GitHub `development` Environment를 정본으로 삼고 실행별 임시 파일로만 주입·삭제하며,
+  Dashboard/PostgreSQL/서버 장기 `.env`에는 복제하지 않도록 고정.
+- 2026-07-21: 사람이 같은 배포를 재현할 수 있도록 접속 PC·GitHub 웹·대상 서버·GitHub
+  Actions의 실행 위치를 분리한 종단간 순차 실행서를 추가.
+- 2026-07-21: 최신 snapshot에 commerce가 빠져 Docker test가 실패한 회귀를 보강. sample 하위
+  submodule 경로를 인식하고, culture artifact가 없을 때도 지정 basic domain만 현재 Trino에서
+  원자적으로 부분 갱신하면서 domain별 관측 시각과 비대상 domain을 보존하도록 수정.
+- 2026-07-21: 팀원 로컬 분석용 `AUTH_MODE=local_auto`를 추가. 로컬 SQLite의 일반 회원에게
+  정상 DB 세션·CSRF·사용자별 레이아웃을 자동 발급하되 loopback 요청에서만 허용하고,
+  dev/main 배포 템플릿과 배포 스크립트는 `AUTH_MODE=required`만 허용하도록 고정.
+- 2026-07-21: 로컬 분석 계약을 사람용 시작 가이드와 AI용 안전 runbook으로 분리. 사람에게는
+  실행 위치·정상 결과·전환·장애 해결을, AI에게는 정본 코드·허용/금지 작업·fail-closed 검증과
+  secret 없는 보고 형식을 제공하고 문서 인덱스·AGENTS 진입점에 연결.
+- 2026-07-21: 로컬 토폴로지를 상위 `sample/` Trino 재사용으로 명문화. 사람·AI 문서에 최초/재실행,
+  R2 dev catalog 전제, 실제 query/selftest 검증, 안전 종료를 한 흐름으로 고정하고 로컬 두 번째
+  Trino 실행을 금지.

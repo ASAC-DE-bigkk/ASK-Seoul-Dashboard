@@ -1,2 +1,10 @@
-fastapi
-uvicorn
+fastapi>=0.128,<0.129
+uvicorn>=0.35,<1
+SQLAlchemy>=2.0,<3
+argon2-cffi>=25,<26
+
+# DATABASE_URL에 맞는 드라이버를 선택한다.
+# SQLite는 Python stdlib 드라이버를 사용한다.
+psycopg[binary]>=3.2,<4
+PyMySQL>=1.1,<2
+eval-type-backport>=0.2,<1

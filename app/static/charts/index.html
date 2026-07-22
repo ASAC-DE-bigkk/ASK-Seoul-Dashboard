@@ -4,14 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ASK SEOUL · Charts Studio</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"
+      integrity="sha384-GIdEBaqGN9mNkDkMkzMHW8EKUqtpPIe/sLj1X7DIrnc9uPtLROJgmuDlh+3rBw0j" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css"
+      integrity="sha384-3466xzONp5jWI9wRY4i5C4LQqPF7wQiNl2TPqqWNEKMxqleN1p3y+uCjs5rObTFv" crossorigin="anonymous">
 <link rel="stylesheet" href="/static/charts/charts.css">
+<link rel="stylesheet" href="/static/auth/session-ui.css">
 </head>
 <body>
 
 <aside class="side">
-  <a class="ws" href="/" style="text-decoration:none" title="홈으로">
+  <a class="ws" href="/home" style="text-decoration:none" title="홈으로">
     <div class="mark mark-charts" aria-hidden="true">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 20V10M12 20V4M19 20v-7"/></svg>
     </div>
@@ -26,8 +29,9 @@
   </button>
 
   <div class="sec">Platform</div>
-  <a class="nav-item" href="/catalog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>Marketplace</a>
-  <a class="nav-item" href="/docs" target="_blank"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 3h8l4 4v14a1 1 0 01-1 1H7a1 1 0 01-1-1V4a1 1 0 011-1z"/><path d="M15 3v4h4M9 13h6M9 17h6"/></svg>API Reference</a>
+  <a class="nav-item" href="/catalog" data-page-key="catalog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>Marketplace</a>
+  <a class="nav-item" href="/docs" data-page-key="api_docs" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 3h8l4 4v14a1 1 0 01-1 1H7a1 1 0 011-1V4a1 1 0 011-1z"/><path d="M15 3v4h4M9 13h6M9 17h6"/></svg>API Reference</a>
+  <a class="nav-item" href="/admin#users" data-page-key="admin_users"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20v-2a4 4 0 014-4h8a4 4 0 014 4v2"/><circle cx="12" cy="7" r="4"/></svg>회원 관리</a>
   <div class="foot">
     <div class="row"><span>API</span><b>charts v1</b></div>
     <div class="row"><span>Engine</span><b>Trino · Iceberg gold</b></div>
@@ -40,10 +44,15 @@
     <div class="crumb">Charts Studio
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg>
       <b id="crumb-page">—</b>
+      <select id="mobile-page" class="mobile-page" aria-label="레이아웃 페이지"></select>
+      <button type="button" id="mobile-add-page" class="mobile-page-add" aria-label="레이아웃 추가">＋</button>
+      <button type="button" id="mobile-page-menu" class="mobile-page-menu" aria-label="현재 레이아웃 관리">⋯</button>
     </div>
     <span class="env">DEV</span>
     <div class="right">
+      <span class="env" id="read-only-badge" hidden>READ ONLY</span>
       <span class="sync"><span class="pulse" id="pulse"></span><span id="sync-note" class="num">connecting…</span></span>
+      <span id="profile-action-slot"></span>
       <select id="refresh-sel" class="sel" title="자동 갱신 간격 — gold 를 주기적으로 재질의해 화면을 갱신합니다">
         <option value="0">자동 갱신 끔</option>
         <option value="60">1분</option>
@@ -74,14 +83,15 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M5 20V10M12 20V4M19 20v-7"/></svg>
       </div>
       <b>아직 차트가 없습니다</b>
-      <p>오른쪽 위 <b>레이아웃 변경</b>을 누른 뒤 <b>차트 추가</b>로 gold 데이터셋을 연결하세요.</p>
+      <p id="empty-board-note">오른쪽 위 <b>레이아웃 변경</b>을 누른 뒤 <b>차트 추가</b>로 gold 데이터셋을 연결하세요.</p>
     </div>
   </div>
 </main>
 
 <!-- 차트 추가/편집 드로어 -->
 <div class="overlay" id="cfg-overlay"></div>
-<aside class="drawer" id="cfg-drawer" aria-label="차트 구성">
+<aside class="drawer" id="cfg-drawer" role="dialog" aria-modal="true"
+       aria-label="차트 구성" aria-hidden="true" inert>
   <div class="d-head">
     <div class="d-crumb"><span class="dot" style="background:var(--accent)"></span><span id="cfg-mode-label">차트 추가</span></div>
     <div class="top">
@@ -107,7 +117,8 @@
 <div class="ctx" id="ctx" hidden></div>
 
 <!-- 확인 모달 -->
-<div class="modal-wrap" id="modal" hidden>
+<div class="modal-wrap" id="modal" role="dialog" aria-modal="true"
+     aria-labelledby="modal-title" aria-describedby="modal-desc" hidden>
   <div class="modal">
     <b id="modal-title"></b>
     <p id="modal-desc"></p>
@@ -121,8 +132,11 @@
 
 <div id="toast" role="status"></div>
 
-<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"
+        integrity="sha384-o5uz97et3bErHvpKfD4Jz4n0JfhJDWABFuF4NP+iEEDxE1VwMWJ19QGR0lqFZnr6" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"
+        integrity="sha384-nK6N0YlXqSXYT4GJKLD6y4mPJ9w1v9DtgfsQHqltu+OHCjpKMRZ2koek3LRIcbCK" crossorigin="anonymous"></script>
+<script src="/static/auth/session-ui.js"></script>
 <script src="/static/charts/js/api.js"></script>
 <script src="/static/charts/js/recommend.js"></script>
 <script src="/static/charts/js/geo.js"></script>

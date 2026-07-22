@@ -13,6 +13,13 @@ class FieldInfo(BaseModel):
     label: str
     desc: str = ""
     granularity: Optional[str] = None
+    preferred_agg: Optional[str] = None
+    additive: Optional[bool] = None
+    allowed_aggs: Optional[list[str]] = None
+    cumulative_safe: bool = False
+    recommendation_priority: int = 40
+    chartable: bool = True
+    allowed_filter_ops: list[str] = Field(default_factory=list)
 
 
 class SourceSummary(BaseModel):
@@ -31,6 +38,13 @@ class SourceDetail(SourceSummary):
     default_chart: Optional[dict] = None
 
 
+class SourceAvailability(BaseModel):
+    source: str
+    fields: dict[str, int]
+    mode: str
+    elapsed_ms: int = 0
+
+
 class SourcesResponse(BaseModel):
     generated_at: str
     source_count: int
@@ -38,29 +52,29 @@ class SourcesResponse(BaseModel):
 
 
 class MeasureSpec(BaseModel):
-    field: Optional[str] = None
-    agg: str = "sum"
-    alias: Optional[str] = None
+    field: Optional[str] = Field(default=None, max_length=120)
+    agg: str = Field(default="sum", max_length=30)
+    alias: Optional[str] = Field(default=None, max_length=120)
 
 
 class FilterSpec(BaseModel):
-    field: str
-    op: str = "eq"
+    field: str = Field(min_length=1, max_length=120)
+    op: str = Field(default="eq", max_length=20)
     value: Any = None
 
 
 class OrderSpec(BaseModel):
-    field: str
-    dir: str = "asc"
+    field: str = Field(min_length=1, max_length=120)
+    dir: str = Field(default="asc", max_length=4)
 
 
 class QueryRequest(BaseModel):
-    source: str
-    dims: list[str] = []
-    measures: list[MeasureSpec] = Field(default_factory=list)
-    filters: list[FilterSpec] = Field(default_factory=list)
-    order_by: list[OrderSpec] = Field(default_factory=list)
-    limit: int = 1000
+    source: str = Field(min_length=1, max_length=120)
+    dims: list[str] = Field(default_factory=list, max_length=10)
+    measures: list[MeasureSpec] = Field(default_factory=list, min_length=1, max_length=20)
+    filters: list[FilterSpec] = Field(default_factory=list, max_length=50)
+    order_by: list[OrderSpec] = Field(default_factory=list, max_length=20)
+    limit: int = Field(default=1000, ge=1, le=5000)
     force: bool = False  # 신선 캐시 무시하고 라이브 재질의 ('다시 조회')
 
 
@@ -77,15 +91,15 @@ class QueryResponse(BaseModel):
 
 class ChartConfig(BaseModel):
     """저장되는 차트 1개 — bindings 는 슬롯명→필드명 (온톨로지 바인딩)."""
-    id: str
-    title: str = ""
-    type: str
-    source: str
-    bindings: dict[str, str] = {}
-    agg: str = "sum"
-    filters: list[FilterSpec] = Field(default_factory=list)
-    options: dict[str, Any] = {}
-    grid: dict[str, int] = {}  # {x, y, w, h}
+    id: str = Field(min_length=1, max_length=80)
+    title: str = Field(default="", max_length=120)
+    type: str = Field(min_length=1, max_length=30)
+    source: str = Field(min_length=1, max_length=120)
+    bindings: dict[str, str] = Field(default_factory=dict)
+    agg: str = Field(default="sum", max_length=30)
+    filters: list[FilterSpec] = Field(default_factory=list, max_length=50)
+    options: dict[str, Any] = Field(default_factory=dict)
+    grid: dict[str, int] = Field(default_factory=dict)  # {x, y, w, h}
 
 
 class PageSummary(BaseModel):
@@ -101,14 +115,14 @@ class PageDetail(BaseModel):
 
 
 class PageCreate(BaseModel):
-    name: str = "새 레이아웃"
+    name: str = Field(default="새 레이아웃", min_length=1, max_length=80)
     template: Optional[str] = None  # 미래 확장용
 
 
 class PagePatch(BaseModel):
-    name: Optional[str] = None
-    charts: Optional[list[ChartConfig]] = None
+    name: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    charts: Optional[list[ChartConfig]] = Field(default=None, max_length=50)
 
 
 class ReorderRequest(BaseModel):
-    ids: list[str]
+    ids: list[str] = Field(min_length=1, max_length=50)

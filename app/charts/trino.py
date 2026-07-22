@@ -13,16 +13,38 @@ import os
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
+import re
 
 TRINO_URL = os.environ.get("CHARTS_TRINO_URL", "http://127.0.0.1:30586").rstrip("/")
 TRINO_USER = os.environ.get("CHARTS_TRINO_USER", "charts-studio")
 CACHE_DIR = Path(__file__).parent / "data" / "cache"
 FRESH_TTL_S = int(os.environ.get("CHARTS_CACHE_TTL", "600"))
 MAX_ROWS = 5000
+MAX_CONCURRENT_QUERIES = max(
+    1, min(int(os.environ.get("CHARTS_MAX_CONCURRENT_QUERIES", "4")), 32)
+)
 
 _lock = threading.Lock()
+_query_slots = threading.BoundedSemaphore(MAX_CONCURRENT_QUERIES)
+# 같은 SQL의 cold-cache 요청은 한 실행만 Trino로 보내고 나머지는 그 결과를 재사용한다.
+# 고정 stripe라 키별 Lock 사전의 무한 증가도 피한다.
+_flight_locks = tuple(threading.Lock() for _ in range(64))
+_TRINO_ORIGIN = urllib.parse.urlsplit(TRINO_URL)
+_TRINO_STATEMENT_PREFIX = _TRINO_ORIGIN.path.rstrip("/") + "/v1/statement"
+if (
+    _TRINO_ORIGIN.scheme not in {"http", "https"}
+    or not _TRINO_ORIGIN.hostname
+    or _TRINO_ORIGIN.username
+    or _TRINO_ORIGIN.password
+    or _TRINO_ORIGIN.query
+    or _TRINO_ORIGIN.fragment
+):
+    raise RuntimeError("CHARTS_TRINO_URL은 유효한 http(s) base URL이어야 합니다.")
+if not re.fullmatch(r"[A-Za-z0-9_.@-]{1,128}", TRINO_USER):
+    raise RuntimeError("CHARTS_TRINO_USER 형식이 올바르지 않습니다.")
 
 
 class TrinoUnavailable(RuntimeError):
@@ -37,7 +59,30 @@ class _Busy503(RuntimeError):
     """Trino 프로토콜상 503 = '같은 URI 로 잠시 후 재시도' 신호 (실패 아님)."""
 
 
+def _validated_uri(url: str) -> str:
+    parsed = urllib.parse.urlsplit(url)
+    if (
+        parsed.scheme,
+        parsed.hostname,
+        parsed.port or (443 if parsed.scheme == "https" else 80),
+    ) != (
+        _TRINO_ORIGIN.scheme,
+        _TRINO_ORIGIN.hostname,
+        _TRINO_ORIGIN.port or (443 if _TRINO_ORIGIN.scheme == "https" else 80),
+    ):
+        raise QueryFailed("trino nextUri origin mismatch")
+    if parsed.username or parsed.password or parsed.fragment:
+        raise QueryFailed("trino nextUri 형식이 올바르지 않습니다")
+    if not (
+        parsed.path == _TRINO_STATEMENT_PREFIX
+        or parsed.path.startswith(_TRINO_STATEMENT_PREFIX + "/")
+    ):
+        raise QueryFailed("trino nextUri path mismatch")
+    return url
+
+
 def _fetch(url: str, body: bytes | None = None, timeout: float = 20.0) -> dict:
+    url = _validated_uri(url)
     req = urllib.request.Request(
         url, data=body, method="POST" if body is not None else "GET",
         headers={"X-Trino-User": TRINO_USER},
@@ -57,7 +102,8 @@ def _fetch(url: str, body: bytes | None = None, timeout: float = 20.0) -> dict:
 def _cancel(next_uri: str) -> None:
     """포기 시 실행 중 질의를 Trino 에 남기지 않는다 (best effort)."""
     try:
-        req = urllib.request.Request(next_uri, method="DELETE",
+        safe_uri = _validated_uri(next_uri)
+        req = urllib.request.Request(safe_uri, method="DELETE",
                                      headers={"X-Trino-User": TRINO_USER})
         urllib.request.urlopen(req, timeout=5).close()
     except Exception:  # noqa: BLE001 — 취소 실패는 치명적이지 않다
@@ -133,14 +179,52 @@ def execute(sql: str, max_rows: int = MAX_ROWS, force: bool = False) -> dict:
     if not force and cached and time.time() - cached["cached_at"] < FRESH_TTL_S:
         return {"columns": cached["columns"], "rows": cached["rows"],
                 "mode": "cache", "cached_at": cached["cached_at"], "elapsed_ms": 0}
-    started = time.monotonic()
-    try:
-        columns, rows = _run(sql, max_rows)
-    except TrinoUnavailable:
-        if cached:  # 죽은 Trino 보다 낡은 데이터가 낫다 — mode 로 낡음을 정직하게 표기
+    wait_started = time.time()
+    digest = hashlib.sha256(sql.encode("utf-8")).digest()
+    flight = _flight_locks[int.from_bytes(digest[:2], "big") % len(_flight_locks)]
+    waited = not flight.acquire(blocking=False)
+    if waited and not flight.acquire(timeout=125):
+        cached = _cache_read(sql)
+        if cached:
             return {"columns": cached["columns"], "rows": cached["rows"],
                     "mode": "stale", "cached_at": cached["cached_at"], "elapsed_ms": 0}
-        raise
-    _cache_write(sql, columns, rows)
-    return {"columns": columns, "rows": rows, "mode": "live",
-            "elapsed_ms": round((time.monotonic() - started) * 1000)}
+        raise TrinoUnavailable("identical trino query wait timed out")
+    try:
+        if waited:
+            refreshed = _cache_read(sql)
+            if refreshed and refreshed["cached_at"] >= wait_started:
+                return {
+                    "columns": refreshed["columns"],
+                    "rows": refreshed["rows"],
+                    "mode": "cache",
+                    "cached_at": refreshed["cached_at"],
+                    "elapsed_ms": 0,
+                }
+        cached = _cache_read(sql)
+        started = time.monotonic()
+        acquired = _query_slots.acquire(timeout=2)
+        if not acquired:
+            if cached:
+                return {
+                    "columns": cached["columns"],
+                    "rows": cached["rows"],
+                    "mode": "stale",
+                    "cached_at": cached["cached_at"],
+                    "elapsed_ms": 0,
+                }
+            raise TrinoUnavailable("trino query concurrency limit reached")
+        try:
+            try:
+                columns, rows = _run(sql, max_rows)
+            except TrinoUnavailable:
+                if cached:  # 죽은 Trino 보다 낡은 데이터가 낫다 — mode 로 낡음을 정직하게 표기
+                    return {"columns": cached["columns"], "rows": cached["rows"],
+                            "mode": "stale", "cached_at": cached["cached_at"], "elapsed_ms": 0}
+                raise
+        finally:
+            _query_slots.release()
+        _cache_write(sql, columns, rows)
+        return {"columns": columns, "rows": rows, "mode": "live",
+                "elapsed_ms": round((time.monotonic() - started) * 1000)}
+    finally:
+        flight.release()
