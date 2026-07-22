@@ -21,24 +21,47 @@ stale 캐시 복잡도를 얹을 근거가 없다. 필요해지면 trino.py 캐�
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
+from pathlib import Path
 
 from . import trino
 
+log = logging.getLogger(__name__)
+
 _NAME_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
 _STMT_TIMEOUT_MS = int(os.environ.get("CHARTS_DB_STATEMENT_TIMEOUT_MS", "20000"))
+# 앱 내부 디렉토리(app/) — auth DB·레이아웃 DB 등 내부 저장소를 datasource 로 지정하는
+# 실수를 차단한다(민감 샘플이 카탈로그·차트로 서빙되는 사고 방지).
+_APP_DIR = Path(__file__).resolve().parents[1]
+
+
+def assert_allowed_sqlite_path(path: str) -> str:
+    resolved = Path(path).resolve() if path else None
+    if resolved is not None and _APP_DIR in resolved.parents:
+        raise DatasourceError(
+            "앱 내부 DB(app/ 하위)는 datasource 로 지정할 수 없습니다 — 인증·레이아웃 "
+            "저장소가 카탈로그로 노출됩니다")
+    return path
 
 
 class DatasourceError(RuntimeError):
     """연결 정의/드라이버 문제 — 502 로 변환된다(문제는 서버 구성이지 사용자 입력이 아님)."""
 
 
-# 지원 backend — querybuilder 방언 프로파일·별칭과 동일 어휘(단일 정본은 querybuilder)
-from .querybuilder import DIALECT_ALIASES, DIALECTS  # noqa: E402
+# 지원 backend = **실행기가 실제로 있는 것만** — 방언(querybuilder)과 실행기(여기)가
+# 모두 준비된 이름만 검증을 통과시킨다(설정은 통과되는데 조회는 502 나는 오도 방지).
+from .querybuilder import DIALECT_ALIASES  # noqa: E402
 
-SUPPORTED_BACKENDS = (set(DIALECTS) - {"trino"}) | set(DIALECT_ALIASES)
+EXECUTOR_BACKENDS = {
+    "sqlite", "duckdb",
+    "postgres", "cockroachdb", "redshift",
+    "mysql", "mariadb",
+    "oracle", "mssql",
+}
+SUPPORTED_BACKENDS = EXECUTOR_BACKENDS
 
 
 def datasources() -> dict[str, dict]:
@@ -69,8 +92,11 @@ def canonical_backend(backend: str) -> str:
 def _execute_sqlite(path: str, sql: str, max_rows: int) -> tuple[list[str], list[list]]:
     import sqlite3
 
+    assert_allowed_sqlite_path(path)
     if not path or not os.path.isfile(path):
-        raise DatasourceError(f"sqlite 파일이 없습니다: {path}")
+        # 서버 파일시스템 경로는 클라이언트 응답에 싣지 않는다 — 로그로만
+        log.warning("sqlite datasource 파일 없음: %s", path)
+        raise DatasourceError("sqlite 파일을 열 수 없습니다 — 서버 연결 정의를 확인하세요")
     # 읽기전용 2중 강제: URI mode=ro(파일 계층) + query_only(세션 계층)
     conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
     try:
@@ -110,7 +136,8 @@ def _dsn_from(conf: dict, backend: str) -> str:
 def _mysql_connect(conf: dict):
     """mysql/mariadb — 접속 정보는 dsn_env 의 JSON({host,port,user,password,database}).
     세션에 ANSI_QUOTES(\"x\" 식별자)·NO_BACKSLASH_ESCAPES(리터럴 ANSI 화)를 강제해
-    querybuilder 의 ANSI 조립이 그대로 유효하게 만든다 + 읽기전용·실행시간 상한."""
+    querybuilder 의 ANSI 조립이 그대로 유효하게 만든다 + 읽기전용·실행시간 상한.
+    버전 하한: CAST AS DOUBLE — MySQL 8.0.17+ / MariaDB 10.4+ (미만은 명확히 거부)."""
     params = json.loads(_dsn_from(conf, "mysql"))
     try:
         import pymysql
@@ -123,6 +150,16 @@ def _mysql_connect(conf: dict):
             raise DatasourceError(
                 "mysql 드라이버(pymysql 또는 mysql-connector-python)가 없습니다") from exc
     cur = conn.cursor()
+    cur.execute("SELECT VERSION()")
+    version = str((cur.fetchone() or [""])[0])
+    nums = re.findall(r"\d+", version)[:3]
+    triple = tuple(int(n) for n in nums) + (0,) * (3 - len(nums))
+    floor_ = (10, 4, 0) if "mariadb" in version.lower() else (8, 0, 17)
+    if triple < floor_:
+        conn.close()
+        raise DatasourceError(
+            f"mysql 서버 버전이 낮습니다({version}) — CAST AS DOUBLE 은 "
+            "MySQL 8.0.17+ / MariaDB 10.4+ 가 필요합니다")
     cur.execute("SET SESSION sql_mode = CONCAT(@@sql_mode, ',ANSI_QUOTES,NO_BACKSLASH_ESCAPES')")
     cur.execute("SET SESSION TRANSACTION READ ONLY")
     for stmt in (f"SET SESSION max_execution_time = {_STMT_TIMEOUT_MS}",           # mysql 5.7+
@@ -134,6 +171,20 @@ def _mysql_connect(conf: dict):
             continue
     cur.close()
     return conn
+
+
+def _duckdb_connect(conf: dict):
+    """duckdb — 파일 경로, 읽기전용 연결. 방언은 trino 프로파일(try_cast 검증 계열)."""
+    try:
+        import duckdb
+    except ImportError as exc:
+        raise DatasourceError("duckdb 드라이버(duckdb)가 없습니다") from exc
+    path = str(conf.get("path", ""))
+    assert_allowed_sqlite_path(path)
+    if not path or not os.path.isfile(path):
+        log.warning("duckdb datasource 파일 없음: %s", path)
+        raise DatasourceError("duckdb 파일을 열 수 없습니다 — 서버 연결 정의를 확인하세요")
+    return duckdb.connect(path, read_only=True)
 
 
 def _oracle_connect(conf: dict):
@@ -154,13 +205,15 @@ def _mssql_connect(conf: dict):
     세션 읽기전용 개념이 없어(가용성 복제 전용) **계정 권한을 SELECT 로 제한**하는 것이
     운영 계약이다 — 연결 정의 문서에 명시. LOCK_TIMEOUT 으로 잠금 대기만 상한."""
     dsn = _dsn_from(conf, "mssql")
+    seconds = max(1, _STMT_TIMEOUT_MS // 1000)
     try:
         import pyodbc
-        conn = pyodbc.connect(dsn, timeout=max(1, _STMT_TIMEOUT_MS // 1000))
+        conn = pyodbc.connect(dsn, timeout=seconds)   # connect timeout=로그인 한정
+        conn.timeout = seconds                        # 문장 실행 타임아웃은 이 속성
     except ImportError:
         try:
             import pymssql
-            conn = pymssql.connect(**json.loads(dsn))
+            conn = pymssql.connect(**{**json.loads(dsn), "timeout": seconds})
         except ImportError as exc:
             raise DatasourceError("mssql 드라이버(pyodbc 또는 pymssql)가 없습니다") from exc
     cur = conn.cursor()
@@ -196,13 +249,16 @@ def execute(source: dict, sql: str, max_rows: int = trino.MAX_ROWS,
     if conf is None:
         raise DatasourceError(f"정의되지 않은 datasource 입니다: {name}")
     started = time.monotonic()
-    backend = canonical_backend(conf["backend"])
+    # 실행기 선택은 **원 backend 이름** 기준(별칭은 실행기 계열만 접힘 — 방언 접기와 별개)
+    backend = conf["backend"]
     try:
         if backend == "sqlite":
             columns, rows = _execute_sqlite(str(conf.get("path", "")), sql, max_rows)
-        elif backend == "postgres":
+        elif backend == "duckdb":
+            columns, rows = _execute_dbapi(_duckdb_connect(conf), sql, max_rows)
+        elif backend in ("postgres", "cockroachdb", "redshift"):
             columns, rows = _execute_postgres(conf, sql, max_rows)
-        elif backend == "mysql":
+        elif backend in ("mysql", "mariadb"):
             columns, rows = _execute_dbapi(_mysql_connect(conf), sql, max_rows)
         elif backend == "oracle":
             columns, rows = _execute_dbapi(_oracle_connect(conf), sql, max_rows)
@@ -212,7 +268,11 @@ def execute(source: dict, sql: str, max_rows: int = trino.MAX_ROWS,
             raise DatasourceError(f"실행기 미구현 backend: {backend}")
     except DatasourceError:
         raise
-    except Exception as exc:  # noqa: BLE001 — DB 드라이버 예외를 조회 실패 계약으로 통일(502)
-        raise trino.QueryFailed(f"datasource {name}: {str(exc)[:200]}") from exc
+    except Exception as exc:  # noqa: BLE001 — 드라이버 예외를 조회 실패 계약(502)으로 통일.
+        # 연결 실패류 메시지는 내부 호스트·포트·계정명을 담는다 — 원문은 서버 로그로만,
+        # 클라이언트에는 일반화한 문구만 낸다(problem+json detail 노출 경로 차단).
+        log.warning("datasource %s 조회 실패: %s", name, exc)
+        raise trino.QueryFailed(
+            f"datasource {name}: 조회 실패 — 서버 로그를 확인하세요") from exc
     return {"columns": columns, "rows": rows, "mode": "live",
             "elapsed_ms": round((time.monotonic() - started) * 1000)}

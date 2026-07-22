@@ -533,6 +533,24 @@ def _q(name: str) -> str:
 
 _IDENT_RE = __import__("re").compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+# 인트로스펙션 스타일(방언 캐논과 별개 — duckdb 는 방언은 trino 계열이지만 카탈로그는 PG 계열)
+_INTROSPECT_STYLE = {"duckdb": "postgres", "cockroachdb": "postgres", "redshift": "postgres",
+                     "mariadb": "mysql"}
+# oracle LOB/LONG — CAST(varchar2) 4000자 초과 오류·count_distinct ORA-00932·LONG 식 사용
+# 금지라 차트 축/필터 대상이 될 수 없다(적대적 검증 실측) → 컬럼 자체를 제외
+_ORACLE_UNSUPPORTED = {"CLOB", "NCLOB", "LONG", "BLOB", "BFILE", "LONG RAW"}
+
+
+def _limit_sql(style: str, select_sql: str, n: int) -> str:
+    """행수 제한의 방언화 — oracle 은 LIMIT 미지원(FETCH FIRST), mssql 은 TOP.
+    이걸 빼먹으면 code_labels·sample 쿼리가 문법 오류로 **조용히** 누락된다."""
+    if style == "oracle":
+        return f"{select_sql} FETCH FIRST {n} ROWS ONLY"
+    if style == "mssql":
+        return "SELECT TOP " + str(n) + " " + select_sql[len("SELECT "):] \
+            if select_sql.upper().startswith("SELECT ") else select_sql
+    return f"{select_sql} LIMIT {n}"
+
 
 def _db_objects(backend: str, conn) -> list[tuple[str, str, str]]:
     """(이름, relation(비인용 dotted — querybuilder._relation 이 인용한다), table|view).
@@ -577,6 +595,9 @@ def _db_objects(backend: str, conn) -> list[tuple[str, str, str]]:
 
 def _db_columns(backend: str, conn, obj_name: str, relation: str) -> list[dict]:
     safe_name = obj_name.replace(chr(39), chr(39) * 2)
+    parts = relation.split(".")
+    schema = parts[0] if len(parts) > 1 else None
+    safe_schema = schema.replace(chr(39), chr(39) * 2) if schema else None
     if backend == "sqlite":
         rows = _db_rows(conn, f"PRAGMA table_info({_q(obj_name)})")
         cols = [{"name": r[1], "type": _canon_type(r[2]) if r[2] else "", "description": ""}
@@ -586,9 +607,9 @@ def _db_columns(backend: str, conn, obj_name: str, relation: str) -> list[dict]:
         for c in cols:
             if not c["type"]:
                 try:
-                    got = _db_rows(conn, (
+                    got = _db_rows(conn, _limit_sql("sqlite", (
                         f"SELECT typeof({_q(c['name'])}) FROM {relation} "
-                        f"WHERE {_q(c['name'])} IS NOT NULL LIMIT 1"))
+                        f"WHERE {_q(c['name'])} IS NOT NULL"), 1))
                     kind = got[0][0] if got else "text"
                 except Exception:  # noqa: BLE001
                     kind = "text"
@@ -598,10 +619,19 @@ def _db_columns(backend: str, conn, obj_name: str, relation: str) -> list[dict]:
         rows = _db_rows(conn, (
             "SELECT column_name, data_type FROM user_tab_columns "
             f"WHERE table_name = '{safe_name}' ORDER BY column_id"))
-        return [{"name": r[0], "type": _canon_type(r[1]), "description": ""} for r in rows]
+        cols = []
+        for r in rows:
+            if str(r[1]).upper().split("(")[0] in _ORACLE_UNSUPPORTED:
+                print(f"  ! column skip(oracle LOB/LONG — 차트 대상 불가): {obj_name}.{r[0]}")
+                continue
+            cols.append({"name": r[0], "type": _canon_type(r[1]), "description": ""})
+        return cols
+    # 스키마 술어 필수 — 동명 테이블(s1.t, s2.t)의 컬럼이 합쳐지는 오염 방지
+    schema_pred = (f"AND table_schema = '{safe_schema}' " if safe_schema
+                   else ("AND table_schema = DATABASE() " if backend == "mysql" else ""))
     rows = _db_rows(conn, (
         "SELECT column_name, data_type FROM information_schema.columns "
-        f"WHERE table_name = '{safe_name}' "
+        f"WHERE table_name = '{safe_name}' {schema_pred}"
         "ORDER BY ordinal_position"))
     return [{"name": r[0], "type": _canon_type(r[1]), "description": ""} for r in rows]
 
@@ -620,11 +650,15 @@ def extract_datasource(name: str, conf: dict) -> list[dict]:
     """
     from app.charts import backends as be   # 연결 계약(읽기전용·세션 강제) 재사용
 
-    backend = be.canonical_backend(conf["backend"])
-    if backend == "sqlite":
+    raw_backend = conf["backend"]
+    backend = _INTROSPECT_STYLE.get(raw_backend, raw_backend)  # 인트로스펙션 스타일
+    if raw_backend == "sqlite":
         import sqlite3
+        be.assert_allowed_sqlite_path(str(conf.get("path", "")))
         conn = sqlite3.connect(f"file:{conf.get('path', '')}?mode=ro", uri=True, timeout=5)
         conn.execute("PRAGMA query_only = ON")
+    elif raw_backend == "duckdb":
+        conn = be._duckdb_connect(conf)
     elif backend == "postgres":
         conn = be._pg_connect(be._dsn_from(conf, "postgres"))
     elif backend == "mysql":
@@ -669,10 +703,10 @@ def extract_datasource(name: str, conf: dict) -> list[dict]:
             colnames = [c["name"] for c in columns]
             for ident, disp in companion_pairs(colnames):
                 try:
-                    pairs = _db_rows(conn, (
+                    pairs = _db_rows(conn, _limit_sql(backend, (
                         f"SELECT DISTINCT {_q(ident)}, {_q(disp)} FROM {relation} "
-                        f"WHERE {_q(ident)} IS NOT NULL AND {_q(disp)} IS NOT NULL "
-                        f"LIMIT {CODE_LABEL_CAP + 1}"))
+                        f"WHERE {_q(ident)} IS NOT NULL AND {_q(disp)} IS NOT NULL"),
+                        CODE_LABEL_CAP + 1))
                 except Exception:  # noqa: BLE001
                     continue
                 if 0 < len(pairs) <= CODE_LABEL_CAP:
@@ -690,17 +724,17 @@ def extract_datasource(name: str, conf: dict) -> list[dict]:
                     pass
 
             try:
-                sample_rows = _db_rows(conn, f"SELECT * FROM {relation} LIMIT 5")
+                sample_rows = _db_rows(conn, _limit_sql(backend, f"SELECT * FROM {relation}", 5))
                 sample = [{c["name"]: truncate_cell(v) for c, v in zip(columns, row)}
                           for row in sample_rows]
             except Exception:  # noqa: BLE001
                 sample = []
 
             tables.append({
-                "name": f"{name}__{obj_name}",
+                "name": f"{name}__{relation.replace('.', '__')}",
                 "domain": name,
                 "datasource": name,
-                "backend": backend,
+                "backend": raw_backend,
                 "object_type": object_type,
                 "external": True,
                 "relation": relation,
@@ -743,6 +777,9 @@ def merge_snapshot_domains(snapshot: dict, replacements: dict[str, list[dict]],
         "generated_at": observed_at,
         "domain_generated_at": domain_generated_at,
         "domains": domains, "table_count": len(tables), "tables": tables,
+        # refresh 메타도 이번 병합 기준으로 갱신 — stale 정보 잔존 방지
+        "refresh": {"mode": "partial_datasource", "domains": sorted(replacements),
+                    "observed_at": observed_at},
     })
     return merged
 

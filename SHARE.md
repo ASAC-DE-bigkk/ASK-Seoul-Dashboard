@@ -366,9 +366,19 @@ dashboard/
 - **연결 정의**: env `CHARTS_DATASOURCES`(JSON — 이름→{backend, path|dsn_env}).
   자격증명은 dsn_env 간접 참조(값이 설정/로그에 남지 않음). 스냅샷 반영은
   `python extract.py --refresh-datasource <이름>` (테이블+뷰, 통계·code_labels 실측 포함).
-  레지스트리 키는 `<이름>__<객체명>`, 도메인 = 연결 이름.
+  레지스트리 키는 `<이름>__<스키마>__<객체명>`(스키마 없는 sqlite 는 `<이름>__<객체명>`),
+  도메인 = 연결 이름. **경고: sqlite/duckdb path 에 앱 내부 DB(app/ 하위 — 인증·레이아웃
+  저장소)를 지정하면 민감 샘플이 카탈로그로 서빙된다 — 코드가 거부하지만 외부 복제본도
+  금지가 운영 계약이다.** 드라이버 예외의 내부 정보(호스트·계정)는 서버 로그로만 남고
+  클라이언트 응답은 일반화된다.
 - **방언(정본: `querybuilder.DIALECTS`)**: trino·postgres·sqlite·mysql·oracle·mssql +
-  별칭(mariadb→mysql, cockroachdb/redshift→postgres, duckdb/snowflake→trino).
+  별칭(mariadb→mysql, cockroachdb/redshift→postgres, duckdb→trino). **snowflake/
+  clickhouse/bigquery 는 의도적 미지원**(TRY_CAST 의미 상이 등 — 별칭으로 뭉개면 조용히
+  틀린 SQL. 필요 시 전용 프로파일 추가). 버전 하한: MySQL 8.0.17+/MariaDB 10.4+
+  (CAST AS DOUBLE — 연결 시 검사), Oracle 12.2+(conversion-error 캐스트·FETCH FIRST).
+  시간 컬럼 문자 비교는 방언 ISO 직렬화(oracle to_char·mssql convert 121)로 고정 —
+  NLS/스타일 의존 차단. 알려진 한계: sqlite TEXT 컬럼의 비정규형 숫자('5.50','007')는
+  숫자 필터에서 탈락(타 방언과 상이 — 타입드 컬럼 전제).
   식별자 인용은 전 방언 ANSI `"x"` — mysql 은 실행기가 세션 `ANSI_QUOTES,
   NO_BACKSLASH_ESCAPES` 를 강제, mssql 은 QUOTED_IDENTIFIER ON. 분기는 숫자
   안전캐스트(try_cast 에뮬레이션 — sqlite `CAST('abc' AS REAL)=0` · mysql 암묵 변환

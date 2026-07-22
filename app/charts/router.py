@@ -170,7 +170,7 @@ def _validate_charts(charts) -> None:
                 )
         # 레이아웃 저장 시에도 query 단계와 **같은 워커**로 검증한다 — 저장/조회 경로가
         # 다른 walker 를 가지면 '저장은 되는데 조회가 400' 계약 분열이 생긴다.
-        dialect = source.get("backend") or "trino"
+        dialect = querybuilder.resolve_dialect(source.get("backend"))
         try:
             querybuilder.validate_filter_tree(
                 [node.model_dump() for node in chart.filters], fields, dialect)

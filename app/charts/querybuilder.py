@@ -51,13 +51,15 @@ DIALECTS: dict[str, dict] = {
     # mssql: TOP n(SELECT 절 삽입), LIKE 는 '[' 도 와일드카드(문자 클래스 시작) — 이스케이프 대상.
     "mssql":    {"agg": "float",            "str": "varchar(max)",  "bool": ("1", "0"),        "positional": False, "limit": "top",   "wild": "["},
 }
-# 와이어/방언 호환 별칭 — 같은 프로파일로 조립해도 안전한 계열
+# 와이어/방언 호환 별칭 — 같은 프로파일로 조립해도 안전함을 **검증한** 계열만.
+# snowflake 는 제외한다(적대적 검증 실측): TRY_CAST 가 문자열 원본 전용이라 숫자 컬럼
+# 필터·구간이 컴파일 오류 — 별칭으로 뭉개면 조용히 틀린 SQL 이 나간다. 필요 시 전용
+# 프로파일(TO_DOUBLE/TRY_TO_DOUBLE)을 추가하는 것이 정직한 경로다. clickhouse/bigquery 동일.
 DIALECT_ALIASES = {
-    "mariadb": "mysql",            # 동일 프로토콜·문법 계열
+    "mariadb": "mysql",            # 동일 프로토콜·문법 계열(CAST AS DOUBLE 10.4+)
     "cockroachdb": "postgres",     # PG 와이어·문법 호환
     "redshift": "postgres",        # PG 계열(8.x 문법 기반 — 사용 기능 범위 내 호환)
-    "duckdb": "trino",             # try_cast·double·ANSI — trino 프로파일 그대로 유효
-    "snowflake": "trino",          # try_cast·double·ANSI 동일 계열
+    "duckdb": "trino",             # try_cast(전 타입 허용)·double·ANSI·positional — 검증됨
 }
 
 
@@ -76,6 +78,23 @@ def _str_expr(quoted: str, dialect: str) -> str:
     return f"cast({quoted} as {DIALECTS[dialect]['str']})"
 
 
+def _is_time_type(field: dict) -> bool:
+    base = field.get("type", "").split("(")[0].lower()
+    return base.startswith("timestamp") or base == "date"
+
+
+def _time_expr(quoted: str, dialect: str) -> str:
+    """시간 컬럼의 문자열 직렬화 — 반드시 ISO 여야 사전순=시간순 계약이 성립한다.
+    oracle 은 암묵 변환이 세션 NLS_DATE_FORMAT('23-JUL-26')을, mssql 레거시 datetime 은
+    CAST 기본 스타일('Jul 23 2026')을 따르므로 명시 포맷으로 고정한다(적대적 검증 실측).
+    trino/postgres/mysql/sqlite 는 기본 캐스트가 ISO — 기존 경로 그대로(byte-동일)."""
+    if dialect == "oracle":
+        return f"to_char({quoted}, 'YYYY-MM-DD HH24:MI:SS')"
+    if dialect == "mssql":
+        return f"convert(varchar(30), {quoted}, 121)"
+    return _str_expr(quoted, dialect)
+
+
 def _num_expr(quoted: str, field: dict, dialect: str) -> str:
     """숫자 비교 축 — Trino/mssql 은 try_cast 네이티브, 나머지는 물리 타입이 숫자면 직접
     캐스트, 문자면 검증 가드식으로 에뮬레이트한다(sqlite CAST('abc' AS REAL)=0.0 ·
@@ -89,6 +108,10 @@ def _num_expr(quoted: str, field: dict, dialect: str) -> str:
     if dialect == "sqlite":
         if _is_numeric_type(field):
             return f"cast({quoted} as real)"
+        # 알려진 한계(정직): 왕복 검증식은 정규형('42','830.5')만 숫자로 인정한다 —
+        # '5.50'·'007'·'1e3'·' 42' 같은 비정규형은 NULL 로 탈락해 trino/pg/mysql 과
+        # 결과가 다를 수 있다. sqlite 소스는 타입드 컬럼(D1 export 류)이 전제라 실무
+        # 영향은 좁고, 느슨하게 풀면 CAST('abc')=0 함정이 되살아난다(SHARE §9.0).
         return (f"(case when cast(cast({quoted} as real) as text) = cast({quoted} as text) "
                 f"or cast(cast({quoted} as integer) as text) = cast({quoted} as text) "
                 f"then cast({quoted} as real) end)")
@@ -159,11 +182,10 @@ def _lit(value: Any) -> str:
 
 
 def _dim_expr(field: dict, dialect: str = "trino") -> str:
-    """차원 표현식 — timestamp/date 는 JSON 안전하게 문자열로 낸다(방언 문자 타입)."""
+    """차원 표현식 — timestamp/date 는 JSON 안전하게 ISO 문자열로 낸다(방언 시간 직렬화)."""
     quoted = _quote_ident(field["name"])
-    base = field.get("type", "").split("(")[0].lower()
-    if base.startswith("timestamp") or base == "date":
-        return _str_expr(quoted, dialect)
+    if _is_time_type(field):
+        return _time_expr(quoted, dialect)
     return quoted
 
 
@@ -337,7 +359,8 @@ def _condition(f: dict, fields: dict[str, dict], dialect: str = "trino") -> str:
     numeric_field = field.get("role") in NUMERIC_FILTER_ROLES
     code_strict = field.get("role") in CODE_STRICT_ROLES
     v = _coerce_bools(f.get("value"), dialect)
-    s_col = _str_expr(col, dialect)
+    # 물리 시간 컬럼의 문자 비교는 ISO 직렬화 경유 — oracle NLS/mssql 스타일 의존 차단
+    s_col = _time_expr(col, dialect) if _is_time_type(field) else _str_expr(col, dialect)
     n_col = _num_expr(col, field, dialect)
 
     # NULL 판정은 캐스팅 이전의 **원본 컬럼**을 본다 — try_cast(col as double) is null 로

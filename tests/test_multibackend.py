@@ -206,11 +206,48 @@ def test_mysql_oracle_mssql_dialect_sql_shapes(demo_db, tmp_path) -> None:
         "filters": [{"field": "category", "op": "eq", "value": True}]})
     assert " = 1" in sql_bool and "TRUE" not in sql_bool
 
-    # 별칭 — mariadb→mysql, duckdb→trino(try_cast 유지), 미지 backend 거부
+    # 별칭 — mariadb→mysql, duckdb→trino(try_cast 유지). snowflake 는 의도적 거부
+    # (TRY_CAST 문자열 전용 — 별칭으로 뭉개면 숫자 컬럼 필터가 조용히 컴파일 오류).
     assert querybuilder.resolve_dialect("mariadb") == "mysql"
     assert "try_cast" in querybuilder.build({**base, "backend": "duckdb"}, spec)
-    with pytest.raises(querybuilder.SpecError, match="지원하지 않는 backend"):
-        querybuilder.build({**base, "backend": "clickhouse"}, spec)
+    for rejected in ("clickhouse", "snowflake", "bigquery"):
+        with pytest.raises(querybuilder.SpecError, match="지원하지 않는 backend"):
+            querybuilder.build({**base, "backend": rejected}, spec)
+
+    # 시간 컬럼 문자 비교/차원 — 방언 ISO 직렬화(NLS/CAST 스타일 의존 차단)
+    time_spec = {
+        "dims": ["updated_date"],
+        "measures": [{"field": None, "agg": "count", "alias": "count"}],
+        "filters": [{"field": "updated_date", "op": "gte", "value": "2026-07-01"}],
+    }
+    ts_base = dict(base)
+    ts_fields = [dict(f) for f in base["fields"]]
+    for f in ts_fields:
+        if f["name"] == "updated_date":
+            f["type"] = "timestamp(6)"      # 물리 시간 타입 시나리오(oracle DATE 정규화 등)
+    ts_base["fields"] = ts_fields
+    ora_t = querybuilder.build({**ts_base, "backend": "oracle"}, time_spec)
+    assert "to_char(\"updated_date\", 'YYYY-MM-DD HH24:MI:SS') >= '2026-07-01'" in ora_t
+    ms_t = querybuilder.build({**ts_base, "backend": "mssql"}, time_spec)
+    assert 'convert(varchar(30), "updated_date", 121)' in ms_t
+    tr_t = querybuilder.build({**ts_base, "backend": "trino"}, time_spec)
+    assert 'cast("updated_date" as varchar) >= ' in tr_t   # 기존 경로 byte-동일
+
+
+def test_extract_limit_dialect_and_reserved_path() -> None:
+    """추출 보조 계약 — LIMIT 방언화(oracle/mssql 문법 오류로 code_labels·sample 이
+    조용히 누락되는 결함 방지) + 앱 내부 DB 경로 거부."""
+    import extract
+    from app.charts import backends
+
+    q = "SELECT DISTINCT \"a\", \"b\" FROM t WHERE \"a\" IS NOT NULL"
+    assert extract._limit_sql("postgres", q, 10) == q + " LIMIT 10"
+    assert extract._limit_sql("oracle", q, 10) == q + " FETCH FIRST 10 ROWS ONLY"
+    assert extract._limit_sql("mssql", q, 10).startswith("SELECT TOP 10 DISTINCT")
+
+    with pytest.raises(backends.DatasourceError, match="앱 내부 DB"):
+        backends.assert_allowed_sqlite_path(
+            str(backends._APP_DIR / "auth" / "auth.db"))
 
 
 def test_trino_dialect_stays_byte_identical_default() -> None:
