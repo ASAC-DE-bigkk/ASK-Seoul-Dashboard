@@ -1096,3 +1096,412 @@ def test_payment_notification_outbox_claim_is_single_delivery():
                 "delivered",
                 "delivered",
             ]
+
+
+
+def _auth_middleware():
+    from app.auth.middleware import AuthSecurityMiddleware
+
+    node = app.middleware_stack
+    while node is not None:
+        if isinstance(node, AuthSecurityMiddleware):
+            return node
+        node = getattr(node, "app", None)
+    raise AssertionError("AuthSecurityMiddleware를 찾을 수 없습니다.")
+
+
+def _prime_and_request(limiter, subject, limits, request_fn, *, want_status=403):
+    """고정 윈도 rate limiter를 임계까지 채운 뒤 요청한다.
+
+    프라이밍과 요청 사이에 분(minute) 버킷 경계가 넘어가면 카운트가 갈라져 차단이
+    발동하지 않을 수 있으므로, 원하는 상태가 나올 때까지 몇 번 재프라이밍한다.
+    """
+    response = None
+    for _ in range(5):
+        for _ in range(limits["minute"]):
+            limiter.check(subject, limits)
+        response = request_fn()
+        if response.status_code == want_status:
+            return response
+    return response
+
+
+def test_undefined_api_flood_triggers_auto_block_and_admin_release():
+    from app.auth.middleware import UNDEFINED_API_LIMITS
+
+    blocked_ip = "198.51.100.60"
+    with TestClient(app, client=(blocked_ip, 50000)) as client, TestClient(
+        app, client=("198.51.100.61", 50000)
+    ) as admin:
+        assert client.get("/api/v1/no-such-endpoint").status_code == 404
+        middleware = _auth_middleware()
+        blocked = _prime_and_request(
+            middleware.undefined_api_limiter,
+            f"ip:{blocked_ip}",
+            UNDEFINED_API_LIMITS,
+            lambda: client.get("/api/v1/no-such-endpoint"),
+        )
+        assert blocked.status_code == 403
+        body = blocked.json()
+        assert body["title"] == "access blocked"
+        assert "비정상 API 반복 호출]로 정지되었습니다" in body["detail"]
+        assert "사이트 운영자에게 문의" in body["detail"]
+
+        follow_up = client.get("/api/v1/public/summary")
+        assert follow_up.status_code == 403
+        assert "정지되었습니다" in follow_up.json()["detail"]
+
+        login(admin, "root@example.com", ADMIN_PASSWORD)
+        listing = admin.get("/api/v1/admin/auto-blocks/ips?page=1&size=17")
+        assert listing.status_code == 200
+        data = listing.json()
+        assert data["size"] == 20
+        assert data["total"] >= 1
+        target = next(
+            item for item in data["items"] if item["network"] == f"{blocked_ip}/32"
+        )
+        assert target["active"] is True
+        assert target["reason"] == "비정상 API 반복 호출"
+
+        release = admin.post(
+            f"/api/v1/admin/auto-blocks/ips/{target['id']}/release",
+            headers=csrf(admin),
+        )
+        assert release.status_code == 200
+        # 미들웨어 IP 차단 캐시(5초 TTL)를 비워 해제를 즉시 반영한다.
+        middleware._ip_cache = (0.0, ())
+        assert client.get("/api/v1/public/summary").status_code == 200
+
+
+def test_session_tampering_blocks_user_with_reason_and_release():
+    from app.auth.middleware import TAMPER_LIMITS
+
+    attacker_ip = "198.51.100.63"
+    email = "tamper-target@example.com"
+    password = "Tamper-Target-Poplar-2026!"
+    with TestClient(app, client=(attacker_ip, 50000)) as member, TestClient(
+        app, client=("198.51.100.64", 50000)
+    ) as admin, TestClient(app, client=("198.51.100.65", 50000)) as rejoin:
+        with app.state.database.session() as db:
+            db.add(
+                User(
+                    email=email,
+                    password_hash=hash_password(password),
+                    nickname="세션조작-테스트",
+                    role="member",
+                    status="active",
+                    email_verified_at=utcnow(),
+                    approved_at=utcnow(),
+                )
+            )
+        login(member, email, password)
+        middleware = _auth_middleware()
+        member.cookies.set("askseoul_csrf", "forged-csrf-value")
+        forged = _prime_and_request(
+            middleware.tamper_limiter,
+            f"ip:{attacker_ip}",
+            TAMPER_LIMITS,
+            lambda: member.patch(
+                "/api/v1/me/nickname",
+                headers={"x-csrf-token": "forged-csrf-value"},
+                json={"nickname": "탈취시도"},
+            ),
+        )
+        assert forged.status_code == 403
+        assert "세션 조작 시도]로 정지되었습니다" in forged.json()["detail"]
+
+        # 정지된 계정은 다른 IP에서 올바른 비밀번호로 로그인해도 사유가 안내된다.
+        blocked_login = rejoin.post(
+            "/api/v1/auth/login",
+            json={
+                "email": email,
+                "password": password,
+                "remember": False,
+                "next": "/catalog",
+            },
+        )
+        assert blocked_login.status_code == 403
+        assert "세션 조작 시도]로 정지되었습니다" in blocked_login.json()["detail"]
+
+        login(admin, "root@example.com", ADMIN_PASSWORD)
+        listing = admin.get("/api/v1/admin/auto-blocks/users?page=1&size=10")
+        assert listing.status_code == 200
+        row = next(
+            item
+            for item in listing.json()["items"]
+            if item["user"] and item["user"]["nickname"] == "세션조작-테스트"
+        )
+        assert row["active"] is True
+        assert row["reason"] == "세션 조작 시도"
+
+        release = admin.post(
+            f"/api/v1/admin/auto-blocks/users/{row['id']}/release",
+            headers=csrf(admin),
+        )
+        assert release.status_code == 200
+        login(rejoin, email, password)
+
+
+def test_expired_session_reports_disconnect_time():
+    email = "expired-notice@example.com"
+    password = "Expired-Notice-Maple-2026!"
+    with TestClient(app, client=("198.51.100.68", 50000)) as client:
+        with app.state.database.session() as db:
+            user = User(
+                email=email,
+                password_hash=hash_password(password),
+                nickname="만료안내-테스트",
+                role="member",
+                status="active",
+                email_verified_at=utcnow(),
+                approved_at=utcnow(),
+            )
+            db.add(user)
+            db.flush()
+            user_id = user.id
+        login(client, email, password)
+        with app.state.database.session() as db:
+            row = db.scalar(
+                select(AuthSession).where(
+                    AuthSession.user_id == user_id,
+                    AuthSession.revoked_at.is_(None),
+                )
+            )
+            row.last_seen_at = utcnow() - timedelta(
+                minutes=app.state.auth_settings.session_idle_minutes + 1
+            )
+        response = client.get("/api/v1/catalog/tables")
+        assert response.status_code == 401
+        body = response.json()
+        assert body["title"] == "session expired"
+        assert "접속이 끊겼습니다" in body["detail"]
+        assert body["expired_at"]
+
+
+def test_billing_summary_hidden_pages_and_home_redirect():
+    email = "summary-member@example.com"
+    password = "Summary-Member-Ginkgo-2026!"
+    with TestClient(app, client=("198.51.100.66", 50000)) as client, TestClient(
+        app, client=("198.51.100.67", 50000)
+    ) as admin:
+        with app.state.database.session() as db:
+            db.add(
+                User(
+                    email=email,
+                    password_hash=hash_password(password),
+                    nickname="결제요약-테스트",
+                    role="member",
+                    status="active",
+                    email_verified_at=utcnow(),
+                    approved_at=utcnow(),
+                    membership_ends_at=utcnow() + timedelta(days=3),
+                )
+            )
+        login(client, email, password)
+        summary = client.get("/api/v1/billing/summary")
+        assert summary.status_code == 200
+        data = summary.json()
+        assert data["active"] is True
+        assert data["days_left"] == 3
+        assert data["pending_request"] is None
+        assert data["operator_account"] is False
+
+        session_user = client.get("/api/v1/auth/session").json()["user"]
+        assert "admin_security" not in session_user["allowed_pages"]
+        assert "service_health" not in session_user["allowed_pages"]
+
+        login(admin, "root@example.com", ADMIN_PASSWORD)
+        admin_user = admin.get("/api/v1/auth/session").json()["user"]
+        assert "admin_security" in admin_user["allowed_pages"]
+        assert "service_health" in admin_user["allowed_pages"]
+
+        saved = client.put(
+            "/api/v1/me/preferences",
+            headers=csrf(client),
+            json={"ontology": {}, "ui": {"dense": False, "hidden_pages": ["catalog"]}},
+        )
+        assert saved.status_code == 200
+        assert client.get("/api/v1/auth/session").json()["user"]["hidden_pages"] == [
+            "catalog"
+        ]
+        for invalid in (["profile"], ["admin_users"], "catalog"):
+            bad = client.put(
+                "/api/v1/me/preferences",
+                headers=csrf(client),
+                json={"ontology": {}, "ui": {"hidden_pages": invalid}},
+            )
+            assert bad.status_code == 400
+
+        home = client.get("/home", follow_redirects=False)
+        assert home.status_code == 303
+        assert home.headers["location"] == "/catalog"
+
+
+def test_home_redirects_anonymous_to_landing():
+    with TestClient(app, client=("198.51.100.69", 50000)) as client:
+        response = client.get("/home", follow_redirects=False)
+        assert response.status_code == 303
+        assert response.headers["location"] == "/"
+
+
+
+def test_auto_block_permission_boundaries_and_html_page():
+    from app.auth.middleware import UNDEFINED_API_LIMITS
+
+    flood_ip = "198.51.100.70"
+    with TestClient(app, client=(flood_ip, 50000)) as flood, TestClient(
+        app, client=("198.51.100.71", 50000)
+    ) as admin, TestClient(app, client=("198.51.100.72", 50000)) as operator:
+        # operator 계정 준비(admin이 승격).
+        register(operator, "op-autoblock@example.com", OPERATOR_PASSWORD)
+        login(admin, "root@example.com", ADMIN_PASSWORD)
+        op_id = next(
+            item["id"]
+            for item in admin.get("/api/v1/admin/users?status=pending").json()["items"]
+            if item["email"] == "op-autoblock@example.com"
+        )
+        promote = admin.patch(
+            f"/api/v1/admin/users/{op_id}",
+            headers=csrf(admin),
+            json={"role": "operator", "status": "active", "permissions": []},
+        )
+        assert promote.status_code == 200
+        login(operator, "op-autoblock@example.com", OPERATOR_PASSWORD)
+
+        # 자동 IP 차단 1건 생성.
+        middleware = _auth_middleware()
+        blocked = _prime_and_request(
+            middleware.undefined_api_limiter,
+            f"ip:{flood_ip}",
+            UNDEFINED_API_LIMITS,
+            lambda: flood.get("/api/v1/no-such-endpoint"),
+        )
+        assert blocked.status_code == 403
+        # 브라우저(text/html) 요청은 사유가 escape된 독립 HTML 페이지로 안내한다.
+        html = flood.get("/api/v1/public/summary", headers={"accept": "text/html"})
+        assert html.status_code == 403
+        assert "text/html" in html.headers["content-type"]
+        assert "정지되었습니다" in html.text
+        assert "<script>" not in html.text
+
+        ip_id = admin.get("/api/v1/admin/auto-blocks/ips").json()["items"][0]["id"]
+
+        # operator+는 목록 조회 가능, 하지만 IP 자동 차단 해제는 admin 전용(403).
+        assert operator.get("/api/v1/admin/auto-blocks/ips").status_code == 200
+        denied = operator.post(
+            f"/api/v1/admin/auto-blocks/ips/{ip_id}/release", headers=csrf(operator)
+        )
+        assert denied.status_code == 403
+
+        # guest/member는 자동 차단 목록 자체에 접근 불가(page gate 403).
+        member_email = "autoblock-viewer@example.com"
+        member_password = "Autoblock-Viewer-Cedar-2026!"
+        with app.state.database.session() as db:
+            db.add(
+                User(
+                    email=member_email,
+                    password_hash=hash_password(member_password),
+                    nickname="자동차단열람-테스트",
+                    role="member",
+                    status="active",
+                    email_verified_at=utcnow(),
+                    approved_at=utcnow(),
+                )
+            )
+        with TestClient(app, client=("198.51.100.73", 50000)) as member:
+            login(member, member_email, member_password)
+            assert member.get("/api/v1/admin/auto-blocks/ips").status_code == 403
+            assert member.get("/api/v1/admin/auto-blocks/users").status_code == 403
+
+
+def test_manual_ip_block_reason_is_not_leaked_to_blocked_client():
+    from app.auth.models import IpBlock
+
+    secret_reason = "침해사고 #INTERNAL-9 / 사용자 X 연루"
+    victim_ip = "198.51.100.74"
+    with TestClient(app):
+        with app.state.database.session() as db:
+            db.add(
+                IpBlock(
+                    network=f"{victim_ip}/32",
+                    reason=secret_reason,
+                    reason_code="",
+                    source="manual",
+                    active=True,
+                )
+            )
+    with TestClient(app, client=(victim_ip, 50000)) as client:
+        # 미들웨어 IP 차단 캐시(5초 TTL)를 비워 방금 추가한 차단을 즉시 반영한다.
+        _auth_middleware()._ip_cache = (0.0, ())
+        response = client.get("/api/v1/public/summary")
+        assert response.status_code == 403
+        # 수동 차단의 내부 메모는 차단 당사자에게 노출되지 않는다.
+        assert secret_reason not in response.text
+        assert "차단된 네트워크]로 정지되었습니다" in response.json()["detail"]
+
+
+
+def test_undefined_api_flood_suspends_authenticated_user_account():
+    from app.auth.middleware import UNDEFINED_API_LIMITS
+
+    attacker_ip = "198.51.100.75"
+    email = "flood-member@example.com"
+    password = "Flood-Member-Basalt-2026!"
+    with TestClient(app, client=(attacker_ip, 50000)) as member, TestClient(
+        app, client=("198.51.100.76", 50000)
+    ) as admin, TestClient(app, client=("198.51.100.77", 50000)) as rejoin:
+        with app.state.database.session() as db:
+            user = User(
+                email=email,
+                password_hash=hash_password(password),
+                nickname="플러드정지-테스트",
+                role="member",
+                status="active",
+                email_verified_at=utcnow(),
+                approved_at=utcnow(),
+            )
+            db.add(user)
+            db.flush()
+            user_id = user.id
+        login(member, email, password)
+        middleware = _auth_middleware()
+        blocked = _prime_and_request(
+            middleware.undefined_api_limiter,
+            f"ip:{attacker_ip}",
+            UNDEFINED_API_LIMITS,
+            lambda: member.get("/api/v1/no-such-endpoint"),
+        )
+        assert blocked.status_code == 403
+        assert "정지되었습니다" in blocked.json()["detail"]
+
+        # 인증된 flood 케이스에서도 계정 정지(status='suspended')가 실제 DB에 반영된다.
+        with app.state.database.session() as db:
+            assert db.get(User, user_id).status == "suspended"
+
+        # 다른 IP에서 올바른 비밀번호로 재로그인해도 정지 사유가 안내되고 거부된다.
+        blocked_login = rejoin.post(
+            "/api/v1/auth/login",
+            json={
+                "email": email,
+                "password": password,
+                "remember": False,
+                "next": "/catalog",
+            },
+        )
+        assert blocked_login.status_code == 403
+        assert "비정상 API 반복 호출]로 정지되었습니다" in blocked_login.json()["detail"]
+
+        # 관리자가 회원 자동 정지를 해제하면 다시 로그인할 수 있다.
+        login(admin, "root@example.com", ADMIN_PASSWORD)
+        row = next(
+            item
+            for item in admin.get("/api/v1/admin/auto-blocks/users").json()["items"]
+            if item["user"] and item["user"]["nickname"] == "플러드정지-테스트"
+        )
+        assert row["active"] is True
+        release = admin.post(
+            f"/api/v1/admin/auto-blocks/users/{row['id']}/release",
+            headers=csrf(admin),
+        )
+        assert release.status_code == 200
+        login(rejoin, email, password)

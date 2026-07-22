@@ -270,17 +270,51 @@ class IpBlock(Base):
     __tablename__ = "auth_ip_blocks"
     __table_args__ = (
         Index("ix_auth_ip_blocks_active_expiry", "active", "expires_at"),
+        Index("ix_auth_ip_blocks_source_created", "source", "created_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     network: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     reason: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    # manual: 운영 콘솔에서 등록. auto: 이상행동 감지 미들웨어가 등록(자동 차단 목록에 노출).
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="manual")
+    reason_code: Mapped[str] = mapped_column(String(40), nullable=False, default="")
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_by_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("auth_users.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+
+
+class UserBlock(Base):
+    """이상행동 자동 차단으로 정지된 사용자 기록.
+
+    집행 자체는 User.status='suspended'가 담당하고, 이 행은 차단 사유·발동 시각·해제
+    이력을 보존해 '자동 차단 목록' 화면과 로그인 시 사유 안내에 쓰인다.
+    """
+
+    __tablename__ = "auth_user_blocks"
+    __table_args__ = (
+        Index("ix_auth_user_blocks_active_created", "active", "created_at"),
+        Index("ix_auth_user_blocks_user_active", "user_id", "active"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("auth_users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    reason: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    reason_code: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="auto")
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    released_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    released_by_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("auth_users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    user: Mapped["User"] = relationship("User", foreign_keys=[user_id])
 
 
 class PaymentPlan(Base):

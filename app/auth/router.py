@@ -68,6 +68,7 @@ from .service import (
     AccessService,
     ADMIN_PAGE_KEYS,
     AuthService,
+    AutoBlockService,
     DomainError,
     PaymentService,
     audit,
@@ -313,7 +314,13 @@ def login(req: LoginRequest, request: Request, db: Session = Depends(get_db)):
     }
     root = "/" + next_path.lstrip("/").split("/", 1)[0]
     if page_map.get(root) not in allowed:
-        next_path = "/profile" if "profile" in allowed else "/"
+        # 홈 기본 진입은 카탈로그. 카탈로그 권한이 없으면 프로필로 폴백한다.
+        if "catalog" in allowed:
+            next_path = "/catalog"
+        elif "profile" in allowed:
+            next_path = "/profile"
+        else:
+            next_path = "/"
     if user.mfa_enabled_at is not None:
         challenge = service.issue_mfa_challenge(
             user,
@@ -396,7 +403,13 @@ def verify_login_mfa(
     }
     root = "/" + next_path.lstrip("/").split("/", 1)[0]
     if page_map.get(root) not in allowed:
-        next_path = "/profile" if "profile" in allowed else "/"
+        # 홈 기본 진입은 카탈로그. 카탈로그 권한이 없으면 프로필로 폴백한다.
+        if "catalog" in allowed:
+            next_path = "/catalog"
+        elif "profile" in allowed:
+            next_path = "/profile"
+        else:
+            next_path = "/"
     response = JSONResponse(
         {
             "authenticated": True,
@@ -677,10 +690,22 @@ def put_preferences(
     db: Session = Depends(get_db),
 ):
     _validate_ontology_config(req.ontology)
-    if set(req.ui) - {"dense"} or (
+    if set(req.ui) - {"dense", "hidden_pages"} or (
         "dense" in req.ui and not isinstance(req.ui["dense"], bool)
     ):
         raise DomainError(400, "invalid ui preference", "화면 설정이 올바르지 않습니다.")
+    if "hidden_pages" in req.ui:
+        hidden = req.ui["hidden_pages"]
+        allowed_hidable = set(AccessService(db).allowed_pages(user)) - {"profile"}
+        if not isinstance(hidden, list) or any(
+            not isinstance(key, str) or key not in allowed_hidable for key in hidden
+        ):
+            raise DomainError(
+                400,
+                "invalid ui preference",
+                "숨길 수 있는 페이지는 내 접근 권한 안의 페이지(profile 제외)뿐입니다.",
+            )
+        req.ui["hidden_pages"] = sorted(set(hidden))
     row = db.scalar(select(UserPreference).where(UserPreference.user_id == user.id))
     if row is None:
         row = UserPreference(user_id=user.id)
@@ -716,6 +741,64 @@ def billing_plans(
         }
         for row in PaymentService(db).list_plans()
     ]
+
+
+@router.get("/billing/summary")
+def billing_summary(
+    user: User = Depends(current_user), db: Session = Depends(get_db)
+):
+    """결제 탭 상단용 요약 — 사용 중인 이용권·잔여일·승인 대기 요청.
+
+    타인 요청 내역은 포함하지 않으며, 요청 목록 전체는 운영자 화면
+    (/api/v1/admin/payments) 전용이다.
+    """
+    now = utcnow()
+    ends_at = user.membership_ends_at
+    active = ends_at is not None and ends_at > now
+    days_left = None
+    if active:
+        delta = ends_at - now
+        # 부분 일수는 올림 — 만료 당일도 '1일 남음'으로 표기한다.
+        days_left = delta.days + (1 if (delta.seconds or delta.microseconds) else 0)
+    latest_approved = db.scalar(
+        select(PaymentRequest)
+        .where(
+            PaymentRequest.user_id == user.id,
+            PaymentRequest.status == "approved",
+        )
+        .order_by(PaymentRequest.reviewed_at.desc(), PaymentRequest.id.desc())
+    )
+    pending = db.scalar(
+        select(PaymentRequest)
+        .where(
+            PaymentRequest.user_id == user.id,
+            PaymentRequest.status == "pending",
+        )
+        .order_by(PaymentRequest.requested_at.desc(), PaymentRequest.id.desc())
+    )
+    return {
+        "active": active,
+        "ends_at": iso_utc(ends_at),
+        "days_left": days_left,
+        "plan": (
+            {
+                "code": latest_approved.plan.code,
+                "label": latest_approved.plan.label,
+                "duration_days": latest_approved.plan.duration_days,
+            }
+            if active and latest_approved is not None
+            else None
+        ),
+        "pending_request": (
+            {
+                "plan_label": pending.plan.label,
+                "requested_at": iso_utc(pending.requested_at),
+            }
+            if pending is not None
+            else None
+        ),
+        "operator_account": user.role in {"operator", "admin"},
+    }
 
 
 @router.get("/billing/requests")
@@ -1410,6 +1493,56 @@ def delete_ip_block(
         details={"network": row.network},
     )
     return {"disabled": True}
+
+
+@router.get("/admin/auto-blocks/ips")
+def auto_blocked_ips(
+    page: int = 1,
+    size: int = 20,
+    _actor: User = Depends(require_operator),
+    db: Session = Depends(get_db),
+):
+    """이상행동 자동 차단 IP 목록 — 페이지 크기 10/20/30/50/100(기본 20)."""
+    service = AutoBlockService(db)
+    page, size = service.normalize_page(page, size)
+    items, total = service.list_ip_blocks(page, size)
+    return {"items": items, "total": total, "page": page, "size": size}
+
+
+@router.get("/admin/auto-blocks/users")
+def auto_blocked_users(
+    page: int = 1,
+    size: int = 20,
+    _actor: User = Depends(require_operator),
+    db: Session = Depends(get_db),
+):
+    """이상행동 자동 차단 회원 목록 — 페이지 크기 10/20/30/50/100(기본 20)."""
+    service = AutoBlockService(db)
+    page, size = service.normalize_page(page, size)
+    items, total = service.list_user_blocks(page, size)
+    return {"items": items, "total": total, "page": page, "size": size}
+
+
+@router.post("/admin/auto-blocks/ips/{block_id}/release")
+def release_auto_blocked_ip(
+    block_id: int,
+    request: Request,
+    actor: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    row = AutoBlockService(db).release_ip(block_id, actor, request.state.ip_hash)
+    return {"released": True, "network": row.network}
+
+
+@router.post("/admin/auto-blocks/users/{block_id}/release")
+def release_auto_blocked_user(
+    block_id: int,
+    request: Request,
+    actor: User = Depends(require_operator),
+    db: Session = Depends(get_db),
+):
+    row = AutoBlockService(db).release_user(block_id, actor, request.state.ip_hash)
+    return {"released": True, "block_id": row.id}
 
 
 @router.get("/admin/payments")

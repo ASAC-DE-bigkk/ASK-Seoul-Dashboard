@@ -22,12 +22,35 @@ window.AuthUI = (() => {
     if (!response.ok) {
       const error = new Error(body?.detail || body?.title || `HTTP ${response.status}`);
       error.status = response.status; error.body = body;
+      if (response.status === 403 && body?.title === 'access blocked') {
+        // 자동/수동 차단 — '[사유]로 정지되었습니다…' 전면 안내.
+        showBlockedOverlay(body.detail || '접근이 정지되었습니다.');
+        throw error;
+      }
       if (response.status === 401 && !location.pathname.startsWith('/auth/')) {
-        location.href = `/auth/login?next=${encodeURIComponent(location.pathname + location.search)}`;
+        let target = `/auth/login?next=${encodeURIComponent(location.pathname + location.search)}`;
+        if (body?.title === 'session expired') {
+          target += '&expired=1';
+          if (body.expired_at) target += `&at=${encodeURIComponent(body.expired_at)}`;
+        }
+        location.href = target;
       }
       throw error;
     }
     return body;
+  }
+
+  function showBlockedOverlay(message) {
+    if (document.getElementById('blocked-overlay')) return;
+    const overlay = document.createElement('div');
+    overlay.id = 'blocked-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;display:grid;place-items:center;'
+      + 'background:rgba(11,18,32,.72);backdrop-filter:blur(3px);';
+    overlay.innerHTML = `<div style="max-width:26rem;background:#fff;border-radius:14px;padding:26px;text-align:center">
+      <div style="font-size:2rem;margin-bottom:.6rem">&#9940;</div>
+      <p style="font-size:13px;line-height:1.7;color:#171c26">${escapeHtml(message)}</p>
+    </div>`;
+    document.body.appendChild(overlay);
   }
 
   async function session(refresh = false) {
@@ -56,9 +79,16 @@ window.AuthUI = (() => {
 
   function applyPermissions(user) {
     const allowed = new Set(user?.allowed_pages || []);
+    // '내 화면 설정'에서 사용자가 스스로 숨긴 페이지(표시용, 접근권한과 무관).
+    const hidden = new Set(user?.hidden_pages || []);
     document.querySelectorAll('[data-page-key]').forEach(element => {
       const keys = element.dataset.pageKey.split(',').map(v => v.trim());
-      element.hidden = !keys.some(key => allowed.has(key));
+      const accessible = keys.some(key => allowed.has(key));
+      // hidden_pages(표시용 숨김)는 사이드 네비·탭바 같은 '메뉴' 항목에만 적용한다.
+      // 콘텐츠 섹션(#billing 등)은 접근권으로만 게이팅해 빈 패널이 뜨지 않게 한다.
+      const isMenu = element.closest('.console-nav, .tabbar, .side');
+      const menuHidden = Boolean(isMenu) && keys.every(key => hidden.has(key));
+      element.hidden = !accessible || menuHidden;
     });
   }
 

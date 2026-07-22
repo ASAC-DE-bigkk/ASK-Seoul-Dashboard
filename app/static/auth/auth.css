@@ -107,10 +107,44 @@ a { color:var(--accent-deep); }
 .data-card { border:1px solid var(--line-soft); border-radius:10px; padding:14px; }
 .data-card .k { color:var(--ink-3); font-size:10px; text-transform:uppercase; letter-spacing:.08em; }
 .data-card .v { font-size:14px; font-weight:650; margin-top:4px; word-break:break-all; }
-.badge { display:inline-flex; align-items:center; border:1px solid var(--line); border-radius:999px;
+.badge { display:inline-flex; align-items:center; gap:4px; border:1px solid var(--line); border-radius:999px;
   padding:2px 8px; font-size:10px; color:var(--ink-2); background:#fff; }
 .badge.good { color:var(--good); border-color:#d8eed8; background:#f0f9f0; }
 .badge.warn { color:var(--warn); border-color:#f0dfae; background:#fff8e5; }
+.badge.bad { color:var(--bad); border-color:#f2c9b8; background:#fdf1ec; }
+.badge.muted { color:var(--ink-3); border-color:var(--line); background:#f4f6f9; }
+.badge .dot { width:6px; height:6px; border-radius:50%; background:currentColor; flex:none; }
+/* 상태 뱃지 라인 — 큰 카드 대신 작은 아이콘형 표기 */
+.status-line { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:12px; }
+.status-line .badge { font-size:10.5px; padding:3px 10px; }
+/* 콘솔 탭 */
+.tabbar { display:flex; flex-wrap:wrap; gap:4px; border-bottom:1px solid var(--line); margin-bottom:18px; }
+.tabbar button {
+  border:0; border-bottom:2px solid transparent; background:none; cursor:pointer;
+  padding:9px 13px; font-size:12.5px; font-weight:650; color:var(--ink-2);
+}
+.tabbar button:hover { color:var(--accent-deep); }
+.tabbar button.on { color:var(--accent-deep); border-bottom-color:var(--accent-deep); }
+.subtabbar { display:inline-flex; gap:4px; margin-top:14px; background:#f1f4f9; border-radius:9px; padding:3px; }
+.subtabbar button {
+  border:0; border-radius:7px; background:none; cursor:pointer; padding:6px 12px;
+  font-size:11.5px; font-weight:650; color:var(--ink-2);
+}
+.subtabbar button.on { background:#fff; color:var(--accent-deep); box-shadow:0 1px 4px rgba(18,26,44,.12); }
+/* 페이지네이션 */
+.pager { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:12px; font-size:11.5px; color:var(--ink-2); }
+.pager select { border:1px solid var(--line); border-radius:7px; padding:4px 8px; }
+.pager .btn { padding:4px 10px; font-size:11px; }
+.pager .pager-info { color:var(--ink-3); }
+/* 이용권 요약 카드 */
+.pass-card { display:flex; align-items:center; gap:14px; border:1px solid var(--line); border-radius:12px;
+  padding:16px; margin-top:14px; background:linear-gradient(120deg,#f4f8ff,#fff); }
+.pass-card .pass-icon { width:42px; height:42px; border-radius:11px; display:grid; place-items:center;
+  font-size:19px; background:var(--accent-soft); }
+.pass-card b { display:block; font-size:14px; }
+.pass-card small { color:var(--ink-3); display:block; margin-top:2px; }
+.pass-card .days { margin-left:auto; text-align:right; }
+.pass-card .days b { font-size:19px; color:var(--accent-deep); }
 .toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:14px; }
 .toolbar .btn { width:auto; }
 .table-wrap { overflow:auto; border:1px solid var(--line-soft); border-radius:10px; margin-top:14px; }

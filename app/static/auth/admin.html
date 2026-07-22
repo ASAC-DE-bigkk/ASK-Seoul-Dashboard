@@ -9,16 +9,17 @@
 <body>
 <div class="console">
   <aside class="console-side">
-    <a class="brand" href="/"><span class="brand-mark">AS</span>ASK SEOUL</a>
+    <a class="brand" href="/home"><span class="brand-mark">AS</span>ASK SEOUL</a>
     <div class="console-profile"><span class="avatar-lg" id="side-avatar">AS</span><b id="side-nickname">불러오는 중</b><span id="side-identity">권한 확인 중</span></div>
     <nav class="console-nav" id="admin-nav">
       <a href="#users" data-tab="users" data-page-key="admin_users">회원 관리</a>
       <a href="#access" data-tab="access" data-page-key="admin_access">접근 관리</a>
-      <a href="#payments" data-tab="payments" data-page-key="admin_payments">결제 승인</a>
+      <a href="#autoblocks" data-tab="autoblocks" data-page-key="admin_security">자동 차단 목록</a>
+      <a href="#payments" data-tab="payments" data-page-key="admin_payments">결제 관리</a>
       <a href="#policies" data-tab="policies" data-page-key="admin_policies">정책·IP</a>
       <a href="#audit" data-tab="audit" data-page-key="admin_audit">감사 로그</a>
-      <a href="/catalog" data-page-key="catalog">데이터 마켓플레이스</a>
-      <a href="/charts" data-page-key="charts">Charts Studio</a>
+      <a href="#health" data-tab="health" data-page-key="service_health">서비스 헬스</a>
+      <a href="/home">홈으로</a>
       <a href="/profile">내 프로필</a>
     </nav>
     <button class="btn logout" type="button" data-logout>로그아웃</button>
@@ -44,8 +45,38 @@
         <div id="access-matrix" class="table-wrap"></div>
       </section>
 
+      <section class="section admin-panel" id="panel-autoblocks" hidden>
+        <h2>자동 차단 목록</h2>
+        <p class="desc">이상행동(비정상 API 반복 호출·세션 조작 시도)이 감지되어 서버가 자동 차단한 IP와 회원입니다.</p>
+        <div class="subtabbar" id="autoblock-subtabs" role="tablist">
+          <button type="button" class="on" data-subtab="ips">아이피</button>
+          <button type="button" data-subtab="users">유저</button>
+        </div>
+        <div id="autoblock-ips">
+          <div class="table-wrap"><table><thead><tr><th>네트워크</th><th>사유</th><th>차단 시각</th><th>상태</th><th>관리</th></tr></thead><tbody id="autoblock-ips-body"></tbody></table></div>
+        </div>
+        <div id="autoblock-users" hidden>
+          <div class="table-wrap"><table><thead><tr><th>회원</th><th>역할</th><th>사유</th><th>차단 시각</th><th>상태</th><th>관리</th></tr></thead><tbody id="autoblock-users-body"></tbody></table></div>
+        </div>
+        <div class="pager">
+          <label>페이지 크기
+            <select id="autoblock-size">
+              <option value="10">10개</option>
+              <option value="20" selected>20개</option>
+              <option value="30">30개</option>
+              <option value="50">50개</option>
+              <option value="100">100개</option>
+            </select>
+          </label>
+          <button class="btn" id="autoblock-prev" type="button">이전</button>
+          <span class="pager-info" id="autoblock-page-info">1페이지</span>
+          <button class="btn" id="autoblock-next" type="button">다음</button>
+          <button class="btn" id="autoblock-refresh" type="button">새로고침</button>
+        </div>
+      </section>
+
       <section class="section admin-panel" id="panel-payments" hidden>
-        <h2>모의 결제 승인</h2><p class="desc">승인 시 선택 요금제 기간만큼 현재 이용권 종료일 뒤에 연장됩니다.</p>
+        <h2>결제 관리</h2><p class="desc">회원 결제 요청 내역은 운영자 이상만 볼 수 있습니다. 승인 시 선택 요금제 기간만큼 현재 이용권 종료일 뒤에 연장됩니다.</p>
         <div class="toolbar"><select id="payment-status"><option value="pending">승인 대기</option><option value="approved">승인됨</option><option value="rejected">거절됨</option></select><button class="btn" id="refresh-payments" type="button">새로고침</button></div>
         <div class="table-wrap"><table><thead><tr><th>요청일</th><th>회원</th><th>요금제</th><th>상태</th><th>알림</th><th>처리</th></tr></thead><tbody id="payments-body"></tbody></table></div>
       </section>
@@ -81,6 +112,19 @@
         </div>
         <div class="table-wrap"><table><thead><tr><th>시각</th><th>이벤트</th><th>행위자</th><th>대상</th><th>IP 지문</th><th>상세</th></tr></thead><tbody id="audit-body"></tbody></table></div>
         <div class="toolbar"><button class="btn" id="load-more-audit" type="button" hidden>이전 기록 더 보기</button></div>
+      </section>
+
+      <section class="section admin-panel" id="panel-health" hidden>
+        <h2>서비스 헬스</h2><p class="desc">앱·인증 DB·카탈로그 스냅샷 상태를 확인합니다. 운영자 이상만 볼 수 있는 화면입니다.</p>
+        <div class="toolbar"><button class="btn" id="refresh-health" type="button">다시 확인</button><span class="desc" id="health-checked-at"></span></div>
+        <div class="grid-3">
+          <div class="data-card"><div class="k">App</div><div class="v" id="health-app">확인 중</div></div>
+          <div class="data-card"><div class="k">Auth DB</div><div class="v" id="health-db">확인 중</div></div>
+          <div class="data-card"><div class="k">Catalog tables</div><div class="v" id="health-tables">-</div></div>
+          <div class="data-card"><div class="k">Snapshot generated</div><div class="v" id="health-snapshot">-</div></div>
+          <div class="data-card"><div class="k">Datasets</div><div class="v" id="health-datasets">-</div></div>
+          <div class="data-card"><div class="k">Total rows</div><div class="v" id="health-rows">-</div></div>
+        </div>
       </section>
     </div>
   </main>

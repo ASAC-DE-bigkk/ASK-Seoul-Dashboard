@@ -16,7 +16,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy.exc import SQLAlchemyError
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -329,6 +329,27 @@ def table_sample(name: str):
 @app.get("/", include_in_schema=False)
 def landing() -> FileResponse:
     return FileResponse(HERE / "static" / "landing.html")
+
+
+@app.get("/home", include_in_schema=False)
+def home(request: Request) -> RedirectResponse:
+    """'홈으로' 공용 진입점.
+
+    로그인 사용자는 권한에 맞는 화면(카탈로그 우선)으로, 비로그인 사용자는
+    권한 없이 볼 수 있는 랜딩으로 보낸다.
+    """
+    user = getattr(request.state, "user", None)
+    if user is None:
+        return RedirectResponse("/", status_code=303)
+    from .auth.service import AccessService
+
+    with _database.session() as db:
+        current = db.get(type(user), user.id)
+        access = AccessService(db)
+        for page_key, path in (("catalog", "/catalog"), ("charts", "/charts")):
+            if current is not None and access.can_access(current, page_key):
+                return RedirectResponse(path, status_code=303)
+    return RedirectResponse("/profile", status_code=303)
 
 
 @app.get("/catalog", include_in_schema=False)

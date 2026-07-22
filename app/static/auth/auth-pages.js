@@ -23,6 +23,20 @@ async function setupLogin() {
   const params = new URLSearchParams(location.search);
   if (params.get('verified')) showMessage('이메일 인증이 완료되었습니다. 로그인하세요.', 'good');
   if (params.get('mfa') === 'enabled') showMessage('MFA 설정이 완료되었습니다. 다시 로그인하세요.', 'good');
+  if (params.get('expired')) {
+    const at = params.get('at');
+    let when = '';
+    if (at) {
+      const parsed = new Date(at);
+      if (!Number.isNaN(parsed.getTime())) when = parsed.toLocaleString('ko-KR');
+    }
+    showMessage(
+      when
+        ? `${when}에 접속이 끊겼습니다. 다시 로그인해 주세요.`
+        : '세션이 만료되어 접속이 끊겼습니다. 다시 로그인해 주세요.',
+      'warn',
+    );
+  }
   const state = await AuthUI.session().catch(() => ({ authenticated:false }));
   if (state.authenticated) location.href = nextParam();
   document.getElementById('login-form').onsubmit = async event => {
