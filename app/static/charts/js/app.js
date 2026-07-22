@@ -161,6 +161,25 @@ function fieldLabel(src, name) {
   const f = src.fields.find(f => f.name === name);
   return f ? f.label : name;
 }
+
+/* 식별 승격 — 표시 필드(이름/한글) 바인딩을 동반 코드 필드(id_field)로 바꿔 집계한다.
+ * 저장물(chart.bindings)은 그대로 두고 쿼리·렌더에만 적용: GROUP BY 가 항상 코드가 되어
+ * 동명 지역(신사동: 강남·관악)이 합산되지 않고, 화면 표기는 value_labels(코드→한글)가 맡는다.
+ * 반환 promoted = {승격된필드: 원래필드} — 컬럼 라벨을 사용자가 고른 필드명으로 유지할 때 쓴다. */
+function effectiveBindings(src, b) {
+  const be = {}, promoted = {};
+  const used = new Set(Object.values(b));
+  Object.entries(b).forEach(([slot, name]) => {
+    const f = src.fields.find(x => x.name === name);
+    const target = f && f.id_field
+      && src.fields.some(x => x.name === f.id_field)
+      && !used.has(f.id_field)                       // 코드 필드가 이미 다른 슬롯에 있으면 유지
+      ? f.id_field : name;
+    if (target !== name) { promoted[target] = name; used.add(target); }
+    be[slot] = target;
+  });
+  return { be, promoted };
+}
 const AGG_LABEL = { sum: '합계', avg: '평균', count: '건수', count_distinct: '고유수', min: '최소', max: '최대' };
 const FILTER_OP_LABEL = {
   eq: '같음', neq: '같지 않음', gte: '이상', lte: '이하',
@@ -409,24 +428,27 @@ async function loadTile(chart, force, quiet) {
     // 사라진 필드의 role 폴백 결과를 in-memory 저장물에도 반영한다. 그렇지 않으면
     // 화면은 정상인데 다음 레이아웃 저장에서 오래된 필드명 때문에 전체 저장이 실패한다.
     if (JSON.stringify(chart.bindings || {}) !== JSON.stringify(b)) chart.bindings = { ...b };
-    const { spec, alias } = buildSpec(chart, src, b);
+    const { be, promoted } = effectiveBindings(src, b);
+    const { spec, alias } = buildSpec(chart, src, be);
     if (force) spec.force = true;               // 신선 캐시 무시 ('다시 조회')
     const res = await API.query(spec);
     if (!current()) return;                    // 재조회/페이지 전환의 늦은 응답 폐기
     tileState(el, null);
 
     const ctx = {
-      el, chart, b, src,
+      el, chart, b: be, src,
       rows: res.rows, cols: res.columns,
       geo: def.geo || null,
-      regionRole: b.region ? (src.fields.find(f => f.name === b.region) || {}).role : null,
+      regionRole: be.region ? (src.fields.find(f => f.name === be.region) || {}).role : null,
       valueLabel: chart.agg === 'count' ? '건수' : `${fieldLabel(src, b.value || b.x)} ${AGG_LABEL[chart.agg || 'sum'] || ''}`.trim(),
       xLabel: b.x ? fieldLabel(src, b.x) : '', yLabel: b.y ? fieldLabel(src, b.y) : '',
       colLabels: {},
       raceState: RENDER.raceSnapshot(rec.inst),
       isCurrent: current,
     };
-    ctx.colLabels = Object.fromEntries(res.columns.map(c => [c, c === alias ? ctx.valueLabel : fieldLabel(src, c)]));
+    // 승격된 컬럼의 헤더/툴팁 라벨은 사용자가 고른 표시 필드명으로 유지한다
+    ctx.colLabels = Object.fromEntries(res.columns.map(c =>
+      [c, c === alias ? ctx.valueLabel : fieldLabel(src, promoted[c] || c)]));
     if (!hasRenderableMeasures(chart, spec, res)) {
       const old = echarts.getInstanceByDom(plot);
       if (old) RENDER.dispose(old);             // 직전 렌더 잔상이 '데이터 없음' 뒤로 비치지 않게
@@ -1434,7 +1456,8 @@ async function runPreview() {
   try {
     const draft = currentDraft();
     const { b, def } = resolveBindings(draft, CFG.src);
-    const { spec, alias } = buildSpec(draft, CFG.src, b);
+    const { be, promoted } = effectiveBindings(CFG.src, b);
+    const { spec, alias } = buildSpec(draft, CFG.src, be);
     const res = await API.query(spec);
     if (!CFG.open || gen !== CFG.previewGen || key !== previewFingerprint()) return false;
     if (!hasRenderableMeasures(draft, spec, res)) {
@@ -1449,11 +1472,11 @@ async function runPreview() {
     const colLabels = Object.fromEntries(res.columns.map(column =>
       [column, column === alias
         ? (draft.agg === 'count' ? '건수' : `${fieldLabel(CFG.src, b.value || b.x)} ${AGG_LABEL[draft.agg] || ''}`.trim())
-        : fieldLabel(CFG.src, column)]));
+        : fieldLabel(CFG.src, promoted[column] || column)]));
     const inst = await RENDER.render(box.querySelector('.plot'), {
-      el: box, chart: draft, b, src: CFG.src, rows: res.rows, cols: res.columns,
+      el: box, chart: draft, b: be, src: CFG.src, rows: res.rows, cols: res.columns,
       geo: def.geo || null,
-      regionRole: b.region ? (CFG.src.fields.find(f => f.name === b.region) || {}).role : null,
+      regionRole: be.region ? (CFG.src.fields.find(f => f.name === be.region) || {}).role : null,
       valueLabel: draft.agg === 'count' ? '건수' : `${fieldLabel(CFG.src, b.value || b.x)} ${AGG_LABEL[draft.agg] || ''}`.trim(),
       xLabel: b.x ? fieldLabel(CFG.src, b.x) : '', yLabel: b.y ? fieldLabel(CFG.src, b.y) : '',
       colLabels,
@@ -1763,6 +1786,20 @@ async function selftest() {
     ok('reco prefers line for time source', recoFlow.line && recoFlow.line.score >= 3);
     ok('reco suggests race for time source', recoFlow.race && recoFlow.race.score >= 3
        && RECO.combos(flowSrc, 'race').length >= 1);
+
+    // 식별 승격 — 이름 바인딩은 쿼리에서 동반 코드로 바뀌고(동명 합산 방지),
+    // 코드값은 value_labels 로 한글 표기, 행정동 지도는 MOIS 코드로 폴리곤 매칭
+    const eb = effectiveBindings(flowSrc, { axis: 'admin_dong', value: 'cnt' });
+    ok('identity promoted to code', eb.be.axis === 'admin_dong_code'
+       && eb.promoted.admin_dong_code === 'admin_dong' && eb.be.value === 'cnt');
+    ok('code value labels served',
+       (S.meta.value_labels.admin_dong_code || {})['1168051000'] === '신사동·강남구'
+       && typeDef('map_seoul_dong').slots[0].accepts.includes('geo_dong_code'));
+    await GEO.ensure('seoul_dong');
+    const dongMatch = GEO.matchRows('seoul_dong', [['1168051000', 3], ['1162068500', 5]], true);
+    ok('seoul_dong map matches by MOIS code', dongMatch.matched === 2
+       && dongMatch.data.some(d => d.name === '신사동·강남구' && d.value === 3)
+       && dongMatch.data.some(d => d.name === '신사동·관악구' && d.value === 5));
 
     // 성격 급한 이용자 — 검색 입력이 첫 글자 뒤 DOM 교체로 포커스를 잃지 않아야 한다.
     openCfg('add');
