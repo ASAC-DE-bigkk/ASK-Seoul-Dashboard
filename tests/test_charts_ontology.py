@@ -8,9 +8,10 @@ import pytest
 
 from app.charts import querybuilder
 from app.charts.layouts import SEED_PATH
-from app.charts.models import ChartConfig
+from app.charts.models import ChartConfig, SourceDetail
 from app.charts.ontology import (
     CHART_TYPES,
+    companion_pairs,
     compatible_bindings,
     registry,
 )
@@ -248,6 +249,50 @@ def test_roles_and_recommendation_metadata_cover_non_commerce_fields() -> None:
     assert by_name(city)["hr"]["allowed_filter_ops"] == [
         "eq", "neq", "gte", "lte", "between", "in", "not_in"
     ]
+
+
+def test_identity_companions_promote_codes_and_serve_korean_labels() -> None:
+    """식별=코드·표기=한글 계약 — 동명이동(신사동)이 이름 그룹핑으로 합산되지 않도록
+    표시 필드에 id_field(코드 승격), 코드값에 value_labels(한글, 중복은 구명 접미사)."""
+    assert companion_pairs(
+        ["admin_dong_code", "admin_dong", "gu_code", "gu", "legal_code", "legal_dong",
+         "major", "major_ko", "cnt", "ym"]
+    ) == [
+        ("admin_dong_code", "admin_dong"),
+        ("gu_code", "gu"),
+        ("legal_code", "legal_dong"),
+        ("major", "major_ko"),
+    ]
+
+    summary = registry.get("gold_license_dong_summary")
+    assert summary is not None
+    by_name = {field["name"]: field for field in summary["fields"]}
+    assert by_name["admin_dong"]["id_field"] == "admin_dong_code"
+    assert by_name["gu"]["id_field"] == "gu_code"
+    assert by_name["admin_dong_code"]["label_field"] == "admin_dong"
+    # pydantic 응답 계약이 동반 메타를 잘라먹지 않는다
+    detail = SourceDetail.model_validate(summary)
+    assert next(f for f in detail.fields if f.name == "admin_dong").id_field == "admin_dong_code"
+
+    flow = registry.get("gold_license_flow_monthly")
+    assert flow is not None
+    flow_by = {field["name"]: field for field in flow["fields"]}
+    assert flow_by["legal_dong"]["role"] == "geo_legal_dong"
+    assert flow_by["legal_dong"]["id_field"] == "legal_code"
+    matrix = registry.get("gold_license_dong_category_matrix")
+    assert matrix is not None
+    matrix_by = {field["name"]: field for field in matrix["fields"]}
+    assert matrix_by["category_ko"]["id_field"] == "category"
+
+    meta = registry.meta()
+    labels = meta["value_labels"]["admin_dong_code"]
+    assert labels["1168051000"] == "신사동·강남구"   # 강남구 신사동
+    assert labels["1162068500"] == "신사동·관악구"   # 관악구 신사동 — 코드로 분리
+    assert labels["UNK"] == "미상"                   # 정적 큐레이션이 실측 사전 위에 얹힘
+    assert meta["value_labels"]["gu_code"]["11680"] == "강남구"
+    assert meta["value_labels"]["category"]          # 업종 en→ko 실측 사전
+    # 행정동 지도: 자산 mois_code 병기로 코드 role 매칭 허용
+    assert "geo_dong_code" in CHART_TYPES["map_seoul_dong"]["slots"][0]["accepts"]
 
 
 def test_hidden_chart_types_keep_a_render_contract() -> None:

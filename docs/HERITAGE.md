@@ -45,8 +45,9 @@ Charts Studio 가 라이브 질의를 갖는 이유: 사용자가 소스·차원
 |---|---|
 | Trino | 로컬은 상위 `sample/docker-compose.yml`의 Trino를 `http://127.0.0.1:30586`으로 재사용하고 두 번째 companion을 띄우지 않는다. dev는 `http://trino:8080`. 카탈로그 `iceberg_dev`, 스키마 `commerce` |
 | 소스 정본 | `snapshot/catalog_snapshot.json` — **낡을 수 있다**. 실물 스키마와 다르면 갱신은 `extract.py`. 질의는 cast 기반이라 낡아도 안전(실사례: `cohort_y` varchar→integer 드리프트를 흡수) |
-| 지역 코드 | gold 데이터는 전부 **MOIS(행안부)** 체계(종로=11110). GeoJSON 자산 중 seoul_gu/seoul_dong 의 code 는 **KOSTAT(통계청)** 체계(종로=11010) — **혼용 금지**. 매칭 규칙은 `geo.js` 상단 주석과 [design-intents D-3](charts-design-intents.md) |
-| 코드값 | `major`: health/culture/industry/environment · `event_type`: opened/closed · `age_band`: `0_lt1y`~`5_ge20y` (라벨 사전은 `ontology.VALUE_LABELS`) |
+| 지역 코드 | gold 데이터는 전부 **MOIS(행안부)** 체계(종로=11110). GeoJSON 자산의 원 code 는 **KOSTAT(통계청)** 체계(종로=11010) — **혼용 금지**. 단 seoul_dong 폴리곤에는 `scripts/assign_mois_codes.py` 가 MOIS `mois_code`(10자리)를 병기해 코드 매칭을 지원한다. 매칭 규칙은 `geo.js` 상단 주석과 [design-intents D-3](charts-design-intents.md) |
+| 식별 vs 표시 | 코드/이름(en/ko) 동반 컬럼은 **식별·집계=코드, 표기=한글**이 원칙. 서버가 스냅샷 `code_labels` 실측으로 `value_labels`(코드→한글, 중복 동명은 `신사동·강남구`)와 필드 `id_field`/`label_field` 를 서빙하고, 프론트 `effectiveBindings` 가 이름 바인딩을 코드 GROUP BY 로 승격한다(저장물 불변) — 동명이동 합산 방지 |
+| 코드값 | `major`: health/culture/industry/environment · `event_type`: opened/closed · `age_band`: `0_lt1y`~`5_ge20y` (정적 사전은 `ontology.VALUE_LABELS`, 데이터 유래 사전은 스냅샷 `code_labels`) |
 | 결측 표기 | 지역 코드 결측은 문자열 `'UNK'` — 지도 매칭에서 제외된다 |
 | 파이썬/실행 | Python 3.9+ 호환. FastAPI·SQLAlchemy·Argon2. 포트 관례 8765(문서)·8799(개발) |
 | 인증 DB | `DATABASE_URL`, 기본 `sqlite:///./data/ask_seoul.db`. PostgreSQL/MySQL dialect DDL도 테스트 |
@@ -143,8 +144,8 @@ open "http://127.0.0.1:8765/charts?selftest=1"
 
 | 한계 | 배경 |
 |---|---|
-| 이름 기반 동 단위 그룹핑은 동명이동을 서버에서 합칠 수 있음 | dims 가 단일 필드라서. 지도는 모호 제외로 방어하지만 테이블/막대는 합산된다. 근본 해결은 코드+이름 복합 dim 지원 |
-| 행정동 지도 코드 매칭 미지원 | 자산 코드가 KOSTAT 이라 MOIS 10자리와 호환 불가 — 이름 매칭만. MOIS 경계 GeoJSON 확보 시 교체 |
+| 동반 코드가 없는 소스의 이름 그룹핑은 여전히 이름 기준 | 식별 승격(id_field)은 같은 소스에 코드 컬럼과 라벨 사전이 있을 때만 동작. 코드 없는 소스는 종전대로 이름 그룹핑(지도는 모호 제외로 방어) — 근본 해결은 해당 gold 에 코드 컬럼 추가 |
+| 행정동 지도 폴리곤은 2013 경계 | `mois_code` 매칭 421/423. 자산에만 있는 폐지동(상일동·일원2동)은 코드 미부여, 2013 이후 신설동(상일1동·항동)은 폴리곤 없음 — 커버리지 카운터에 드러남. 최신 MOIS 경계 GeoJSON 확보 시 `assign_mois_codes.py` 재실행으로 갱신 |
 | 가중 평균 미지원 | 집계가 단일 필드 함수뿐. 비율의 정확한 재집계(ratio-of-sums)가 필요하면 파생 measure 지원을 설계할 것. 그때까지 시드는 "단순평균" 명시·표본 필터로 정직하게 |
 | 앱 rate limit은 프로세스 로컬 | 운영의 정본은 AWS WAF/GCP Cloud Armor/Cloudflare. Trino live 질의는 별도 동시 실행 상한 적용, 필요 시 Redis 공용 limiter |
 | CSP inline style 허용 잔존 | inline script는 응답 hash, event handler는 `script-src-attr 'none'`. 기존 inline style은 공개 운영 전 CSS class로 이동 |
