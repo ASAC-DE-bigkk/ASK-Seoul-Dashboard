@@ -6,6 +6,7 @@
 
 | 문서 | 내용 | 대상 독자 |
 |---|---|---|
+| [running.md](running.md) | **실행 정본** — 환경별(로컬 호스트/로컬 Docker/개발 Docker) 기동 결정표·명령·검증 | 대시보드를 띄우는 사람 |
 | [local-analysis-human-guide.md](local-analysis-human-guide.md) | **로컬 분석 정본** — 로그인 없이 시작·확인·전환·문제 해결 | 데이터를 살펴보는 팀원 |
 | [local-analysis-agent-runbook.md](local-analysis-agent-runbook.md) | local_auto 불변식·허용/금지 작업·검증·보고 형식 | 로컬 환경을 준비하거나 코드를 수정하는 AI |
 | [maintanance/README.md](maintanance/README.md) | 로컬 자동 분석·인증 개발·최초 최고관리자 접속·필수 운영 원칙 | 개발·설치·운영 책임자 |

@@ -9,3 +9,6 @@ data/
 .env.*
 !.env.example
 !.env.local.example
+# 환경별 compose 런타임 env(비밀값). 템플릿(*.example)만 커밋한다.
+deploy/env/*.env
+!deploy/env/*.env.example

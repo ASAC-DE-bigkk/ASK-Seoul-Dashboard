@@ -341,6 +341,27 @@ class AuthSecurityMiddleware(BaseHTTPMiddleware):
             )
         return self._secure(response, request)
 
+    def _client_is_local(self, client_ip: str) -> bool:
+        """loopback 클라이언트, 또는 local_auto에서 명시 허용된 사설 대역(컨테이너 게이트웨이).
+
+        컨테이너로 로컬 실행 시 앱이 보는 클라이언트 IP는 Docker 게이트웨이(사설)라
+        loopback이 아니다. AUTH_LOCAL_AUTO_CLIENT_CIDRS로 그 대역을 명시 허용하되,
+        컨테이너를 127.0.0.1에만 publish한다는 전제에서만 안전하다.
+        """
+        try:
+            address = ipaddress.ip_address(client_ip)
+        except ValueError:
+            return False
+        if address.is_loopback:
+            return True
+        for cidr in self.settings.local_auto_client_cidrs:
+            try:
+                if address in ipaddress.ip_network(cidr, strict=False):
+                    return True
+            except ValueError:
+                continue
+        return False
+
     def _should_auto_login(
         self, request: Request, client_ip: str, page_key: str | None
     ) -> bool:
@@ -351,19 +372,11 @@ class AuthSecurityMiddleware(BaseHTTPMiddleware):
             "/home",
         }:
             return False
-        try:
-            return ipaddress.ip_address(client_ip).is_loopback
-        except ValueError:
-            return False
+        return self._client_is_local(client_ip)
 
     def _detection_exempt(self, client_ip: str) -> bool:
-        """로컬 분석 모드의 loopback은 자동 차단 대상에서 제외한다(자기 잠금 방지)."""
-        if not self.settings.local_auto:
-            return False
-        try:
-            return ipaddress.ip_address(client_ip).is_loopback
-        except ValueError:
-            return False
+        """로컬 분석 모드의 loopback/허용 대역은 자동 차단 대상에서 제외한다(자기 잠금 방지)."""
+        return self.settings.local_auto and self._client_is_local(client_ip)
 
     def _register_tamper(self, db, request: Request, client_ip: str) -> Response | None:
         """세션 조작 신호를 누적하고 임계 초과 시 자동 차단 응답을 반환한다."""

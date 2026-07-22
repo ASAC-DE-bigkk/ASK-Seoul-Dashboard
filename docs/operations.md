@@ -50,7 +50,19 @@ docker compose exec trino trino --execute 'SELECT 1'  # query engine 확인
 | postgres | 호스트 미노출 | Airflow 메타 DB, 대시보드 인증 DB와 별개 |
 | marquez-api / marquez-web | 5000 / 3000 | 무관 (OpenLineage 워크로드) |
 
-### 1-2. 대시보드 서버
+### 1-2. 환경별 Docker Compose (local / dev)
+
+대시보드를 환경별로 Docker Compose로 지정 실행할 수 있다. **명령·결정표·보안 주의의 정본은
+[실행 매뉴얼 running.md](running.md)** 다. 요약:
+
+```bash
+docker compose -f deploy/compose.local.yaml up --build          # 로컬(로그인 없이 운영자, 상위 Trino)
+docker compose -f deploy/compose.dev.yaml --env-file deploy/env/dev.env up --build  # 개발(required + PostgreSQL)
+```
+
+운영(prod) 서버 배포는 이미지 기반 `deploy/compose.yaml`(CI/서버 전용)을 사용한다.
+
+### 1-3. 대시보드 서버 (호스트에서 직접 실행)
 
 팀원이 로그인 없이 로컬 데이터 분석만 수행할 때:
 
