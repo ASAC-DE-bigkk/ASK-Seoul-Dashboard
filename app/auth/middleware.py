@@ -6,19 +6,27 @@ import ipaddress
 import logging
 import threading
 import time
+from html import escape
+from urllib.parse import quote
 from collections import defaultdict
 from datetime import timedelta
 from urllib.parse import urlsplit
 
 from fastapi import Request
-from fastapi.responses import JSONResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .models import IpBlock, User, utcnow
 from .security import ip_in_networks, stable_digest, token_digest
-from .service import AccessService, AuthService, LOCAL_ANALYST_EMAIL
+from .service import (
+    AUTO_BLOCK_REASONS,
+    AccessService,
+    AuthService,
+    AutoBlockService,
+    LOCAL_ANALYST_EMAIL,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -26,6 +34,25 @@ logger = logging.getLogger(__name__)
 
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 WINDOWS = {"second": 1, "minute": 60, "hour": 3600, "day": 86_400}
+
+# 이상행동 자동 차단 임계값(고정 윈도, IP 단위).
+# undefined_api: 존재하지 않는 /api/* 경로(404) 반복 호출.
+# tamper: 세션 조작 신호(변형 토큰·세션 바인딩 불일치·위조 CSRF 쌍).
+UNDEFINED_API_LIMITS = {"minute": 30}
+TAMPER_LIMITS = {"minute": 8}
+
+_SESSION_TOKEN_CHARS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+)
+
+
+def malformed_session_token(raw: str) -> bool:
+    """정상 발급 토큰(urlsafe base64)에서 나올 수 없는 형태인지 판정한다."""
+    return (
+        len(raw) < 24
+        or len(raw) > 256
+        or any(ch not in _SESSION_TOKEN_CHARS for ch in raw)
+    )
 
 
 def rate_limit_category(path: str, *, authenticated: bool) -> str:
@@ -149,6 +176,8 @@ class AuthSecurityMiddleware(BaseHTTPMiddleware):
         self.settings = settings
         self.inline_script_hashes_by_path = inline_script_hashes_by_path or {}
         self.rate_limiter = InMemoryRateLimiter()
+        self.undefined_api_limiter = InMemoryRateLimiter()
+        self.tamper_limiter = InMemoryRateLimiter()
         self._ip_cache: tuple[float, tuple[str, ...]] = (0.0, ())
 
     async def dispatch(self, request: Request, call_next) -> Response:
@@ -177,15 +206,20 @@ class AuthSecurityMiddleware(BaseHTTPMiddleware):
         try:
             with database.session() as db:
                 if self._blocked_ip(db, client_ip):
-                    return self._secure(problem(403, "request blocked", "차단된 네트워크입니다."), request)
+                    return self._secure(
+                        self._blocked_ip_response(db, request, client_ip), request
+                    )
 
                 raw_session = request.cookies.get(settings.cookie_name)
                 auth = AuthService(db, settings)
+                session_failure: dict = {}
                 current = auth.current_session(
                     raw_session,
                     ip_hash=ip_hash,
                     user_agent_hash=ua_hash,
+                    failure=session_failure,
                 )
+                request.state.session_failure = session_failure
                 if current:
                     auth_session, user = current
                     if settings.local_auto and user.email == LOCAL_ANALYST_EMAIL:
@@ -194,6 +228,25 @@ class AuthSecurityMiddleware(BaseHTTPMiddleware):
                         user = auth.ensure_local_analyst()
                     request.state.auth_session = auth_session
                     request.state.user = user
+                elif raw_session:
+                    failure_reason = session_failure.get("reason", "")
+                    if failure_reason == "inactive_user":
+                        # 정지된 회원은 유효했던 쿠키로도 백엔드에 도달하지 못하게
+                        # 미들웨어에서 사유와 함께 근원 차단한다.
+                        block = AutoBlockService(db).active_user_block(
+                            session_failure.get("user_id", 0)
+                        )
+                        if block is not None:
+                            return self._secure(
+                                self._suspension_response(request, block.reason),
+                                request,
+                            )
+                    if failure_reason == "binding_mismatch" or malformed_session_token(
+                        raw_session
+                    ):
+                        blocked = self._register_tamper(db, request, client_ip)
+                        if blocked is not None:
+                            return self._secure(blocked, request)
 
                 page_key = page_key_for_path(request.url.path)
                 if current is None and self._should_auto_login(
@@ -228,11 +281,17 @@ class AuthSecurityMiddleware(BaseHTTPMiddleware):
                 if request.method not in SAFE_METHODS:
                     csrf_response = self._csrf_check(request)
                     if csrf_response:
+                        if getattr(request.state, "csrf_forged", False):
+                            blocked = self._register_tamper(db, request, client_ip)
+                            if blocked is not None:
+                                return self._secure(blocked, request)
                         return self._secure(csrf_response, request)
 
                 if page_key:
                     if request.state.user is None:
-                        return self._secure(self._unauthenticated(request), request)
+                        return self._secure(
+                            self._unauthenticated(request, session_failure), request
+                        )
                     access = AccessService(db)
                     allowed = access.can_access(request.state.user, page_key)
                     if request.url.path in {"/admin", "/static/auth/admin.html"}:
@@ -244,12 +303,28 @@ class AuthSecurityMiddleware(BaseHTTPMiddleware):
                                 "admin_policies",
                                 "admin_payments",
                                 "admin_audit",
+                                "admin_security",
+                                "service_health",
                             )
                         )
                     if not allowed:
                         return self._secure(self._forbidden(request), request)
 
             response = await call_next(request)
+            if (
+                response.status_code == 404
+                and request.url.path.startswith("/api/")
+                and not self._detection_exempt(client_ip)
+            ):
+                allowed_calls, _ = self.undefined_api_limiter.check(
+                    f"ip:{client_ip}", UNDEFINED_API_LIMITS
+                )
+                if not allowed_calls:
+                    with database.session() as db:
+                        blocked = self._trigger_auto_block(
+                            db, request, client_ip, "undefined_api_flood"
+                        )
+                    return self._secure(blocked, request)
         except SQLAlchemyError as exc:
             logger.error(
                 "auth database request failed path=%s error_type=%s",
@@ -271,12 +346,76 @@ class AuthSecurityMiddleware(BaseHTTPMiddleware):
     ) -> bool:
         if not self.settings.local_auto or request.method not in {"GET", "HEAD"}:
             return False
-        if page_key is None and request.url.path != "/api/v1/auth/session":
+        if page_key is None and request.url.path not in {
+            "/api/v1/auth/session",
+            "/home",
+        }:
             return False
         try:
             return ipaddress.ip_address(client_ip).is_loopback
         except ValueError:
             return False
+
+    def _detection_exempt(self, client_ip: str) -> bool:
+        """로컬 분석 모드의 loopback은 자동 차단 대상에서 제외한다(자기 잠금 방지)."""
+        if not self.settings.local_auto:
+            return False
+        try:
+            return ipaddress.ip_address(client_ip).is_loopback
+        except ValueError:
+            return False
+
+    def _register_tamper(self, db, request: Request, client_ip: str) -> Response | None:
+        """세션 조작 신호를 누적하고 임계 초과 시 자동 차단 응답을 반환한다."""
+        if self._detection_exempt(client_ip):
+            return None
+        allowed, _ = self.tamper_limiter.check(f"ip:{client_ip}", TAMPER_LIMITS)
+        if allowed:
+            return None
+        return self._trigger_auto_block(db, request, client_ip, "session_tampering")
+
+    def _trigger_auto_block(
+        self, db, request: Request, client_ip: str, reason_code: str
+    ) -> Response:
+        service = AutoBlockService(db)
+        service.block_ip(client_ip, reason_code, ip_hash=request.state.ip_hash)
+        user = getattr(request.state, "user", None)
+        if user is not None:
+            service.block_user(user, reason_code, ip_hash=request.state.ip_hash)
+        # 다음 요청부터 IP 차단이 즉시 적용되도록 차단 목록 캐시를 비운다.
+        self._ip_cache = (0.0, ())
+        reason = AUTO_BLOCK_REASONS.get(reason_code, reason_code)
+        return self._suspension_response(request, reason)
+
+    def _blocked_ip_response(self, db, request: Request, client_ip: str) -> Response:
+        row = AutoBlockService(db).active_ip_block(client_ip)
+        # 자동 차단 사유는 표준 문구(AUTO_BLOCK_REASONS)뿐이라 노출해도 안전하다.
+        # 수동 차단의 reason은 운영 내부 메모일 수 있으므로 당사자에게 노출하지 않는다.
+        if row is not None and row.source == "auto" and row.reason:
+            reason = row.reason
+        else:
+            reason = "차단된 네트워크"
+        return self._suspension_response(request, reason)
+
+    def _suspension_response(self, request: Request, reason: str) -> Response:
+        message = (
+            f"[{reason}]로 정지되었습니다. "
+            "자세한 사항은 사이트 운영자에게 문의 바랍니다."
+        )
+        if self._wants_html(request):
+            return HTMLResponse(
+                "<!doctype html><html lang=\"ko\"><head><meta charset=\"utf-8\">"
+                "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+                "<title>접근 정지 · ASK SEOUL</title></head>"
+                "<body style=\"margin:0;display:grid;place-items:center;min-height:100vh;"
+                "background:#0f1115;color:#e8eaed;font-family:system-ui,sans-serif\">"
+                "<div style=\"max-width:28rem;padding:2rem;text-align:center\">"
+                "<div style=\"font-size:2.2rem;margin-bottom:.8rem\">&#9940;</div>"
+                f"<p style=\"line-height:1.7\">{escape(message)}</p>"
+                "</div></body></html>",
+                status_code=403,
+            )
+        return problem(403, "access blocked", message)
 
     def _client_ip(self, request: Request) -> str:
         direct = request.client.host if request.client else "0.0.0.0"
@@ -370,6 +509,8 @@ class AuthSecurityMiddleware(BaseHTTPMiddleware):
         if not cookie or not header or cookie != header:
             return problem(403, "csrf validation failed", "CSRF 토큰이 올바르지 않습니다.")
         if token_digest(cookie, self.settings.session_pepper) != session.csrf_hash:
+            # 쿠키·헤더 쌍은 맞췄지만 세션과 무관한 값 — 위조 시도로 본다.
+            request.state.csrf_forged = True
             return problem(403, "csrf validation failed", "CSRF 토큰이 올바르지 않습니다.")
         return None
 
@@ -377,7 +518,29 @@ class AuthSecurityMiddleware(BaseHTTPMiddleware):
     def _wants_html(request: Request) -> bool:
         return "text/html" in request.headers.get("accept", "")
 
-    def _unauthenticated(self, request: Request) -> Response:
+    def _unauthenticated(
+        self, request: Request, failure: dict | None = None
+    ) -> Response:
+        reason = (failure or {}).get("reason", "")
+        expired_at = (failure or {}).get("expired_at") or ""
+        if reason in {"expired", "idle_expired"}:
+            # 세션 만료는 단순 미로그인과 구분해 끊긴 시각을 안내한다.
+            if self._wants_html(request):
+                url = f"/auth/login?next={request.url.path}&expired=1"
+                if expired_at:
+                    url += f"&at={quote(expired_at)}"
+                return RedirectResponse(url, status_code=303)
+            return JSONResponse(
+                status_code=401,
+                media_type="application/problem+json",
+                content={
+                    "type": "about:blank",
+                    "title": "session expired",
+                    "status": 401,
+                    "detail": "세션이 만료되어 접속이 끊겼습니다. 다시 로그인해 주세요.",
+                    "expired_at": expired_at,
+                },
+            )
         if self._wants_html(request):
             next_path = request.url.path
             return RedirectResponse(f"/auth/login?next={next_path}", status_code=303)
@@ -488,6 +651,7 @@ def page_key_for_path(path: str) -> str | None:
         ("/api/v1/admin/ip-blocks", "admin_policies"),
         ("/api/v1/admin/payments", "admin_payments"),
         ("/api/v1/admin/audit", "admin_audit"),
+        ("/api/v1/admin/auto-blocks", "admin_security"),
     )
     for prefix, key in prefixes:
         if path == prefix or path.startswith(prefix + "/"):

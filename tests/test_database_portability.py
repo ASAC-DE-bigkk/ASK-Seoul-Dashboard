@@ -30,6 +30,7 @@ from app.auth.models import (
     utcnow,
 )
 from app.auth.service import (
+    SCHEMA_VERSION,
     initialize_database,
     prepare_database_for_app,
     verify_database_schema,
@@ -160,10 +161,19 @@ def test_sqlite_v1_schema_migrates_to_current(tmp_path):
         item["name"]
         for item in inspector.get_indexes("auth_notification_deliveries")
     }
+    # v7: 자동 차단 원장(auth_user_blocks)과 IpBlock 자동/수동 구분 컬럼
+    assert "auth_user_blocks" in inspector.get_table_names()
+    ip_block_columns = {
+        item["name"] for item in inspector.get_columns("auth_ip_blocks")
+    }
+    assert {"source", "reason_code"} <= ip_block_columns
+    assert "ix_auth_ip_blocks_source_created" in {
+        item["name"] for item in inspector.get_indexes("auth_ip_blocks")
+    }
     with database.session() as db:
         assert db.scalar(
             select(SchemaVersion.version).order_by(SchemaVersion.version.desc())
-        ) == 6
+        ) == SCHEMA_VERSION
 
 
 def test_unversioned_auth_schema_fails_closed_but_unrelated_tables_are_allowed(
@@ -461,7 +471,9 @@ def test_bootstrap_cannot_add_an_admin_to_nonempty_database(tmp_path):
         )
 
 
-@pytest.mark.parametrize("version", (None, 6, 7))
+@pytest.mark.parametrize(
+    "version", (None, SCHEMA_VERSION, SCHEMA_VERSION + 1)
+)
 def test_invalid_existing_schema_fails_before_creating_tables(tmp_path, version):
     path = tmp_path / f"invalid-version-{version}.db"
     connection = sqlite3.connect(path)

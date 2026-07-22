@@ -5,6 +5,7 @@ let accessData;
 let users = [];
 let auditBeforeId = null;
 let usersBefore = null;
+const autoblockState = { subtab: 'ips', page: 1, size: 20, total: 0 };
 
 function adminMessage(text, kind = 'info') {
   const box = document.getElementById('message');
@@ -23,12 +24,19 @@ function badge(value) {
 }
 function showPanel(name) {
   const allowed = new Set(adminState.user.allowed_pages || []);
-  const map = {users:'admin_users',access:'admin_access',payments:'admin_payments',policies:'admin_policies',audit:'admin_audit'};
+  const map = {
+    users:'admin_users', access:'admin_access', preview:'admin_access',
+    autoblocks:'admin_security', payments:'admin_payments', policies:'admin_policies',
+    audit:'admin_audit', health:'service_health',
+  };
   if (!allowed.has(map[name])) name = Object.keys(map).find(key => allowed.has(map[key])) || 'users';
   document.querySelectorAll('.admin-panel').forEach(panel => panel.hidden = panel.id !== `panel-${name}`);
   document.querySelectorAll('[data-tab]').forEach(link => link.classList.toggle('on', link.dataset.tab === name));
   if (location.hash !== `#${name}`) history.replaceState(null, '', `#${name}`);
-  ({users:loadUsers,access:loadAccess,payments:loadPayments,policies:loadPolicies,audit:() => loadAudit(false)}[name])().catch(error => adminMessage(error.message, 'bad'));
+  ({
+    users:loadUsers, access:loadAccess, preview:loadPreview, autoblocks:loadAutoBlocks,
+    payments:loadPayments, policies:loadPolicies, audit:() => loadAudit(false), health:loadHealth,
+  }[name])().catch(error => adminMessage(error.message, 'bad'));
 }
 
 async function loadUsers(append = false) {
@@ -202,6 +210,89 @@ async function loadIpBlocks() {
   });
 }
 
+async function loadPreview() {
+  // 정적 미리보기 링크만 있는 탭 — 별도 로드 없음.
+}
+
+async function loadAutoBlocks() {
+  const { subtab, page, size } = autoblockState;
+  document.getElementById('autoblock-ips').hidden = subtab !== 'ips';
+  document.getElementById('autoblock-users').hidden = subtab !== 'users';
+  document.querySelectorAll('#autoblock-subtabs [data-subtab]').forEach(button =>
+    button.classList.toggle('on', button.dataset.subtab === subtab));
+  const result = await AuthUI.api(`/api/v1/admin/auto-blocks/${subtab}?page=${page}&size=${size}`);
+  autoblockState.total = result.total;
+  autoblockState.page = result.page;
+  const totalPages = Math.max(1, Math.ceil(result.total / result.size));
+  document.getElementById('autoblock-page-info').textContent =
+    `${result.page} / ${totalPages}페이지 · 총 ${result.total}건`;
+  document.getElementById('autoblock-prev').disabled = result.page <= 1;
+  document.getElementById('autoblock-next').disabled = result.page >= totalPages;
+  const isAdmin = adminState.user.role === 'admin';
+  if (subtab === 'ips') {
+    document.getElementById('autoblock-ips-body').innerHTML = result.items.length ? result.items.map(row => `<tr>
+      <td><code>${AuthUI.escapeHtml(row.network)}</code></td>
+      <td>${AuthUI.escapeHtml(row.reason || '-')}</td>
+      <td>${dateText(row.created_at)}</td>
+      <td>${row.active ? '<span class="badge bad">차단 중</span>' : '<span class="badge muted">해제됨</span>'}</td>
+      <td>${row.active && isAdmin ? `<button class="btn" type="button" data-release-ip="${row.id}">해제</button>` : '-'}</td>
+    </tr>`).join('') : '<tr><td colspan="5">자동 차단된 IP가 없습니다.</td></tr>';
+    document.querySelectorAll('[data-release-ip]').forEach(button => button.onclick = async () => {
+      if (!confirm('이 IP의 자동 차단을 해제할까요?')) return;
+      button.disabled = true;
+      try {
+        await AuthUI.api(`/api/v1/admin/auto-blocks/ips/${button.dataset.releaseIp}/release`, {method:'POST'});
+        adminMessage('IP 자동 차단을 해제했습니다.', 'good');
+        await loadAutoBlocks();
+      } catch (error) { adminMessage(error.message, 'bad'); button.disabled = false; }
+    });
+  } else {
+    document.getElementById('autoblock-users-body').innerHTML = result.items.length ? result.items.map(row => `<tr>
+      <td>${row.user ? `<b>${AuthUI.escapeHtml(row.user.nickname)}</b><br><small>${AuthUI.escapeHtml(row.user.masked_id)}</small>` : '탈퇴한 회원'}</td>
+      <td>${row.user ? AuthUI.escapeHtml(row.user.role_label) : '-'}</td>
+      <td>${AuthUI.escapeHtml(row.reason || '-')}</td>
+      <td>${dateText(row.created_at)}</td>
+      <td>${row.active ? '<span class="badge bad">정지 중</span>' : `<span class="badge muted">해제됨${row.released_at ? ' · ' + dateText(row.released_at) : ''}</span>`}</td>
+      <td>${row.active ? `<button class="btn" type="button" data-release-user="${row.id}">정지 해제</button>` : '-'}</td>
+    </tr>`).join('') : '<tr><td colspan="6">자동 차단된 회원이 없습니다.</td></tr>';
+    document.querySelectorAll('[data-release-user]').forEach(button => button.onclick = async () => {
+      if (!confirm('이 회원의 자동 정지를 해제하고 계정을 다시 활성화할까요?')) return;
+      button.disabled = true;
+      try {
+        await AuthUI.api(`/api/v1/admin/auto-blocks/users/${button.dataset.releaseUser}/release`, {method:'POST'});
+        adminMessage('회원 자동 정지를 해제했습니다.', 'good');
+        await loadAutoBlocks();
+      } catch (error) { adminMessage(error.message, 'bad'); button.disabled = false; }
+    });
+  }
+}
+
+async function loadHealth() {
+  document.getElementById('health-checked-at').textContent =
+    `확인 시각 ${new Intl.DateTimeFormat('ko-KR', {dateStyle:'short', timeStyle:'medium'}).format(new Date())}`;
+  try {
+    const health = await AuthUI.api('/health');
+    document.getElementById('health-app').innerHTML = '<span class="badge good">정상</span>';
+    document.getElementById('health-db').innerHTML = health.database === 'ok'
+      ? '<span class="badge good">정상</span>' : '<span class="badge bad">오류</span>';
+    document.getElementById('health-tables').textContent = health.table_count ?? '-';
+    document.getElementById('health-snapshot').textContent = dateText(health.generated_at);
+  } catch (error) {
+    document.getElementById('health-app').innerHTML = '<span class="badge bad">응답 없음</span>';
+    document.getElementById('health-db').innerHTML = '<span class="badge bad">오류</span>';
+    adminMessage(error.message, 'bad');
+  }
+  try {
+    const summary = await AuthUI.api('/api/v1/public/summary');
+    document.getElementById('health-datasets').textContent = summary.dataset_count ?? '-';
+    document.getElementById('health-rows').textContent =
+      summary.total_rows != null ? Number(summary.total_rows).toLocaleString('ko-KR') : '-';
+  } catch (_error) {
+    document.getElementById('health-datasets').textContent = '-';
+    document.getElementById('health-rows').textContent = '-';
+  }
+}
+
 function auditIdentity(value) {
   return value
     ? `${AuthUI.escapeHtml(value.nickname)}<br><small>${AuthUI.escapeHtml(value.masked_id)} · ${AuthUI.escapeHtml(value.role_label)}</small>`
@@ -251,6 +342,28 @@ async function bootAdmin() {
   document.getElementById('payment-status').onchange = document.getElementById('refresh-payments').onclick;
   document.getElementById('refresh-audit').onclick = () => loadAudit(false).catch(error => adminMessage(error.message,'bad'));
   document.getElementById('load-more-audit').onclick = () => loadAudit(true).catch(error => adminMessage(error.message,'bad'));
+  document.querySelectorAll('#autoblock-subtabs [data-subtab]').forEach(button => button.onclick = () => {
+    autoblockState.subtab = button.dataset.subtab;
+    autoblockState.page = 1;
+    loadAutoBlocks().catch(error => adminMessage(error.message,'bad'));
+  });
+  document.getElementById('autoblock-size').onchange = event => {
+    autoblockState.size = Number(event.currentTarget.value) || 20;
+    autoblockState.page = 1;
+    loadAutoBlocks().catch(error => adminMessage(error.message,'bad'));
+  };
+  document.getElementById('autoblock-prev').onclick = () => {
+    if (autoblockState.page > 1) {
+      autoblockState.page -= 1;
+      loadAutoBlocks().catch(error => adminMessage(error.message,'bad'));
+    }
+  };
+  document.getElementById('autoblock-next').onclick = () => {
+    autoblockState.page += 1;
+    loadAutoBlocks().catch(error => adminMessage(error.message,'bad'));
+  };
+  document.getElementById('autoblock-refresh').onclick = () => loadAutoBlocks().catch(error => adminMessage(error.message,'bad'));
+  document.getElementById('refresh-health').onclick = () => loadHealth().catch(error => adminMessage(error.message,'bad'));
   document.getElementById('user-form').onsubmit = saveUser;
   document.getElementById('copy-user-id').onclick = async () => {
     try {

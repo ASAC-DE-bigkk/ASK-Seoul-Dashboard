@@ -1,6 +1,7 @@
 """인증·권한·정책·결제 도메인 서비스."""
 from __future__ import annotations
 
+import ipaddress
 import random
 import hmac
 from datetime import datetime, timedelta
@@ -47,6 +48,7 @@ from .models import (
     RolePagePermission,
     SchemaVersion,
     User,
+    UserBlock,
     UserPagePermission,
     UserPreference,
     utcnow,
@@ -56,6 +58,7 @@ from .security import (
     ROLE_RANK,
     ROLE_LABELS,
     hash_password,
+    ip_in_networks,
     iso_utc,
     mask_public_id,
     normalize_email,
@@ -73,7 +76,7 @@ from .security import (
 )
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 TERMS_VERSION = "2026-07-17"
 LOCAL_ANALYST_EMAIL = "local-analyst@localhost.invalid"
 LOCAL_ANALYST_NICKNAME = "local-analyst"
@@ -81,14 +84,16 @@ LOCAL_ANALYST_NICKNAME = "local-analyst"
 PAGE_DEFINITIONS = (
     ("catalog", "데이터 마켓플레이스", "/catalog", "published gold 카탈로그와 API"),
     ("charts", "Charts Studio", "/charts", "사용자별 gold 시각화 레이아웃"),
-    ("profile", "프로필", "/profile", "내 정보·비밀번호·온톨로지 설정"),
-    ("billing", "이용권", "/profile#billing", "모의 결제 요청과 이용권 확인"),
+    ("profile", "프로필", "/profile", "내 정보·비밀번호·화면 설정"),
+    ("billing", "결제", "/profile#billing", "이용권 결제 요청과 잔여 기간 확인"),
     ("api_docs", "API 문서", "/docs", "Swagger/OpenAPI 문서"),
     ("admin_users", "회원 관리", "/admin#users", "회원 승인·역할·이용권"),
     ("admin_access", "접근 관리", "/admin#access", "역할/사용자 페이지 권한"),
     ("admin_policies", "정책 관리", "/admin#policies", "공통·개인·IP·요청량 정책"),
-    ("admin_payments", "결제 승인", "/admin#payments", "모의 결제 요청 승인"),
+    ("admin_payments", "결제 관리", "/admin#payments", "모의 결제 요청 승인"),
     ("admin_audit", "감사 로그", "/admin#audit", "보안·관리 이벤트 조회"),
+    ("admin_security", "자동 차단", "/admin#autoblocks", "이상행동 자동 차단 IP·회원 목록"),
+    ("service_health", "서비스 헬스", "/admin#health", "앱·인증 DB·스냅샷 상태 확인"),
 )
 
 DEFAULT_ROLE_ACCESS = {
@@ -104,6 +109,8 @@ DEFAULT_ROLE_ACCESS = {
         "admin_policies",
         "admin_payments",
         "admin_audit",
+        "admin_security",
+        "service_health",
     },
     "admin": {key for key, *_ in PAGE_DEFINITIONS},
 }
@@ -113,6 +120,8 @@ ADMIN_PAGE_KEYS = {
     "admin_policies",
     "admin_payments",
     "admin_audit",
+    "admin_security",
+    "service_health",
 }
 
 DEFAULT_RATE_LIMIT = {
@@ -517,6 +526,42 @@ def _migrate_schema(database: Database, db: Session, current_version: int) -> No
                 )
         db.add(SchemaVersion(version=6))
         version = 6
+    if version == 6:
+        # auth_user_blocks 테이블은 create_all이 먼저 생성한다. 기존 auth_ip_blocks에는
+        # 자동 차단 구분 컬럼(source, reason_code)만 추가한다.
+        ip_columns = {
+            item["name"]
+            for item in inspect(database.engine).get_columns("auth_ip_blocks")
+        }
+        text_type = String(20).compile(dialect=database.engine.dialect)
+        code_type = String(40).compile(dialect=database.engine.dialect)
+        if "source" not in ip_columns:
+            db.execute(
+                text(
+                    "ALTER TABLE auth_ip_blocks "
+                    f"ADD COLUMN source {text_type} NOT NULL DEFAULT 'manual'"
+                )
+            )
+        if "reason_code" not in ip_columns:
+            db.execute(
+                text(
+                    "ALTER TABLE auth_ip_blocks "
+                    f"ADD COLUMN reason_code {code_type} NOT NULL DEFAULT ''"
+                )
+            )
+        ip_indexes = {
+            item["name"]
+            for item in inspect(database.engine).get_indexes("auth_ip_blocks")
+        }
+        if "ix_auth_ip_blocks_source_created" not in ip_indexes:
+            db.execute(
+                text(
+                    "CREATE INDEX ix_auth_ip_blocks_source_created "
+                    "ON auth_ip_blocks (source, created_at)"
+                )
+            )
+        db.add(SchemaVersion(version=7))
+        version = 7
     if version != SCHEMA_VERSION:
         raise RuntimeError(
             f"schema {current_version}에서 {SCHEMA_VERSION}으로 마이그레이션할 수 없습니다."
@@ -540,6 +585,12 @@ def _seed_pages(db: Session) -> None:
                     db.flush()
             except IntegrityError:
                 pass
+        else:
+            # 라벨·경로·설명은 PAGE_DEFINITIONS가 정본이므로 기존 행도 최신으로 맞춘다.
+            row = existing[key]
+            row.label = label
+            row.path_pattern = path
+            row.description = description
     db.flush()
     pages = {p.key: p for p in db.scalars(select(PageResource)).all()}
     for role, allowed_keys in DEFAULT_ROLE_ACCESS.items():
@@ -729,7 +780,32 @@ def user_payload(
         "last_login_at": iso_utc(user.last_login_at),
         "created_at": iso_utc(user.created_at),
         "allowed_pages": allowed,
+        "hidden_pages": _user_hidden_pages(db, user, allowed),
     }
+
+
+def _user_hidden_pages(db: Session, user: User, allowed: list[str]) -> list[str]:
+    """사용자가 '내 화면 설정'에서 스스로 숨긴 페이지 키 목록.
+
+    표시용 설정일 뿐 서버 접근 제어(allowed_pages)에는 영향을 주지 않는다.
+    profile은 설정 화면 자체이므로 숨길 수 없다.
+    """
+    preference = db.scalar(
+        select(UserPreference).where(UserPreference.user_id == user.id)
+    )
+    if preference is None or not isinstance(preference.ui, dict):
+        return []
+    raw = preference.ui.get("hidden_pages")
+    if not isinstance(raw, list):
+        return []
+    allowed_set = set(allowed)
+    return sorted(
+        {
+            key
+            for key in raw
+            if isinstance(key, str) and key != "profile" and key in allowed_set
+        }
+    )
 
 
 class AccessService:
@@ -899,10 +975,12 @@ class AuthService:
         self.db.flush()
 
     def ensure_local_analyst(self) -> User:
-        """로컬 자동 로그인 전용 일반 회원을 확보한다.
+        """로컬 자동 로그인 전용 운영자 계정을 확보한다.
 
         이 계정은 비밀번호로 로그인하지 않으며 local_auto의 fail-closed 설정과
         loopback 요청 검사를 모두 통과한 미들웨어에서만 세션을 발급받는다.
+        운영자 권한이므로 관리 콘솔과 '권한별 화면 관리'(게스트/멤버 화면 미리보기)를
+        로컬에서 그대로 사용할 수 있다.
         """
         if not self.settings.local_auto:
             raise RuntimeError("로컬 분석 계정은 AUTH_MODE=local_auto에서만 사용할 수 있습니다.")
@@ -918,7 +996,7 @@ class AuthService:
                 email=LOCAL_ANALYST_EMAIL,
                 password_hash=hash_password(random_token(48)),
                 nickname=nickname,
-                role="member",
+                role="operator",
                 status="active",
                 email_verified_at=now,
                 approved_at=now,
@@ -934,7 +1012,7 @@ class AuthService:
                     self.db,
                     "local_analyst_created",
                     target=user,
-                    details={"auth_mode": "local_auto"},
+                    details={"auth_mode": "local_auto", "role": "operator"},
                 )
             except IntegrityError:
                 user = self.db.scalar(
@@ -942,11 +1020,19 @@ class AuthService:
                 )
         if user is None:
             raise RuntimeError("로컬 분석 계정을 생성할 수 없습니다.")
-        if user.role != "member" or user.status != "active":
-            raise RuntimeError(
-                "예약된 로컬 분석 계정의 역할 또는 상태가 올바르지 않습니다."
+        # 구버전에서 member로 만들어진 기존 로컬 예약 계정도 운영자로 승격한다.
+        if user.role != "operator":
+            user.role = "operator"
+            audit(
+                self.db,
+                "local_analyst_promoted",
+                target=user,
+                details={"auth_mode": "local_auto", "role": "operator"},
             )
+        if user.status != "active":
+            user.status = "active"
         self._ensure_local_analyst_chart_access(user)
+        self.db.flush()
         return user
 
     def register(
@@ -1171,6 +1257,19 @@ class AuthService:
                     "approval pending",
                     "이메일 인증 또는 관리자 승인을 기다리고 있습니다.",
                 )
+            if user.status == "suspended":
+                block = self.db.scalar(
+                    select(UserBlock)
+                    .where(UserBlock.user_id == user.id, UserBlock.active.is_(True))
+                    .order_by(UserBlock.created_at.desc(), UserBlock.id.desc())
+                )
+                if block is not None:
+                    raise DomainError(
+                        403,
+                        "account suspended",
+                        f"[{block.reason}]로 정지되었습니다. "
+                        "자세한 사항은 사이트 운영자에게 문의 바랍니다.",
+                    )
             raise DomainError(403, "account unavailable", "사용할 수 없는 계정입니다.")
         audit(self.db, "password_factor_succeeded", actor=user, target=user, ip_hash=ip_hash)
         return user
@@ -1721,8 +1820,23 @@ class AuthService:
         *,
         ip_hash: str = "",
         user_agent_hash: str = "",
+        failure: dict[str, Any] | None = None,
     ) -> tuple[AuthSession, User] | None:
+        """세션 토큰을 검증한다.
+
+        실패 시 None을 반환하며, 호출자가 failure dict를 넘기면 실패 사유를 채운다
+        (미들웨어가 세션 만료 안내와 변조 감지에 사용). 사유:
+        missing/unknown/expired/revoked/inactive_user/mfa_revoked/idle_expired/
+        binding_mismatch.
+        """
+
+        def _fail(reason: str, **extra: Any) -> None:
+            if failure is not None:
+                failure["reason"] = reason
+                failure.update(extra)
+
         if not raw_token:
+            _fail("missing")
             return None
         digest = token_digest(raw_token, self.settings.session_pepper)
         row = self.db.scalar(
@@ -1733,9 +1847,19 @@ class AuthService:
             )
         )
         if row is None:
+            stale = self.db.scalar(
+                select(AuthSession).where(AuthSession.token_hash == digest)
+            )
+            if stale is None:
+                _fail("unknown")
+            elif stale.revoked_at is not None:
+                _fail("revoked", expired_at=iso_utc(stale.revoked_at))
+            else:
+                _fail("expired", expired_at=iso_utc(stale.expires_at))
             return None
         user = self.db.get(User, row.user_id)
         if user is None or user.status != "active":
+            _fail("inactive_user", user_id=row.user_id)
             return None
         if (
             self.settings.require_mfa_for_privileged
@@ -1749,6 +1873,7 @@ class AuthService:
                 target=user,
                 ip_hash=ip_hash,
             )
+            _fail("mfa_revoked")
             return None
         now = utcnow()
         idle_limit = (
@@ -1765,6 +1890,7 @@ class AuthService:
                 ip_hash=ip_hash,
                 details={"remembered": row.remembered},
             )
+            _fail("idle_expired", expired_at=iso_utc(row.last_seen_at + idle_limit))
             return None
         if (
             self.settings.bind_session_user_agent
@@ -1773,10 +1899,12 @@ class AuthService:
         ):
             row.revoked_at = utcnow()
             audit(self.db, "session_binding_mismatch", target=user, ip_hash=ip_hash)
+            _fail("binding_mismatch")
             return None
         if self.settings.bind_session_ip and row.ip_hash and row.ip_hash != ip_hash:
             row.revoked_at = utcnow()
             audit(self.db, "session_binding_mismatch", target=user, ip_hash=ip_hash)
+            _fail("binding_mismatch")
             return None
         if row.last_seen_at < now - timedelta(minutes=5):
             row.last_seen_at = now
@@ -2033,6 +2161,270 @@ class AuthService:
             )
         ).all():
             row.revoked_at = utcnow()
+
+
+AUTO_BLOCK_REASONS = {
+    "undefined_api_flood": "비정상 API 반복 호출",
+    "session_tampering": "세션 조작 시도",
+}
+# 자동 IP 차단은 만료를 둔다. 공유/프록시 egress IP 오차단, 스푸핑 그리핑, 운영자
+# 자기 IP 자기잠금의 피해를 시간 제한한다. 영구 차단이 필요하면 운영자가 콘솔에서
+# 수동 IpBlock(source='manual')으로 등록한다.
+AUTO_BLOCK_IP_TTL = timedelta(hours=1)
+AUTO_BLOCK_PAGE_SIZES = (10, 20, 30, 50, 100)
+AUTO_BLOCK_DEFAULT_PAGE_SIZE = 20
+
+
+def _single_ip_network(client_ip: str) -> str | None:
+    """단일 클라이언트 IP를 IpBlock.network 형식(CIDR)으로 변환한다."""
+    try:
+        address = ipaddress.ip_address(client_ip)
+    except ValueError:
+        return None
+    suffix = 32 if address.version == 4 else 128
+    return f"{address}/{suffix}"
+
+
+class AutoBlockService:
+    """이상행동 자동 차단의 기록·해제·목록 서비스.
+
+    집행은 기존 경로를 재사용한다 — IP는 IpBlock(미들웨어 _blocked_ip),
+    사용자는 User.status='suspended'(세션 resolve 거부). 이 서비스는 그 위에
+    사유가 담긴 원장(UserBlock, IpBlock.source='auto')을 유지한다.
+    """
+
+    def __init__(self, db: Session):
+        self.db = db
+
+    def block_ip(
+        self, client_ip: str, reason_code: str, *, ip_hash: str = ""
+    ) -> IpBlock | None:
+        network = _single_ip_network(client_ip)
+        if network is None:
+            return None
+        reason = AUTO_BLOCK_REASONS.get(reason_code, reason_code)
+        expires_at = utcnow() + AUTO_BLOCK_IP_TTL
+        row = self.db.scalar(select(IpBlock).where(IpBlock.network == network))
+        if row is None:
+            row = IpBlock(
+                network=network,
+                reason=reason,
+                reason_code=reason_code,
+                source="auto",
+                active=True,
+                expires_at=expires_at,
+            )
+            try:
+                with self.db.begin_nested():
+                    self.db.add(row)
+                    self.db.flush()
+            except IntegrityError:
+                row = self.db.scalar(
+                    select(IpBlock).where(IpBlock.network == network)
+                )
+                if row is None:
+                    return None
+        # 운영자 수동 차단(source='manual') 행은 자동 로직이 절대 덮어쓰지 않는다.
+        if row.source != "auto":
+            return row
+        row.active = True
+        row.reason = reason
+        row.reason_code = reason_code
+        row.expires_at = expires_at
+        audit(
+            self.db,
+            "auto_block_ip",
+            ip_hash=ip_hash,
+            details={"network": network, "reason_code": reason_code},
+        )
+        return row
+
+    def block_user(
+        self, user: User, reason_code: str, *, ip_hash: str = ""
+    ) -> UserBlock | None:
+        # 안전장치: 최고관리자 계정은 자동 정지하지 않는다(운영 잠금 방지).
+        # 발원 IP 차단은 별도로 수행되므로 공격 트래픽 자체는 차단된다.
+        if user.role == "admin":
+            return None
+        # 자동 차단 경로는 이미 닫힌 요청 세션에서 로드된(detached) User 인스턴스를
+        # 넘길 수 있으므로 status 전이는 in-memory 대입이 아니라 명시적 UPDATE로 발행한다.
+        def _suspend() -> None:
+            self.db.execute(
+                update(User)
+                .where(User.id == user.id)
+                .values(status="suspended", updated_at=utcnow())
+            )
+
+        reason = AUTO_BLOCK_REASONS.get(reason_code, reason_code)
+        existing = self.db.scalar(
+            select(UserBlock)
+            .where(UserBlock.user_id == user.id, UserBlock.active.is_(True))
+            .order_by(UserBlock.created_at.desc(), UserBlock.id.desc())
+        )
+        if existing is not None:
+            _suspend()
+            return existing
+        row = UserBlock(
+            user_id=user.id,
+            reason=reason,
+            reason_code=reason_code,
+            source="auto",
+            active=True,
+        )
+        self.db.add(row)
+        _suspend()
+        for session_row in self.db.scalars(
+            select(AuthSession).where(
+                AuthSession.user_id == user.id, AuthSession.revoked_at.is_(None)
+            )
+        ).all():
+            session_row.revoked_at = utcnow()
+        audit(
+            self.db,
+            "auto_block_user",
+            target=user,
+            ip_hash=ip_hash,
+            details={"reason_code": reason_code},
+        )
+        self.db.flush()
+        return row
+
+    def active_user_block(self, user_id: int) -> UserBlock | None:
+        return self.db.scalar(
+            select(UserBlock)
+            .where(UserBlock.user_id == user_id, UserBlock.active.is_(True))
+            .order_by(UserBlock.created_at.desc(), UserBlock.id.desc())
+        )
+
+    def active_ip_block(self, client_ip: str) -> IpBlock | None:
+        """차단된 요청의 안내 문구용 — 해당 IP를 포함하는 활성 차단 중 최신 행."""
+        now = utcnow()
+        rows = self.db.scalars(
+            select(IpBlock)
+            .where(
+                IpBlock.active.is_(True),
+                (IpBlock.expires_at.is_(None) | (IpBlock.expires_at > now)),
+            )
+            .order_by(IpBlock.created_at.desc(), IpBlock.id.desc())
+        ).all()
+        for row in rows:
+            if ip_in_networks(client_ip, (row.network,)):
+                return row
+        return None
+
+    @staticmethod
+    def normalize_page(page: int | None, size: int | None) -> tuple[int, int]:
+        normalized_size = (
+            size
+            if size in AUTO_BLOCK_PAGE_SIZES
+            else AUTO_BLOCK_DEFAULT_PAGE_SIZE
+        )
+        normalized_page = max(1, page or 1)
+        return normalized_page, normalized_size
+
+    def list_ip_blocks(self, page: int, size: int) -> tuple[list[dict], int]:
+        base = select(IpBlock).where(IpBlock.source == "auto")
+        total = self.db.scalar(
+            select(func.count()).select_from(base.subquery())
+        ) or 0
+        rows = self.db.scalars(
+            base.order_by(IpBlock.created_at.desc(), IpBlock.id.desc())
+            .offset((page - 1) * size)
+            .limit(size)
+        ).all()
+        items = [
+            {
+                "id": row.id,
+                "network": row.network,
+                "reason": row.reason,
+                "reason_code": row.reason_code,
+                "active": row.active,
+                "created_at": iso_utc(row.created_at),
+                "expires_at": iso_utc(row.expires_at),
+            }
+            for row in rows
+        ]
+        return items, int(total)
+
+    def list_user_blocks(self, page: int, size: int) -> tuple[list[dict], int]:
+        base = select(UserBlock)
+        total = self.db.scalar(
+            select(func.count()).select_from(base.subquery())
+        ) or 0
+        rows = self.db.scalars(
+            base.order_by(UserBlock.created_at.desc(), UserBlock.id.desc())
+            .offset((page - 1) * size)
+            .limit(size)
+        ).all()
+        items = []
+        for row in rows:
+            user = self.db.get(User, row.user_id)
+            items.append(
+                {
+                    "id": row.id,
+                    "user": (
+                        {
+                            "nickname": user.nickname,
+                            "masked_id": mask_public_id(user.public_id),
+                            "role": user.role,
+                            "role_label": ROLE_LABELS.get(user.role, user.role),
+                            "status": user.status,
+                        }
+                        if user is not None
+                        else None
+                    ),
+                    "reason": row.reason,
+                    "reason_code": row.reason_code,
+                    "active": row.active,
+                    "created_at": iso_utc(row.created_at),
+                    "released_at": iso_utc(row.released_at),
+                }
+            )
+        return items, int(total)
+
+    def release_ip(self, block_id: int, actor: User, ip_hash: str) -> IpBlock:
+        row = self.db.get(IpBlock, block_id)
+        if row is None or row.source != "auto":
+            raise DomainError(404, "block not found", "자동 차단 기록을 찾을 수 없습니다.")
+        row.active = False
+        audit(
+            self.db,
+            "auto_block_ip_released",
+            actor=actor,
+            ip_hash=ip_hash,
+            details={"network": row.network},
+        )
+        return row
+
+    def release_user(self, block_id: int, actor: User, ip_hash: str) -> UserBlock:
+        row = self.db.get(UserBlock, block_id)
+        if row is None:
+            raise DomainError(404, "block not found", "자동 차단 기록을 찾을 수 없습니다.")
+        target = self.db.get(User, row.user_id)
+        if target is not None and not role_can_manage(actor.role, target.role):
+            raise DomainError(403, "forbidden", "이 회원의 차단을 해제할 권한이 없습니다.")
+        row.active = False
+        row.released_at = utcnow()
+        row.released_by_id = actor.id
+        # 세션 autoflush에 의존하지 않고 해제 상태를 먼저 확정한 뒤 잔여 차단을 센다.
+        self.db.flush()
+        if target is not None and target.status == "suspended":
+            remaining = self.db.scalar(
+                select(func.count())
+                .select_from(UserBlock)
+                .where(UserBlock.user_id == row.user_id, UserBlock.active.is_(True))
+            )
+            if not remaining:
+                target.status = "active"
+        audit(
+            self.db,
+            "auto_block_user_released",
+            actor=actor,
+            target=target,
+            ip_hash=ip_hash,
+            details={"block_id": row.id},
+        )
+        return row
 
 
 class PaymentService:

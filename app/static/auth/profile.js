@@ -5,6 +5,22 @@ let selectedPlan;
 let mfaSetupToken = '';
 let currentRecoveryCodes = [];
 
+const PROFILE_TABS = ['account', 'security', 'sessions', 'display', 'billing'];
+const TAB_ALIASES = { ontology: 'display', billing: 'billing', security: 'security', sessions: 'sessions' };
+const PAGE_LABELS = {
+  catalog: '데이터 마켓플레이스',
+  charts: 'Charts Studio',
+  billing: '결제',
+  api_docs: 'API 문서',
+  admin_users: '운영 콘솔 · 회원 관리',
+  admin_access: '운영 콘솔 · 접근 관리',
+  admin_payments: '운영 콘솔 · 결제 관리',
+  admin_policies: '운영 콘솔 · 정책 관리',
+  admin_audit: '운영 콘솔 · 감사 로그',
+  admin_security: '운영 콘솔 · 자동 차단',
+  service_health: '운영 콘솔 · 서비스 헬스',
+};
+
 function profileMessage(text, kind = 'info') {
   const box = document.getElementById('message');
   box.setAttribute('role', 'status'); box.setAttribute('aria-live', 'polite');
@@ -15,10 +31,49 @@ function dateText(value) {
   return value ? new Intl.DateTimeFormat('ko-KR', { dateStyle:'medium', timeStyle:'short' }).format(new Date(value)) : '설정되지 않음';
 }
 function initials(value) { return Array.from(value || 'AS').slice(0, 2).join('').toUpperCase(); }
-function statusBadge(value) {
-  const labels = {pending:'승인 대기',approved:'승인',rejected:'거절'};
-  const cls = value === 'approved' ? 'good' : value === 'pending' ? 'warn' : '';
-  return `<span class="badge ${cls}">${AuthUI.escapeHtml(labels[value] || value)}</span>`;
+function badgeHtml(kind, label) {
+  return `<span class="badge ${kind}"><span class="dot"></span>${AuthUI.escapeHtml(label)}</span>`;
+}
+
+function showTab(name) {
+  const target = PROFILE_TABS.includes(name) ? name : (TAB_ALIASES[name] || 'account');
+  const billingAllowed = (profileUser?.allowed_pages || []).includes('billing');
+  // 사용자가 '내 화면 설정'에서 결제를 메뉴에서 숨겼으면 해시 직진입도 계정 탭으로 보낸다.
+  const billingHidden = (profileUser?.hidden_pages || []).includes('billing');
+  const resolved = target === 'billing' && (!billingAllowed || billingHidden) ? 'account' : target;
+  PROFILE_TABS.forEach(tab => {
+    const panel = document.getElementById(`panel-${tab}`);
+    if (panel) panel.hidden = tab !== resolved;
+  });
+  document.querySelectorAll('#profile-tabbar [data-tab]').forEach(button => {
+    button.classList.toggle('on', button.dataset.tab === resolved);
+  });
+  history.replaceState(null, '', `#${resolved}`);
+}
+
+function renderAccountBadges(user) {
+  const badges = [];
+  badges.push(badgeHtml('muted', `역할 · ${user.role_label}`));
+  const statusMap = {
+    active: ['good', '계정 활성'],
+    pending: ['warn', '승인 대기'],
+    suspended: ['bad', '계정 정지'],
+    rejected: ['bad', '가입 거절'],
+  };
+  const [statusKind, statusLabel] = statusMap[user.status] || ['muted', `상태 · ${user.status}`];
+  badges.push(badgeHtml(statusKind, statusLabel));
+  badges.push(user.email_verified
+    ? badgeHtml('good', '이메일 인증됨')
+    : badgeHtml('warn', '이메일 미인증'));
+  badges.push(user.mfa_enabled
+    ? badgeHtml('good', '2단계 인증 사용 중')
+    : badgeHtml('warn', '2단계 인증 미설정'));
+  badges.push(`<span id="pass-badge">${
+    ['operator','admin'].includes(user.role)
+      ? badgeHtml('muted', '운영 권한 계정')
+      : badgeHtml('muted', '이용권 확인 중')
+  }</span>`);
+  document.getElementById('account-badges').innerHTML = badges.join('');
 }
 
 function renderUser(user) {
@@ -27,17 +82,13 @@ function renderUser(user) {
   document.getElementById('side-nickname').textContent = user.nickname;
   document.getElementById('side-identity').textContent = `${user.masked_id} · ${user.role_label}`;
   document.getElementById('profile-id').textContent = user.masked_id;
-  document.getElementById('profile-role').innerHTML = `<span class="badge good">${AuthUI.escapeHtml(user.role_label)}</span>`;
-  document.getElementById('profile-membership').textContent =
-    ['operator','admin'].includes(user.role) ? '운영 권한 계정' : dateText(user.membership_ends_at);
   document.getElementById('profile-email').textContent = user.email;
-  document.getElementById('profile-verified').textContent = user.email_verified ? '인증됨' : '미인증';
   document.getElementById('profile-login').textContent = dateText(user.last_login_at);
-  document.getElementById('profile-mfa').innerHTML = user.mfa_enabled
-    ? '<span class="badge good">사용 중</span>'
-    : '<span class="badge warn">미설정</span>';
   document.getElementById('nickname').value = user.nickname;
-  document.getElementById('billing').hidden = !(user.allowed_pages || []).includes('billing');
+  renderAccountBadges(user);
+  const billingAllowed = (user.allowed_pages || []).includes('billing');
+  document.getElementById('billing').hidden = !billingAllowed;
+  document.getElementById('operator-access-note').hidden = !['operator','admin'].includes(user.role);
   AuthUI.decorate(user);
 }
 
@@ -45,8 +96,9 @@ async function loadMfaStatus() {
   const status = await AuthUI.api('/api/v1/me/mfa');
   const enabled = Boolean(status.enabled);
   const badge = document.getElementById('mfa-status');
-  badge.className = `badge ${enabled ? 'good' : 'warn'}`;
-  badge.textContent = enabled ? 'MFA 사용 중' : 'MFA 미설정';
+  const missingRequired = !enabled && status.required_for_role;
+  badge.className = `badge ${enabled ? 'good' : missingRequired ? 'bad' : 'warn'}`;
+  badge.textContent = enabled ? 'MFA 사용 중' : missingRequired ? 'MFA 필수 · 미설정' : 'MFA 미설정';
   document.getElementById('mfa-recovery-status').textContent = enabled
     ? `남은 복구 코드 ${status.recovery_codes_remaining}개`
     : status.required_for_role ? '이 권한은 MFA 설정이 필수입니다.' : '모든 계정에 설정을 권장합니다.';
@@ -112,14 +164,60 @@ async function loadPreferences() {
   document.getElementById('chart-types').innerHTML = Object.entries(data.available_chart_types).map(([key,label]) =>
     `<label class="check data-card"><input type="checkbox" value="${AuthUI.escapeHtml(key)}" ${hidden.has(key) ? '' : 'checked'}>${AuthUI.escapeHtml(label)}</label>`
   ).join('');
+  const hiddenPages = new Set(data.personal.ui.hidden_pages || []);
+  const hidablePages = (profileUser.allowed_pages || []).filter(key => key !== 'profile');
+  document.getElementById('page-visibility').innerHTML = hidablePages.length
+    ? hidablePages.map(key =>
+        `<label class="check data-card"><input type="checkbox" data-page-visibility value="${AuthUI.escapeHtml(key)}" ${hiddenPages.has(key) ? '' : 'checked'}>${AuthUI.escapeHtml(PAGE_LABELS[key] || key)}</label>`
+      ).join('')
+    : '<p class="desc">조정할 수 있는 페이지가 없습니다.</p>';
+}
+
+function renderPassBadge(summary) {
+  const slot = document.getElementById('pass-badge');
+  if (!slot) return;
+  if (summary.operator_account) {
+    slot.innerHTML = badgeHtml('muted', '운영 권한 계정');
+  } else if (summary.active) {
+    slot.innerHTML = badgeHtml('good', `이용권 ${summary.days_left}일 남음`);
+  } else if (summary.ends_at) {
+    slot.innerHTML = badgeHtml('bad', '이용권 만료');
+  } else {
+    slot.innerHTML = badgeHtml('muted', '이용권 없음');
+  }
 }
 
 async function loadBilling() {
   if (!(profileUser.allowed_pages || []).includes('billing')) return;
-  const [plans, requests] = await Promise.all([
-    AuthUI.api('/api/v1/billing/plans'), AuthUI.api('/api/v1/billing/requests'),
+  const [plans, summary] = await Promise.all([
+    AuthUI.api('/api/v1/billing/plans'), AuthUI.api('/api/v1/billing/summary'),
   ]);
-  const canRequest = ['guest','member'].includes(profileUser.role);
+  renderPassBadge(summary);
+  const passSlot = document.getElementById('active-pass');
+  if (summary.active && summary.plan) {
+    passSlot.innerHTML = `<div class="pass-card">
+      <span class="pass-icon">&#127915;</span>
+      <span><b>사용 중인 이용권 · ${AuthUI.escapeHtml(summary.plan.label)}</b>
+      <small>종료 예정 ${dateText(summary.ends_at)}</small></span>
+      <span class="days"><b>${Number(summary.days_left)}일</b><small>남음</small></span>
+    </div>`;
+  } else if (summary.active) {
+    passSlot.innerHTML = `<div class="pass-card">
+      <span class="pass-icon">&#127915;</span>
+      <span><b>사용 중인 이용권</b><small>종료 예정 ${dateText(summary.ends_at)}</small></span>
+      <span class="days"><b>${Number(summary.days_left)}일</b><small>남음</small></span>
+    </div>`;
+  } else if (summary.operator_account) {
+    passSlot.innerHTML = '<div class="message info">운영 권한 계정은 이용권 없이 모든 데이터 화면을 사용합니다.</div>';
+  } else if (summary.ends_at) {
+    passSlot.innerHTML = `<div class="message bad">이용권이 ${dateText(summary.ends_at)}에 만료되었습니다. 새 이용권을 요청하세요.</div>`;
+  } else {
+    passSlot.innerHTML = '<div class="message info">사용 중인 이용권이 없습니다. 아래 요금제에서 요청할 수 있습니다.</div>';
+  }
+  document.getElementById('pending-request').innerHTML = summary.pending_request
+    ? `<div class="message warn">승인 대기 중인 요청 — ${AuthUI.escapeHtml(summary.pending_request.plan_label)} (${dateText(summary.pending_request.requested_at)} 요청). 운영자 승인 후 반영됩니다.</div>`
+    : '';
+  const canRequest = ['guest','member'].includes(profileUser.role) && !summary.pending_request;
   document.getElementById('plans').innerHTML = plans.map(plan => `<article class="plan">
     <b>${AuthUI.escapeHtml(plan.label)}</b>
     <div class="price">${Number(plan.price_amount).toLocaleString('ko-KR')} ${AuthUI.escapeHtml(plan.currency)}</div>
@@ -133,11 +231,6 @@ async function loadBilling() {
     document.getElementById('payment-modal').hidden = false;
     document.getElementById('confirm-payment').focus();
   });
-  document.getElementById('payment-history').innerHTML = requests.length ? requests.map(row => `<tr>
-    <td>${dateText(row.requested_at)}</td><td>${AuthUI.escapeHtml(row.plan.label)}</td>
-    <td>${statusBadge(row.status)}</td><td>${dateText(row.reviewed_at)}</td>
-    <td>${AuthUI.escapeHtml(row.review_note || '-')}</td></tr>`).join('') :
-    '<tr><td colspan="5">결제 요청 내역이 없습니다.</td></tr>';
 }
 
 async function bootProfile() {
@@ -146,6 +239,11 @@ async function bootProfile() {
   if (new URLSearchParams(location.search).get('denied')) {
     profileMessage('요청한 영역에 접근할 권한이 없습니다.', 'warn');
   }
+  showTab(location.hash.slice(1) || 'account');
+  document.querySelectorAll('#profile-tabbar [data-tab]').forEach(button => {
+    button.onclick = () => showTab(button.dataset.tab);
+  });
+  window.addEventListener('hashchange', () => showTab(location.hash.slice(1)));
   await Promise.all([loadPreferences(), loadBilling(), loadMfaStatus(), loadSessions()]);
 
   document.querySelectorAll('[data-logout]').forEach(button => button.onclick = AuthUI.logout);
@@ -164,6 +262,7 @@ async function bootProfile() {
         method:'PATCH', body:JSON.stringify({nickname:event.currentTarget.nickname.value}),
       });
       renderUser(user); profileMessage('닉네임을 변경했습니다.', 'good');
+      await loadBilling();
     } catch (error) { profileMessage(error.message, 'bad'); }
   };
   document.getElementById('password-form').onsubmit = async event => {
@@ -268,15 +367,17 @@ async function bootProfile() {
   document.getElementById('preference-form').onsubmit = async event => {
     event.preventDefault();
     const hidden = [...document.querySelectorAll('#chart-types input:not(:checked)')].map(item => item.value);
+    const hiddenPages = [...document.querySelectorAll('#page-visibility input[data-page-visibility]:not(:checked)')]
+      .map(item => item.value);
     try {
       await AuthUI.api('/api/v1/me/preferences', {
         method:'PUT',
         body:JSON.stringify({
           ontology:{hidden_chart_types:hidden,default_domain:document.getElementById('default-domain').value},
-          ui:{dense:document.getElementById('dense-ui').checked},
+          ui:{dense:document.getElementById('dense-ui').checked,hidden_pages:hiddenPages},
         }),
       });
-      profileMessage('개인 온톨로지와 화면 설정을 저장했습니다.', 'good');
+      profileMessage('내 화면 설정을 저장했습니다. 다음 화면 로드부터 메뉴에 반영됩니다.', 'good');
     } catch (error) { profileMessage(error.message, 'bad'); }
   };
   document.getElementById('confirm-payment').onclick = async () => {
