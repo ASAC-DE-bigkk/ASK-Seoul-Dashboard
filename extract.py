@@ -36,43 +36,6 @@ BASIC_MANIFEST_PROJECTS = ("commerce", "citydata", "traffic_weather", "transit")
 
 MAX_SAMPLE_TEXT = 120  # 샘플 셀 문자열 절단 길이 (UI 가독성)
 
-# ── 무스키마 행 단위 품질 규칙 (basic 도메인) ─────────────────────────
-# culture 는 silver 에 quality_status 컬럼을 박지만(공간 매칭 정밀도),
-# citydata 는 공간축이 seed 사전매핑이라 그 라벨이 무의미하다. 대신 도메인이
-# 의미 있는 행 단위 품질(핵심 신호 결측·부분 결측)을 CASE 식으로 선언하면
-# extractor 가 추출 시점에 즉석 분류한다 — silver 스키마 변경 없음.
-# 라벨 어휘: ok / partial* (부분 결측) / missing_core (핵심 결측) — 화면 Q_META 와 동기.
-BASIC_QUALITY_RULES: dict[str, str] = {
-    "silver_citydata_ppltn": (
-        "CASE WHEN area_ppltn_min IS NULL OR area_ppltn_max IS NULL OR area_congest_lvl IS NULL "
-        "THEN 'missing_core' WHEN male_ppltn_rate IS NULL OR ppltn_rate_20 IS NULL "
-        "THEN 'partial_segment' ELSE 'ok' END"
-    ),
-    "silver_citydata_air": (
-        "CASE WHEN pm25 IS NULL OR pm10 IS NULL THEN 'missing_core' "
-        "WHEN air_idx IS NULL OR temperature IS NULL THEN 'partial' ELSE 'ok' END"
-    ),
-    "silver_citydata_cmrcl": (
-        "CASE WHEN payment_count IS NULL OR cmrcl_lvl IS NULL THEN 'missing_core' "
-        "WHEN rate_20 IS NULL OR male_rate IS NULL THEN 'partial_segment' ELSE 'ok' END"
-    ),
-    "silver_citydata_sbike": (
-        "CASE WHEN parking_count IS NULL OR rack_count IS NULL THEN 'missing_core' "
-        "WHEN spot_longitude IS NULL OR spot_latitude IS NULL THEN 'partial_geo' ELSE 'ok' END"
-    ),
-    "silver_citydata_charger": (
-        "CASE WHEN charger_stat IS NULL THEN 'missing_core' "
-        "WHEN output_kw IS NULL OR stat_longitude IS NULL THEN 'partial' ELSE 'ok' END"
-    ),
-    # 30분 승하차 NULL 은 새벽 1~4시에 집중(2~4시 100%) = 심야 운행 중단의 정상 결측.
-    # 실측(2026-07-18): 시간대별 NULL 분포로 확인 — 수집기간 차이 아님.
-    "silver_citydata_transit_ppltn": (
-        "CASE WHEN gton_30min_max IS NULL AND gtoff_30min_max IS NULL THEN "
-        "(CASE WHEN hour(observed_at) BETWEEN 1 AND 4 THEN 'no_service' ELSE 'missing_core' END) "
-        "WHEN station_count IS NULL OR station_count = 0 THEN 'partial' ELSE 'ok' END"
-    ),
-}
-
 # dbt 아티팩트가 없는 도메인 — Trino 실측만으로 basic 카탈로그 구성. 라벨 → dev 스키마.
 OTHER_DOMAINS = {
     "commerce": "commerce",
@@ -181,28 +144,10 @@ def measure(rel: str, columns: list[dict]) -> tuple[int, dict | None, list[dict]
     return row_count, date_range, sample
 
 
-def test_gates(manifest: dict) -> dict[str, list[str]]:
-    """모델 uid → 그 모델에 걸린 dbt 테스트 라벨 목록 (예 'unique_grain', 'not_null(area_cd)').
-    실행 결과가 아니라 **정의된 게이트**다 — CI/DAG 에서 매 run 검증되는 계약의 가시화."""
-    gates: dict[str, list[str]] = {}
-    for node in manifest.get("nodes", {}).values():
-        if node.get("resource_type") != "test":
-            continue
-        attached = node.get("attached_node")
-        if not attached:
-            continue
-        tm = node.get("test_metadata") or {}
-        label = tm.get("name") or node.get("name", "test")
-        column = (tm.get("kwargs") or {}).get("column_name")
-        gates.setdefault(attached, []).append(f"{label}({column})" if column else label)
-    return {uid: sorted(set(v)) for uid, v in gates.items()}
-
-
 def load_basic_meta() -> dict:
-    """basic 도메인 모델의 description·컬럼설명·tags·contract·serving_tier·테스트게이트 를
-    각 도메인 manifest 에서 병합해 name → 메타 dict 로. 모델명 전역 유일 전제
-    (gold_citydata_*·gold_traffic_* 등). manifest 는 도메인 dbt 를
-    `dbt deps && dbt parse` 하면 생긴다(gitignore 산출물)."""
+    """basic 도메인 모델의 description·컬럼설명·tags·contract 를 각 도메인 manifest 에서
+    병합해 name → 메타 dict 로. 모델명 전역 유일 전제(gold_citydata_*·gold_traffic_* 등).
+    manifest 는 도메인 dbt 를 `dbt deps && dbt parse` 하면 생긴다(gitignore 산출물)."""
     lookup: dict[str, dict] = {}
     for proj in BASIC_MANIFEST_PROJECTS:
         path = DBT_DOMAINS_DIR / proj / "target" / "manifest.json"
@@ -211,7 +156,6 @@ def load_basic_meta() -> dict:
             continue
         manifest = json.loads(path.read_text(encoding="utf-8"))
         all_nodes = {**manifest.get("nodes", {}), **manifest.get("sources", {})}
-        gates = test_gates(manifest)
         for uid, node in manifest.get("nodes", {}).items():
             if node.get("resource_type") != "model":
                 continue
@@ -225,41 +169,15 @@ def load_basic_meta() -> dict:
                 "tags": node.get("tags", []),
                 "contract_enforced": bool(cfg.get("contract", {}).get("enforced")),
                 "materialized": cfg.get("materialized", ""),
-                # 서빙 tier — 도메인이 config.meta.serving_tier 로 선언 (citydata 규약)
-                "serving_tier": (cfg.get("meta") or {}).get("serving_tier"),
-                "tests": gates.get(uid, []),
                 # 계보 — culture rich 와 같은 upstream_layers 재사용 (도메인 manifest 내 한정)
                 "lineage": upstream_layers(uid, all_nodes),
             }
     return lookup
 
 
-def basic_quality(silver_names: list[str], schema: str, cache: dict) -> list[dict]:
-    """계보상 상류 silver 중 품질 규칙이 선언된 것의 즉석 분포. 실패는 스킵(품질은 부가정보)."""
-    out = []
-    for name in silver_names:
-        expr = BASIC_QUALITY_RULES.get(name)
-        if not expr:
-            continue
-        if name not in cache:
-            try:
-                dist = trino_rows(
-                    f"SELECT {expr} AS quality_status, count(*) AS c "
-                    f"FROM iceberg_dev.{schema}.{name} GROUP BY 1 ORDER BY 2 DESC"
-                )
-                cache[name] = {"table": name, "distribution": {d["quality_status"]: d["c"] for d in dist}}
-            except RuntimeError as exc:
-                print(f"  ! quality skip({name}): {exc}")
-                cache[name] = None
-        if cache[name]:
-            out.append(cache[name])
-    return out
-
-
 def extract_basic_domain(domain: str, schema: str, meta_lookup: dict) -> list[dict]:
-    """dbt 계보 기반으로 description·컬럼설명·tags·contract·serving_tier·테스트게이트를 채우고,
-    품질 규칙이 선언된 도메인은 상류 silver 의 행 단위 품질도 즉석 계측한다."""
-    quality_cache: dict[str, dict | None] = {}
+    """dbt 계보·quality 는 아직 미추출(culture 전용)이나, 도메인 manifest 에서
+    description·컬럼설명·tags·contract 는 채운다(dbt docs 투자분 반영)."""
     names = sorted(
         r["Table"] for r in trino_rows(f"SHOW TABLES FROM iceberg_dev.{schema}")
         if r["Table"].startswith("gold_")
@@ -295,13 +213,11 @@ def extract_basic_domain(domain: str, schema: str, meta_lookup: dict) -> list[di
             "tags": meta.get("tags", []),
             "contract_enforced": meta.get("contract_enforced", False),
             "materialized": meta.get("materialized", ""),
-            "serving_tier": meta.get("serving_tier"),
-            "tests": meta.get("tests", []),
             "on_table_exists": None,
             "row_count": row_count,
             "date_range": date_range,
             "columns": columns,
-            "quality": basic_quality(meta.get("lineage", {}).get("silver", []), schema, quality_cache),
+            "quality": [],
             "lineage": meta.get("lineage", {}),
             "sample": sample,
         })
@@ -319,7 +235,6 @@ def main() -> None:
     print(f"gold models: {len(golds)}")
 
     quality_cache: dict[str, dict] = {}  # silver uid → 분포 (골드끼리 공유)
-    rich_gates = test_gates(manifest)
     tables = []
     for uid, node in sorted(golds.items(), key=lambda kv: kv[1]["name"]):
         name, rel = node["name"], node["relation_name"]
@@ -366,8 +281,6 @@ def main() -> None:
             "tags": node.get("tags", []),
             "contract_enforced": bool(node.get("config", {}).get("contract", {}).get("enforced")),
             "materialized": node.get("config", {}).get("materialized", ""),
-            "serving_tier": (node.get("config", {}).get("meta") or {}).get("serving_tier"),
-            "tests": rich_gates.get(uid, []),
             "on_table_exists": node.get("config", {}).get("on_table_exists")
                                or node.get("config", {}).get("extra", {}).get("on_table_exists"),
             "row_count": row_count,
