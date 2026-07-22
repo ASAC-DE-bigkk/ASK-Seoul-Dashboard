@@ -29,6 +29,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 HERE = Path(__file__).parent
+sys.path.insert(0, str(HERE))  # 단독 실행에서도 app.charts 임포트 보장
+
+from app.charts.ontology import companion_pairs  # 식별↔표시 쌍 규칙의 단일 정본
 
 
 def resolve_sample_dir(here: Path) -> Path:
@@ -224,6 +227,46 @@ def truncate_cell(value):
     return value
 
 
+CODE_LABEL_CAP = 2000  # distinct 가 이보다 크면 코드 사전이 아니다(라벨화 부적합)
+
+
+def collect_code_labels(rel: str, columns: list[dict]) -> dict[str, dict[str, str]]:
+    """식별↔표시 동반 컬럼 쌍의 distinct 값 실측 → {식별필드: {코드: 표시값}}.
+
+    Charts Studio 가 '코드로 세고 한글로 보여주기'(ontology value_labels)에 쓴다.
+    같은 코드에 표시가 갈리면 사전순 최대값으로 결정(결정적)하고 경고만 남긴다.
+    실패·과대 필드는 스킵 — 라벨은 부가정보라 스냅샷 자체를 막지 않는다.
+    """
+    labels: dict[str, dict[str, str]] = {}
+    for ident, disp in companion_pairs([c["name"] for c in columns]):
+        try:
+            rows = trino_rows(
+                f'SELECT DISTINCT cast("{ident}" AS varchar) AS i, cast("{disp}" AS varchar) AS l '
+                f'FROM {rel} WHERE "{ident}" IS NOT NULL AND "{disp}" IS NOT NULL '
+                f"LIMIT {CODE_LABEL_CAP + 1}",
+                timeout=60,
+            )
+        except RuntimeError as exc:
+            print(f"  ! code_labels skip({ident}): {exc}")
+            continue
+        if len(rows) > CODE_LABEL_CAP:
+            print(f"  ! code_labels skip({ident}): distinct > {CODE_LABEL_CAP}")
+            continue
+        mapping: dict[str, str] = {}
+        conflicts = 0
+        for r in rows:
+            code, label = r["i"], r["l"]
+            if code in mapping and mapping[code] != label:
+                conflicts += 1
+                label = max(mapping[code], label)
+            mapping[code] = label
+        if conflicts:
+            print(f"  ! code_labels conflict({ident}): {conflicts}건 — 사전순 최대값 채택")
+        if mapping:
+            labels[ident] = mapping
+    return labels
+
+
 def measure(rel: str, columns: list[dict]) -> tuple[int, dict | None, list[dict]]:
     """행수·시간축 범위·샘플 5행 — rich/basic 두 경로가 공유하는 Trino 실측."""
     row_count = trino_rows(f"SELECT count(*) AS c FROM {rel}")[0]["c"]
@@ -360,6 +403,7 @@ def extract_basic_domain(domain: str, schema: str, meta_lookup: dict) -> list[di
         except RuntimeError as exc:
             print(f"  ! skip: {exc}")
             continue
+        code_labels = collect_code_labels(rel, columns)
         tables.append({
             "name": name,
             "domain": domain,
@@ -381,6 +425,7 @@ def extract_basic_domain(domain: str, schema: str, meta_lookup: dict) -> list[di
             "quality": basic_quality(meta.get("lineage", {}).get("silver", []), schema, quality_cache),
             "lineage": meta.get("lineage", {}),
             "sample": sample,
+            **({"code_labels": code_labels} if code_labels else {}),
             **display_meta({"config": {"meta": {"display": meta.get("display", {})}}}),
         })
     return tables
@@ -540,6 +585,7 @@ def main() -> None:
             ]
 
         row_count, date_range, sample = measure(rel, columns)
+        code_labels = collect_code_labels(rel, columns)
 
         quality = []
         for silver_uid in quality_parents(uid, nodes):
@@ -575,6 +621,7 @@ def main() -> None:
             "quality": quality,
             "lineage": upstream_layers(uid, nodes),
             "sample": sample,
+            **({"code_labels": code_labels} if code_labels else {}),
             **display_meta(node),
         })
 

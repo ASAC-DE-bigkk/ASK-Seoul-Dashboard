@@ -20,6 +20,10 @@ class FieldInfo(BaseModel):
     recommendation_priority: int = 40
     chartable: bool = True
     allowed_filter_ops: list[str] = Field(default_factory=list)
+    # 식별↔표시 동반 필드(ontology.companion_pairs) — 표시 필드는 id_field(코드)로
+    # 승격 집계되고, 식별 필드 값은 label_field/value_labels 로 한글 표기된다.
+    id_field: Optional[str] = None
+    label_field: Optional[str] = None
 
 
 class SourceSummary(BaseModel):
