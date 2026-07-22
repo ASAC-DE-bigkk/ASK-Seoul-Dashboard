@@ -59,6 +59,10 @@ class SourceDetail(SourceSummary):
     date_range: Optional[dict] = None
     fields: list[FieldInfo]
     default_chart: Optional[dict] = None
+    # 다중 백엔드 — 소스가 사는 DB(연결 이름·방언·테이블/뷰). 기본은 trino(기존 gold)
+    datasource: str = "trino"
+    backend: str = "trino"
+    object_type: str = "table"
 
 
 class SourceAvailability(BaseModel):

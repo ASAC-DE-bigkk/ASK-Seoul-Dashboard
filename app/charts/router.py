@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import current_user, get_db, require_member
 from app.auth.models import User
 from app.auth.service import AccessService
-from . import layouts, querybuilder, trino
+from . import backends, layouts, querybuilder, trino
 from .models import (
     PageCreate, PageDetail, PagePatch, PageSummary,
     QueryRequest, QueryResponse, ReorderRequest, SourceAvailability,
@@ -170,11 +170,12 @@ def _validate_charts(charts) -> None:
                 )
         # 레이아웃 저장 시에도 query 단계와 **같은 워커**로 검증한다 — 저장/조회 경로가
         # 다른 walker 를 가지면 '저장은 되는데 조회가 400' 계약 분열이 생긴다.
+        dialect = source.get("backend") or "trino"
         try:
             querybuilder.validate_filter_tree(
-                [node.model_dump() for node in chart.filters], fields)
+                [node.model_dump() for node in chart.filters], fields, dialect)
             querybuilder.validate_having(
-                [h.model_dump() for h in chart.having], fields)
+                [h.model_dump() for h in chart.having], fields, dialect)
         except querybuilder.SpecError:
             raise
         if chart.having and chart.type == "stat":
@@ -262,9 +263,11 @@ def source_availability(
                 "limit": 1,
             },
         )
-        result = trino.execute(sql, max_rows=1)
+        result = backends.execute(source, sql, max_rows=1)
     except querybuilder.SpecError as exc:
         return _problem(400, "invalid availability spec", str(exc))
+    except backends.DatasourceError as exc:
+        return _problem(502, "datasource unavailable", str(exc))
     except trino.QueryFailed as exc:
         return _problem(502, "availability query failed", str(exc))
     except trino.TrinoUnavailable as exc:
@@ -301,7 +304,9 @@ def run_query(
     except querybuilder.SpecError as exc:
         return _problem(400, "invalid query spec", str(exc))
     try:
-        result = trino.execute(sql, force=req.force)
+        result = backends.execute(source, sql, force=req.force)
+    except backends.DatasourceError as exc:
+        return _problem(502, "datasource unavailable", str(exc))
     except trino.QueryFailed as exc:
         return _problem(502, "query failed", str(exc))
     except trino.TrinoUnavailable as exc:

@@ -50,6 +50,7 @@ Charts Studio 가 라이브 질의를 갖는 이유: 사용자가 소스·차원
 | 코드값 | `major`: health/culture/industry/environment · `event_type`: opened/closed · `age_band`: `0_lt1y`~`5_ge20y` (정적 사전은 `ontology.VALUE_LABELS`, 데이터 유래 사전은 스냅샷 `code_labels`) |
 | 축 자율성(실측) | 스냅샷이 컬럼별 `distinct_count`(approx)·`min`/`max` 를 실측 — `distinct≤50` measure 는 `groupable`(category 축 허용), binnable 슬롯 + `chart.bins[슬롯]` 폭이면 measure 구간 축(`floor(값/폭)*폭`, 표기 `시작~끝`). 규칙 정본 [design-intents D-2-7](charts-design-intents.md) |
 | 재빌드 창 폴백 | gold 전량 재생성(rename)의 '테이블 없음' 순간은 `trino.py` 가 TABLE_NOT_FOUND 를 감지해 stale 캐시로 응답(mode=stale 표기) — 0행/에러 대신 직전 정상 스냅샷 |
+| 다중 백엔드 | 온톨로지 소스는 Trino 외 RDB(postgres·sqlite·mysql/mariadb·oracle·mssql + 별칭)의 **테이블·뷰**도 된다 — env `CHARTS_DATASOURCES` 연결 정의, `extract.py --refresh-datasource` 실측, `querybuilder.DIALECTS` 방언 조립(trino 출력 byte-동일), `backends.py` 읽기전용 실행. 정본 서술 [SHARE §9.0](../SHARE.md) |
 | 결측 표기 | 지역 코드 결측은 문자열 `'UNK'` — 지도 매칭에서 제외된다 |
 | 파이썬/실행 | Python 3.9+ 호환. FastAPI·SQLAlchemy·Argon2. 포트 관례 8765(문서)·8799(개발) |
 | 인증 DB | `DATABASE_URL`, 기본 `sqlite:///./data/ask_seoul.db`. PostgreSQL/MySQL dialect DDL도 테스트 |

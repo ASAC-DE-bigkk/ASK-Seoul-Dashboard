@@ -686,6 +686,11 @@ class Registry:
             sources[t["name"]] = {
                 "name": t["name"],
                 "domain": t.get("domain", ""),
+                # 다중 백엔드(2026-07-23): 소스가 사는 DB — querybuilder 방언·실행 라우팅의 근거.
+                # 미지정(기존 gold 스냅샷)은 trino (하위호환 기본값).
+                "datasource": t.get("datasource", "trino"),
+                "backend": t.get("backend", "trino"),
+                "object_type": t.get("object_type", "table"),
                 "relation": t["relation"],
                 "label": curated.get("label", _label_from_desc(t["name"], t.get("description", ""))),
                 "description": t.get("description", ""),
@@ -753,13 +758,17 @@ class Registry:
         default_domain = str(overrides.get("default_domain", "all"))
         if default_domain != "all" and default_domain not in domains:
             default_domain = "all"
+        # 데이터소스 도메인(외부 DB 연결 이름)은 고정 사전에 없다 — 이름 그대로 라벨 폴백
+        domain_labels = {**DOMAIN_LABELS}
+        for d in domains:
+            domain_labels.setdefault(d, d)
         return {
             "generated_at": self._generated_at,
             "chart_types": chart_types,
             "chart_contracts": chart_contracts,
             "value_labels": value_labels,
             "domains": domains,
-            "domain_labels": DOMAIN_LABELS,
+            "domain_labels": domain_labels,
             "default_domain": default_domain,
         }
 

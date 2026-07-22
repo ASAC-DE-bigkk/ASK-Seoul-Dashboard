@@ -32,6 +32,92 @@ MAX_FILTER_LEAVES = 50    # 트리 전체 leaf 총량 상한(그룹 증폭 방�
 MAX_GROUP_CONDITIONS = 20  # 그룹당 leaf 상한
 LIKE_ESCAPE = "\\"        # ESCAPE 문자는 서버 상수 — 절대 사용자 입력이 아님
 
+# ── SQL 방언(2026-07-23 다중 백엔드): 온톨로지 소스가 Trino 외 RDB 에 살아도 같은 스펙으로
+# 조립한다. 식별자 인용은 전 방언 ANSI("x") 로 통일한다 — mysql/mariadb 는 실행기가 세션
+# sql_mode 에 ANSI_QUOTES·NO_BACKSLASH_ESCAPES 를 켜고(backends.py), mssql 은
+# QUOTED_IDENTIFIER ON(드라이버 기본)이 보장한다. LIKE ESCAPE·floor·리터럴 이스케이프('')
+# 규칙도 그 전제 위에서 전 방언 공통. 방언 분기는 아래 프로파일 항목뿐이다.
+# **불변식: trino 방언의 출력은 종전과 byte-동일**(캐시 키 = SQL 원문 해시).
+NUMERIC_FIELD_TYPES = ("bigint", "integer", "int", "smallint", "tinyint",
+                       "double", "real", "decimal", "float")
+DIALECTS: dict[str, dict] = {
+    #                 집계 캐스트          문자 캐스트     bool 리터럴      GROUP BY   LIMIT     LIKE 추가 와일드카드
+    "trino":    {"agg": "double",           "str": "varchar",       "bool": ("TRUE", "FALSE"), "positional": True,  "limit": "limit", "wild": ""},
+    "postgres": {"agg": "double precision", "str": "varchar",       "bool": ("TRUE", "FALSE"), "positional": True,  "limit": "limit", "wild": ""},
+    "sqlite":   {"agg": "real",             "str": "varchar",       "bool": ("1", "0"),        "positional": True,  "limit": "limit", "wild": ""},
+    "mysql":    {"agg": "double",           "str": "char",          "bool": ("TRUE", "FALSE"), "positional": True,  "limit": "limit", "wild": ""},
+    # oracle: GROUP BY 위치지정은 '상수 1'로 해석되는 치명 함정 → 식 반복. LIMIT 은 12c+ FETCH FIRST.
+    "oracle":   {"agg": "binary_double",    "str": "varchar2(4000)", "bool": ("1", "0"),       "positional": False, "limit": "fetch", "wild": ""},
+    # mssql: TOP n(SELECT 절 삽입), LIKE 는 '[' 도 와일드카드(문자 클래스 시작) — 이스케이프 대상.
+    "mssql":    {"agg": "float",            "str": "varchar(max)",  "bool": ("1", "0"),        "positional": False, "limit": "top",   "wild": "["},
+}
+# 와이어/방언 호환 별칭 — 같은 프로파일로 조립해도 안전한 계열
+DIALECT_ALIASES = {
+    "mariadb": "mysql",            # 동일 프로토콜·문법 계열
+    "cockroachdb": "postgres",     # PG 와이어·문법 호환
+    "redshift": "postgres",        # PG 계열(8.x 문법 기반 — 사용 기능 범위 내 호환)
+    "duckdb": "trino",             # try_cast·double·ANSI — trino 프로파일 그대로 유효
+    "snowflake": "trino",          # try_cast·double·ANSI 동일 계열
+}
+
+
+def resolve_dialect(name: str | None) -> str:
+    canon = DIALECT_ALIASES.get((name or "trino").lower(), (name or "trino").lower())
+    if canon not in DIALECTS:
+        raise SpecError(f"지원하지 않는 backend 입니다: {name}")
+    return canon
+
+
+def _is_numeric_type(field: dict) -> bool:
+    return (field.get("type", "").split("(")[0].lower() in NUMERIC_FIELD_TYPES)
+
+
+def _str_expr(quoted: str, dialect: str) -> str:
+    return f"cast({quoted} as {DIALECTS[dialect]['str']})"
+
+
+def _num_expr(quoted: str, field: dict, dialect: str) -> str:
+    """숫자 비교 축 — Trino/mssql 은 try_cast 네이티브, 나머지는 물리 타입이 숫자면 직접
+    캐스트, 문자면 검증 가드식으로 에뮬레이트한다(sqlite CAST('abc' AS REAL)=0.0 ·
+    mysql 암묵 변환 'abc'→0 함정 — 검증 없이 캐스트하면 쓰레기 문자열이 0 과 같아진다).
+    정규식은 백슬래시 없는 [.] 클래스만 쓴다 — 방언별 문자열 리터럴 해석 차이를 원천 회피."""
+    if dialect == "postgres":
+        if _is_numeric_type(field):
+            return f"cast({quoted} as double precision)"
+        return (f"(case when cast({quoted} as varchar) ~ '^-?[0-9]+([.][0-9]+)?$' "
+                f"then cast(cast({quoted} as varchar) as double precision) end)")
+    if dialect == "sqlite":
+        if _is_numeric_type(field):
+            return f"cast({quoted} as real)"
+        return (f"(case when cast(cast({quoted} as real) as text) = cast({quoted} as text) "
+                f"or cast(cast({quoted} as integer) as text) = cast({quoted} as text) "
+                f"then cast({quoted} as real) end)")
+    if dialect == "mysql":
+        if _is_numeric_type(field):
+            return f"cast({quoted} as double)"
+        return (f"(case when cast({quoted} as char) regexp '^-?[0-9]+([.][0-9]+)?$' "
+                f"then cast({quoted} as double) end)")
+    if dialect == "oracle":
+        if _is_numeric_type(field):
+            return f"cast({quoted} as binary_double)"
+        return f"cast({quoted} as binary_double default null on conversion error)"
+    if dialect == "mssql":
+        return f"try_cast({quoted} as float)"
+    return f"try_cast({quoted} as double)"
+
+
+def _coerce_bools(value: Any, dialect: str) -> Any:
+    """bool 리터럴이 없는 방언(oracle/mssql/sqlite)은 값 단계에서 1/0 으로 변환한다 —
+    _lit 자체는 건드리지 않아 trino 경로 byte-동일이 자명하게 유지된다."""
+    if DIALECTS[dialect]["bool"] == ("TRUE", "FALSE"):
+        return value
+    if isinstance(value, bool):
+        return 1 if value else 0
+    if isinstance(value, (list, tuple)):
+        return [1 if isinstance(v, bool) and v else 0 if isinstance(v, bool) else v
+                for v in value]
+    return value
+
 
 class SpecError(ValueError):
     """스펙이 온톨로지/화이트리스트에 안 맞음 — 400 으로 변환된다."""
@@ -72,12 +158,12 @@ def _lit(value: Any) -> str:
     return "'" + s.replace("'", "''") + "'"
 
 
-def _dim_expr(field: dict) -> str:
-    """차원 표현식 — timestamp/date 는 JSON 안전하게 varchar 로 낸다."""
+def _dim_expr(field: dict, dialect: str = "trino") -> str:
+    """차원 표현식 — timestamp/date 는 JSON 안전하게 문자열로 낸다(방언 문자 타입)."""
     quoted = _quote_ident(field["name"])
     base = field.get("type", "").split("(")[0].lower()
     if base.startswith("timestamp") or base == "date":
-        return f"cast({quoted} as varchar)"
+        return _str_expr(quoted, dialect)
     return quoted
 
 
@@ -91,19 +177,21 @@ def _bin_width(raw: Any) -> float:
     return width
 
 
-def _binned_dim_expr(field: dict, width: float) -> str:
+def _binned_dim_expr(field: dict, width: float, dialect: str = "trino") -> str:
     """숫자 측정값의 구간 축 — floor(값/폭)*폭 = 구간 시작값. 별칭은 필드명 유지
     (소비자·정렬·피벗이 일반 dim 과 동일하게 동작). null 값은 구간 null 로 남는다."""
     quoted = _quote_ident(field["name"])
     lit = repr(width)
-    return f"cast(floor(try_cast({quoted} as double) / {lit}) * {lit} as double)"
+    num = _num_expr(quoted, field, dialect)
+    return f"cast(floor({num} / {lit}) * {lit} as {DIALECTS[dialect]['agg']})"
 
 
-def _measure_expr(field_name: str | None, agg: str, fields: dict[str, dict]) -> str:
+def _measure_expr(field_name: str | None, agg: str, fields: dict[str, dict],
+                  dialect: str = "trino") -> str:
     if agg not in AGGS:
         raise SpecError(f"허용되지 않는 집계입니다: {agg}")
     if agg == "count" and not field_name:
-        return "cast(count(*) as double)"
+        return f"cast(count(*) as {DIALECTS[dialect]['agg']})"
     if not field_name:
         raise SpecError(f"{agg} 집계에는 필드가 필요합니다")
     quoted = _ident(field_name, fields)
@@ -114,8 +202,8 @@ def _measure_expr(field_name: str | None, agg: str, fields: dict[str, dict]) -> 
     if allowed is not None and agg not in allowed:
         raise SpecError(f"'{field_name}' 필드에는 {agg} 집계를 사용할 수 없습니다")
     if agg == "count_distinct":
-        return f"cast(count(distinct {quoted}) as double)"
-    return f"cast({agg}({quoted}) as double)"
+        return f"cast(count(distinct {quoted}) as {DIALECTS[dialect]['agg']})"
+    return f"cast({agg}({quoted}) as {DIALECTS[dialect]['agg']})"
 
 
 def _str_lit(value: Any) -> str:
@@ -158,7 +246,7 @@ def allowed_filter_ops(field: dict) -> list[str]:
     return ["eq", "neq", "in", "not_in", "is_null", "not_null"]
 
 
-def _like_pattern(value: Any, *, prefix: str, suffix: str) -> str:
+def _like_pattern(value: Any, *, prefix: str, suffix: str, dialect: str = "trino") -> str:
     """contains/starts_with/ends_with 의 리터럴 부분일치 패턴 — 서버가 이스케이프해 조립한다.
 
     순서가 결정적: 백슬래시 먼저(\\ → \\\\), 그다음 % → \\%, _ → \\_ — 순서가 바뀌면
@@ -172,6 +260,8 @@ def _like_pattern(value: Any, *, prefix: str, suffix: str) -> str:
     escaped = (s.replace(LIKE_ESCAPE, LIKE_ESCAPE + LIKE_ESCAPE)
                 .replace("%", LIKE_ESCAPE + "%")
                 .replace("_", LIKE_ESCAPE + "_"))
+    for wild in DIALECTS[dialect]["wild"]:      # mssql: '[' 도 와일드카드(문자 클래스)
+        escaped = escaped.replace(wild, LIKE_ESCAPE + wild)
     return _str_lit(f"{prefix}{escaped}{suffix}") + f" escape '{LIKE_ESCAPE}'"
 
 
@@ -227,7 +317,7 @@ def _numeric(value: Any) -> int | float:
     return number
 
 
-def _condition(f: dict, fields: dict[str, dict]) -> str:
+def _condition(f: dict, fields: dict[str, dict], dialect: str = "trino") -> str:
     """비교는 타입 유연하게 조립한다 — 물리 테이블 타입이 스냅샷과 달라져도(온톨로지
     드리프트: 예. varchar 연도 → integer) 필터가 깨지지 않도록 정규화한다.
     숫자 값 → try_cast(col as double) 비교 (varchar 캐스팅은 double 을 '5.0E-1' 식
@@ -246,9 +336,9 @@ def _condition(f: dict, fields: dict[str, dict]) -> str:
         raise SpecError(f"{field_name} 필드에는 {op} 연산자를 사용할 수 없습니다")
     numeric_field = field.get("role") in NUMERIC_FILTER_ROLES
     code_strict = field.get("role") in CODE_STRICT_ROLES
-    v = f.get("value")
-    s_col = f"cast({col} as varchar)"
-    n_col = f"try_cast({col} as double)"
+    v = _coerce_bools(f.get("value"), dialect)
+    s_col = _str_expr(col, dialect)
+    n_col = _num_expr(col, field, dialect)
 
     # NULL 판정은 캐스팅 이전의 **원본 컬럼**을 본다 — try_cast(col as double) is null 로
     # 조립하면 '비숫자 문자열'까지 매칭되어 의미가 '물리적 null'에서 왜곡된다. 값 불허.
@@ -277,7 +367,7 @@ def _condition(f: dict, fields: dict[str, dict]) -> str:
         return f"{s_col} {neg}like {_str_lit(v)}"
     if op in ("contains", "starts_with", "ends_with"):
         wrap = {"contains": ("%", "%"), "starts_with": ("", "%"), "ends_with": ("%", "")}[op]
-        return f"{s_col} like {_like_pattern(v, prefix=wrap[0], suffix=wrap[1])}"
+        return f"{s_col} like {_like_pattern(v, prefix=wrap[0], suffix=wrap[1], dialect=dialect)}"
     if op in ("gt", "gte", "lt", "lte"):
         if _is_blank(v):
             raise SpecError("필터 값은 비워둘 수 없습니다")
@@ -324,7 +414,8 @@ def _is_group(node: Any) -> bool:
     return isinstance(node, dict) and "logic" in node
 
 
-def _render_filters(nodes: list, fields: dict[str, dict], logic: str = "and") -> str:
+def _render_filters(nodes: list, fields: dict[str, dict], logic: str = "and",
+                    dialect: str = "trino") -> str:
     """필터 트리(2단: 최상위 leaf|그룹, 그룹 안은 leaf 전용) → WHERE 본문.
 
     캐시 호환 불변식: 평면 leaf 배열의 출력은 종전 ' and '.join 과 byte-동일해야 한다 —
@@ -347,19 +438,19 @@ def _render_filters(nodes: list, fields: dict[str, dict], logic: str = "and") ->
                 raise SpecError(f"그룹당 조건은 {MAX_GROUP_CONDITIONS}개 이하여야 합니다")
             if any(_is_group(child) for child in children):
                 raise SpecError("그룹 안에 그룹은 넣을 수 없습니다(2단 계약)")
-            rendered = [_condition(child, fields) for child in children]
+            rendered = [_condition(child, fields, dialect) for child in children]
             leaves += len(children)
             parts.append(rendered[0] if len(rendered) == 1
                          else "(" + f" {inner_logic} ".join(rendered) + ")")
         else:
-            parts.append(_condition(node, fields))
+            parts.append(_condition(node, fields, dialect))
             leaves += 1
         if leaves > MAX_FILTER_LEAVES:
             raise SpecError(f"필터 조건은 총 {MAX_FILTER_LEAVES}개 이하여야 합니다")
     return f" {logic} ".join(parts)
 
 
-def _having_condition(h: dict, fields: dict[str, dict]) -> str:
+def _having_condition(h: dict, fields: dict[str, dict], dialect: str = "trino") -> str:
     """집계 결과 조건(HAVING) — 집계식은 SELECT 와 **동일한 _measure_expr 화이트리스트**를
     재사용한다(별도 조립 경로를 만들면 SELECT 에서 막힌 금지 집계를 HAVING 으로 우회 가능).
     Trino 는 HAVING 에서 SELECT 별칭 참조가 불가하므로 집계식 원문을 재조립한다."""
@@ -367,7 +458,7 @@ def _having_condition(h: dict, fields: dict[str, dict]) -> str:
     if op not in HAVING_OPS:
         raise SpecError(f"집계 조건에 허용되지 않는 연산자입니다: {op}")
     agg = h.get("agg", "count")
-    expr = _measure_expr(h.get("field"), agg, fields)
+    expr = _measure_expr(h.get("field"), agg, fields, dialect)
     v = h.get("value")
     if op == "between":
         if not isinstance(v, (list, tuple)) or len(v) != 2:
@@ -378,21 +469,24 @@ def _having_condition(h: dict, fields: dict[str, dict]) -> str:
     return f"{expr} {sign} {_lit(_numeric(v))}"
 
 
-def validate_filter(filter_spec: dict, fields: dict[str, dict]) -> None:
+def validate_filter(filter_spec: dict, fields: dict[str, dict],
+                    dialect: str = "trino") -> None:
     """SQL 실행 없이 필터 leaf 의 필드·연산자·값 모양을 동일 규칙으로 검증한다."""
-    _condition(filter_spec, fields)
+    _condition(filter_spec, fields, dialect)
 
 
-def validate_filter_tree(nodes: list, fields: dict[str, dict]) -> None:
+def validate_filter_tree(nodes: list, fields: dict[str, dict],
+                         dialect: str = "trino") -> None:
     """SQL 실행 없이 필터 트리(그룹 포함) 전체를 조회 경로와 같은 워커로 검증한다 —
     저장(레이아웃)과 조회(query)가 서로 다른 walker 를 가지면 계약이 갈라진다."""
-    _render_filters(nodes, fields)
+    _render_filters(nodes, fields, dialect=dialect)
 
 
-def validate_having(having: list, fields: dict[str, dict]) -> None:
+def validate_having(having: list, fields: dict[str, dict],
+                    dialect: str = "trino") -> None:
     """SQL 실행 없이 집계 조건을 조회 경로와 같은 규칙으로 검증한다."""
     for h in having:
-        _having_condition(h, fields)
+        _having_condition(h, fields, dialect)
 
 
 def build(source: dict, spec: dict) -> str:
@@ -400,7 +494,9 @@ def build(source: dict, spec: dict) -> str:
 
     dim 이 {field, bin_width} 형태면 숫자 측정값을 구간(히스토그램) 축으로 그룹핑한다 —
     별칭은 필드명 그대로라 소비자는 일반 dim 과 동일하게 읽는다.
+    방언은 소스의 backend(trino|postgres|sqlite)가 결정한다 — 스펙·검증 계약은 동일.
     """
+    dialect = resolve_dialect(source.get("backend"))
     fields = {f["name"]: f for f in source["fields"]}
 
     dims = spec.get("dims") or []
@@ -415,17 +511,19 @@ def build(source: dict, spec: dict) -> str:
 
     select_parts: list[str] = []
     aliases: list[str] = []
+    dim_exprs: list[str] = []   # oracle/mssql — GROUP BY 위치지정 불가 시 식 반복용
     for d in dims:
         name = d["field"] if isinstance(d, dict) else d
         f = fields.get(name)
         if f is None:
             raise SpecError(f"'{name}' 은(는) 이 소스에 없는 필드입니다")
         if isinstance(d, dict):
-            expr = _binned_dim_expr(f, _bin_width(d.get("bin_width")))
+            expr = _binned_dim_expr(f, _bin_width(d.get("bin_width")), dialect)
         else:
-            expr = _dim_expr(f)
+            expr = _dim_expr(f, dialect)
         select_parts.append(f"{expr} as {_quote_ident(name)}")
         aliases.append(name)
+        dim_exprs.append(expr)
     for m in measures:
         agg = m.get("agg", "sum")
         field_name = m.get("field")
@@ -435,7 +533,7 @@ def build(source: dict, spec: dict) -> str:
         if alias in aliases:
             alias = f"{alias}_{len(aliases)}"
         select_parts.append(
-            f"{_measure_expr(field_name, agg, fields)} as {_quote_ident(alias)}"
+            f"{_measure_expr(field_name, agg, fields, dialect)} as {_quote_ident(alias)}"
         )
         aliases.append(alias)
 
@@ -443,18 +541,21 @@ def build(source: dict, spec: dict) -> str:
 
     filters = spec.get("filters") or []
     if filters:
-        where = _render_filters(filters, fields, spec.get("filters_logic") or "and")
+        where = _render_filters(filters, fields, spec.get("filters_logic") or "and", dialect)
         if where:
             sql += " where " + where
 
     if dims:
-        sql += " group by " + ", ".join(str(i + 1) for i in range(len(dims)))
+        if DIALECTS[dialect]["positional"]:
+            sql += " group by " + ", ".join(str(i + 1) for i in range(len(dims)))
+        else:  # oracle 은 'group by 1' 을 상수로 해석(치명) — 식 반복이 유일한 안전 경로
+            sql += " group by " + ", ".join(dim_exprs)
 
     having = spec.get("having") or []
     if having:
         if not dims:
             raise SpecError("집계 조건(having)은 차원(축)이 있는 질의에서만 쓸 수 있습니다")
-        sql += " having " + " and ".join(_having_condition(h, fields) for h in having)
+        sql += " having " + " and ".join(_having_condition(h, fields, dialect) for h in having)
 
     order_by = spec.get("order_by") or []
     if order_by:
@@ -468,5 +569,11 @@ def build(source: dict, spec: dict) -> str:
         sql += " order by " + ", ".join(parts)
 
     limit = min(int(spec.get("limit") or 1000), MAX_LIMIT)
-    sql += f" limit {limit}"
+    style = DIALECTS[dialect]["limit"]
+    if style == "limit":
+        sql += f" limit {limit}"
+    elif style == "fetch":                       # oracle 12c+
+        sql += f" fetch first {limit} rows only"
+    else:                                        # mssql — SELECT 절 TOP 삽입
+        sql = f"select top {limit} " + sql[len("select "):]
     return sql

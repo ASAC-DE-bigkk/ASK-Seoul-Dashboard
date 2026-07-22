@@ -358,6 +358,30 @@ dashboard/
 대시보드에 복사·도입하는 것은 별도 구조 변경이다. 단순 문서나 UI 변경에 임의로 이식하지 말고,
 서버 보안 체계를 확장하는 작업에서 필요성과 검증 범위를 먼저 합의한다.
 
+### 9.0 다중 백엔드 온톨로지 (2026-07-23)
+
+온톨로지는 스냅샷만 읽는 백엔드 중립 설계다 — Trino(gold) 외에 **외부 RDB 의 테이블·뷰**도
+같은 계약(role·차트·필터·구간·코드→한글 라벨)으로 소스가 된다.
+
+- **연결 정의**: env `CHARTS_DATASOURCES`(JSON — 이름→{backend, path|dsn_env}).
+  자격증명은 dsn_env 간접 참조(값이 설정/로그에 남지 않음). 스냅샷 반영은
+  `python extract.py --refresh-datasource <이름>` (테이블+뷰, 통계·code_labels 실측 포함).
+  레지스트리 키는 `<이름>__<객체명>`, 도메인 = 연결 이름.
+- **방언(정본: `querybuilder.DIALECTS`)**: trino·postgres·sqlite·mysql·oracle·mssql +
+  별칭(mariadb→mysql, cockroachdb/redshift→postgres, duckdb/snowflake→trino).
+  식별자 인용은 전 방언 ANSI `"x"` — mysql 은 실행기가 세션 `ANSI_QUOTES,
+  NO_BACKSLASH_ESCAPES` 를 강제, mssql 은 QUOTED_IDENTIFIER ON. 분기는 숫자
+  안전캐스트(try_cast 에뮬레이션 — sqlite `CAST('abc' AS REAL)=0` · mysql 암묵 변환
+  함정을 검증식으로 차단)·집계 캐스트·bool 리터럴·GROUP BY(oracle/mssql 은 위치지정
+  불가 → 식 반복)·LIMIT(oracle FETCH FIRST·mssql TOP)·LIKE 와일드카드(mssql `[`)뿐.
+  **trino 방언 출력은 byte-동일 유지**(캐시 키 보존).
+- **실행(정본: `app/charts/backends.py`)**: datasource 라우팅 — sqlite 는 `mode=ro`+
+  `query_only`, postgres `default_transaction_read_only`, mysql `SESSION TRANSACTION
+  READ ONLY`+실행시간 상한, oracle `SET TRANSACTION READ ONLY`+call_timeout.
+  **mssql 은 세션 읽기전용이 없다 — 계정 권한을 SELECT 로 제한하는 것이 운영 계약.**
+  드라이버는 선택 설치(psycopg/pymysql/oracledb/pyodbc — 없으면 명확한 502).
+- 계약 테스트: `tests/test_multibackend.py`(sqlite 종단 실행 + 방언 SQL 계약).
+
 ### 9.1 입력 표준 필터 (정본: `app/inputguard.py`)
 
 모든 API 입력은 표준 필터 어휘 중 하나를 거친다 — 핸들러마다 검증을 재발명하지 않는다.

@@ -393,7 +393,7 @@ def test_source_availability_counts_only_registry_fields(monkeypatch) -> None:
     aliases = [f"field_{index}" for index, _ in enumerate(source["fields"])]
     captured: dict[str, object] = {}
 
-    def fake_execute(sql: str, max_rows: int = 0) -> dict:
+    def fake_execute(sql: str, max_rows: int = 0, force: bool = False) -> dict:
         captured.update(sql=sql, max_rows=max_rows)
         return {
             "columns": aliases,
