@@ -151,6 +151,9 @@ def _summary(t: dict) -> dict:
         "external": t.get("external", True),
         "column_count": len(t["columns"]),
         "quality_source_count": len(t["quality"]),
+        "serving_tier": t.get("serving_tier"),
+        "tests": t.get("tests", []),
+        "served_url": t.get("served_url"),
     }
 
 
@@ -314,7 +317,7 @@ def table_quality(name: str):
     t = _get_or_404(name)
     if isinstance(t, JSONResponse):
         return t
-    return {"name": t["name"], "quality": t["quality"]}
+    return {"name": t["name"], "quality": t["quality"], "tests": t.get("tests", [])}
 
 
 @app.get("/api/v1/catalog/tables/{name}/sample", response_model=SampleResponse,

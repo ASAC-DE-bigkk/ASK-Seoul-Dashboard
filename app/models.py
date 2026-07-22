@@ -34,6 +34,9 @@ class TableSummary(BaseModel):
     tags: list[str] = Field(default_factory=list)
     contract_enforced: bool
     materialized: str = ""
+    serving_tier: str | None = None   # 도메인이 dbt config.meta 로 선언한 D1 서빙 tier
+    tests: list[str] = []             # 모델에 걸린 dbt 테스트 게이트 (정의 기준)
+    served_url: str | None = None     # 공개 D1 서빙 API URL (미적재면 None)
     row_count: int
     column_count: int
     date_range: DateRange | None = None
@@ -71,6 +74,7 @@ class SchemaResponse(BaseModel):
 class QualityResponse(BaseModel):
     name: str
     quality: list[QualityEntry]
+    tests: list[str] = []
 
 
 class SampleResponse(BaseModel):

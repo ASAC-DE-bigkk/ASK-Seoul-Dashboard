@@ -34,6 +34,9 @@ NAME_ROLES: dict[str, tuple[str, dict]] = {
     "month_of_year": ("time", {"granularity": "month_of_year"}),
     "observed_date": ("time", {"granularity": "date"}),
     "years_elapsed": ("sequence", {}),
+    "hr": ("sequence", {}),     # 시각(0~23) — citydata forecast/anomaly 의 시간대 진행축
+    "hour": ("sequence", {}),
+    "dow": ("sequence", {}),    # 요일(1~7) — citydata demographics 의 요일 진행축
     "gu": ("geo_gu", {}),
     "gu_name": ("geo_gu", {}),
     "gu_code": ("geo_gu_code", {}),
