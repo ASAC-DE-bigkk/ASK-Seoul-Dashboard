@@ -1,0 +1,113 @@
+# 개발 환경 — 실제 로그인(AUTH_MODE=required) + PostgreSQL.
+# Trino는 이 compose가 아니라 deploy/trino/compose.yaml 로 "별도 배포"한다.
+#
+# 사용:  (dashboard/ 에서)
+#   1) Trino 별도 배포(elt_net 생성):
+#        docker compose -f deploy/trino/compose.yaml --env-file deploy/env/trino.env up -d
+#   2) 앱 + DB:
+#        docker compose -f deploy/compose.dev.yaml --env-file deploy/env/dev.env up --build
+#   → http://127.0.0.1:8765  (dev.env의 부트스트랩 관리자로 로그인)
+#
+# 서버/운영(prod) 배포는 이 파일이 아니라 deploy/compose.yaml(이미지 기반)을 사용한다.
+x-dev-app-env: &dev-app-env
+  AUTH_ENV: development
+  AUTH_MODE: required
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB is required}
+  AUTH_PUBLIC_BASE_URL: http://127.0.0.1:${DASHBOARD_PORT:-8765}
+  AUTH_ALLOWED_HOSTS: 127.0.0.1,localhost
+  AUTH_COOKIE_SECURE: "false"
+  AUTH_TRUST_PROXY_HEADERS: "false"
+  # 비우면 development에서 data/ 볼륨에 자동 생성/파생된다.
+  AUTH_SESSION_PEPPER: ${AUTH_SESSION_PEPPER:-}
+  AUTH_MFA_MASTER_KEY: ${AUTH_MFA_MASTER_KEY:-}
+  # 최초 관리자(로그인용). 둘 다 설정하거나 둘 다 비운다.
+  AUTH_BOOTSTRAP_ADMIN_EMAIL: ${AUTH_BOOTSTRAP_ADMIN_EMAIL:-}
+  AUTH_BOOTSTRAP_ADMIN_PASSWORD: ${AUTH_BOOTSTRAP_ADMIN_PASSWORD:-}
+  # 별도 배포된 Trino companion(elt_net의 DNS alias 'trino').
+  CHARTS_TRINO_URL: ${CHARTS_TRINO_URL:-http://trino:8080}
+  CHARTS_TRINO_USER: charts-studio
+  CHARTS_CACHE_TTL: "600"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    volumes:
+      - auth_postgres_dev:/var/lib/postgresql/data
+    networks:
+      - dashboard
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        PYTHON_VERSION: "3.12"
+    image: ask-seoul-dashboard:dev
+    command: ["python", "scripts/init_auth_db.py"]
+    environment: *dev-app-env
+    volumes:
+      - auth_data_dev:/app/data
+    networks:
+      - dashboard
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  dashboard:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        PYTHON_VERSION: "3.12"
+    image: ask-seoul-dashboard:dev
+    init: true
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8765"]
+    environment: *dev-app-env
+    ports:
+      - 127.0.0.1:${DASHBOARD_PORT:-8765}:8765
+    volumes:
+      - auth_data_dev:/app/data
+      - chart_cache_dev:/app/app/charts/data/cache
+    networks:
+      - dashboard
+      - data
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+volumes:
+  auth_postgres_dev:
+  auth_data_dev:
+  chart_cache_dev:
+
+networks:
+  dashboard:
+  # deploy/trino/compose.yaml 이 만드는 외부 네트워크. Trino를 먼저 기동해야 한다.
+  data:
+    external: true
+    name: ${DASHBOARD_DATA_NETWORK:-elt_net}

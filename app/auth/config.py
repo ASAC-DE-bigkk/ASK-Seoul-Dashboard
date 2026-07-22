@@ -4,11 +4,12 @@
 """
 from __future__ import annotations
 
+import ipaddress
 import os
 import secrets
 import hashlib
 import hmac
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -96,6 +97,7 @@ class AuthSettings:
     max_request_bytes: int
     bootstrap_admin_email: str
     bootstrap_admin_password: str
+    local_auto_client_cidrs: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def production(self) -> bool:
@@ -200,6 +202,32 @@ def load_settings() -> AuthSettings:
     except ArgumentError as exc:
         raise RuntimeError("DATABASE_URL 형식이 올바르지 않습니다.") from exc
     trusted_proxy_headers = _bool("AUTH_TRUST_PROXY_HEADERS", False)
+    local_auto_client_cidrs: tuple[str, ...] = ()
+    raw_client_cidrs = os.environ.get("AUTH_LOCAL_AUTO_CLIENT_CIDRS", "").strip()
+    if raw_client_cidrs:
+        if mode != "local_auto":
+            raise RuntimeError(
+                "AUTH_LOCAL_AUTO_CLIENT_CIDRS는 AUTH_MODE=local_auto에서만 사용할 수 있습니다."
+            )
+        parsed_cidrs = []
+        for item in raw_client_cidrs.split(","):
+            item = item.strip()
+            if not item:
+                continue
+            try:
+                network = ipaddress.ip_network(item, strict=False)
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"AUTH_LOCAL_AUTO_CLIENT_CIDRS 항목이 올바른 CIDR이 아닙니다: {item}"
+                ) from exc
+            # 컨테이너 loopback publish 전제 하에서의 보조 신뢰 대역이므로 사설/loopback만
+            # 허용한다. 공인 IP 대역(예: 0.0.0.0/0)은 원격 자동 로그인을 열어 위험하다.
+            if not (network.is_private or network.is_loopback):
+                raise RuntimeError(
+                    "AUTH_LOCAL_AUTO_CLIENT_CIDRS는 사설/loopback 대역만 허용합니다(공인 IP 금지)."
+                )
+            parsed_cidrs.append(str(network))
+        local_auto_client_cidrs = tuple(parsed_cidrs)
     if mode == "local_auto":
         loopback_hosts = {"127.0.0.1", "localhost", "::1"}
         if env != "development":
@@ -277,4 +305,5 @@ def load_settings() -> AuthSettings:
         max_request_bytes=max(16_384, _int("AUTH_MAX_REQUEST_BYTES", 262_144)),
         bootstrap_admin_email=bootstrap_admin_email,
         bootstrap_admin_password=bootstrap_admin_password,
+        local_auto_client_cidrs=local_auto_client_cidrs,
     )

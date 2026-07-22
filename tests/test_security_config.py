@@ -695,3 +695,66 @@ def test_secret_operator_scripts_require_interactive_tty(script_name):
     )
     assert result.returncode != 0
     assert "TTY" in result.stderr + result.stdout
+
+
+
+def test_local_auto_client_cidrs_allow_container_gateway_not_public(
+    monkeypatch, tmp_path
+):
+    # 컨테이너 loopback publish 전제의 보조 신뢰 대역(사설). 공인 IP는 여전히 거부.
+    monkeypatch.setenv("AUTH_LOCAL_AUTO_CLIENT_CIDRS", "172.16.0.0/12")
+    settings = _local_auto_env(monkeypatch, tmp_path)
+    assert settings.local_auto_client_cidrs == ("172.16.0.0/12",)
+    database = Database(settings.database_url, enable_sqlite_wal=False)
+    initialize_database(database, settings)
+
+    local_app = FastAPI()
+    local_app.state.auth_settings = settings
+    local_app.state.database = database
+
+    @local_app.get("/api/v1/auth/session")
+    def session_info(request: Request):
+        user = request.state.user
+        return {
+            "authenticated": user is not None,
+            "user": {"role": user.role} if user is not None else None,
+        }
+
+    local_app.add_middleware(AuthSecurityMiddleware, settings=settings)
+
+    # Docker 게이트웨이 대역(사설)에서 온 요청은 운영자로 자동 로그인된다.
+    with TestClient(local_app, client=("172.20.0.5", 40000)) as gateway:
+        state = gateway.get("/api/v1/auth/session")
+        assert state.status_code == 200
+        assert state.json()["authenticated"] is True
+        assert state.json()["user"]["role"] == "operator"
+        assert gateway.cookies.get(settings.cookie_name)
+
+    # 허용 대역 밖(공인)은 자동 세션이 발급되지 않는다.
+    with TestClient(local_app, client=("203.0.113.7", 40001)) as outside:
+        state = outside.get("/api/v1/auth/session")
+        assert state.status_code == 200
+        assert state.json()["authenticated"] is False
+        assert outside.cookies.get(settings.cookie_name) is None
+
+
+def test_local_auto_client_cidrs_reject_public_range_and_non_local_mode(
+    monkeypatch, tmp_path
+):
+    # 공인 대역은 원격 자동 로그인을 열 수 있어 금지한다.
+    monkeypatch.setenv("AUTH_LOCAL_AUTO_CLIENT_CIDRS", "0.0.0.0/0")
+    with pytest.raises(RuntimeError, match="사설/loopback"):
+        _local_auto_env(monkeypatch, tmp_path)
+
+    # local_auto가 아닌 모드에서는 아예 사용할 수 없다.
+    monkeypatch.setenv("AUTH_ENV", "development")
+    monkeypatch.setenv("AUTH_MODE", "required")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'req.db'}")
+    monkeypatch.setenv("AUTH_PUBLIC_BASE_URL", "http://127.0.0.1:8765")
+    monkeypatch.setenv("AUTH_ALLOWED_HOSTS", "127.0.0.1,localhost")
+    monkeypatch.setenv("AUTH_COOKIE_SECURE", "false")
+    monkeypatch.setenv("AUTH_SESSION_PEPPER", "required-mode-test-session-pepper-long-value")
+    monkeypatch.setenv("AUTH_MFA_MASTER_KEY", "required-mode-test-mfa-master-key-long-value")
+    monkeypatch.setenv("AUTH_LOCAL_AUTO_CLIENT_CIDRS", "172.16.0.0/12")
+    with pytest.raises(RuntimeError, match="local_auto"):
+        load_settings()

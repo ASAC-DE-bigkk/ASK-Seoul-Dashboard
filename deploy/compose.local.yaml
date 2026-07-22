@@ -1,0 +1,52 @@
+# 로컬 개발 환경 — 로그인 없이 운영자 예약 계정으로 자동 로그인.
+#
+# 사용:  (dashboard/ 에서)
+#   docker compose -f deploy/compose.local.yaml up --build
+#   → http://127.0.0.1:8765/charts  (운영자로 자동 진입)
+#
+# Trino는 상위 sample/ 의 도커에서 찾아온다(host.docker.internal:30586). 이 compose는
+# Trino를 띄우지 않으므로 상위 sample/ 의 Trino를 먼저 기동한다:
+#   (sample/ 에서)  docker compose up -d trino
+#
+# 보안: 앱은 반드시 127.0.0.1 에만 publish한다. 컨테이너 안 앱은 클라이언트 IP가
+# Docker 게이트웨이(사설)로 보이므로 AUTH_LOCAL_AUTO_CLIENT_CIDRS 로 그 대역을 신뢰해
+# 자동 로그인을 허용한다. 이 신뢰는 loopback publish 전제에서만 안전하다(0.0.0.0 금지).
+services:
+  dashboard:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        PYTHON_VERSION: "3.12"
+    image: ask-seoul-dashboard:local
+    init: true
+    environment:
+      AUTH_ENV: development
+      AUTH_MODE: local_auto
+      DATABASE_URL: sqlite:////app/data/ask_seoul.local.db
+      AUTH_PUBLIC_BASE_URL: http://127.0.0.1:${DASHBOARD_PORT:-8765}
+      AUTH_ALLOWED_HOSTS: 127.0.0.1,localhost
+      AUTH_COOKIE_SECURE: "false"
+      AUTH_TRUST_PROXY_HEADERS: "false"
+      AUTH_REQUIRE_MFA_FOR_PRIVILEGED: "false"
+      # Docker 브리지 게이트웨이 대역(사설). 컨테이너 게이트웨이를 loopback 등가로 신뢰한다.
+      AUTH_LOCAL_AUTO_CLIENT_CIDRS: ${AUTH_LOCAL_AUTO_CLIENT_CIDRS:-172.16.0.0/12,192.168.0.0/16,10.0.0.0/8}
+      # 상위 sample/ 의 Trino(호스트 30586). 없으면 카탈로그·화면은 뜨고 차트만 stale/503.
+      CHARTS_TRINO_URL: ${CHARTS_TRINO_URL:-http://host.docker.internal:30586}
+      CHARTS_TRINO_USER: charts-studio
+      CHARTS_CACHE_TTL: "600"
+    ports:
+      # 반드시 loopback 전용. 0.0.0.0 으로 바꾸지 말 것.
+      - 127.0.0.1:${DASHBOARD_PORT:-8765}:8765
+    volumes:
+      - auth_data_local:/app/data
+      - chart_cache_local:/app/app/charts/data/cache
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    restart: unless-stopped
+    stop_grace_period: 15s
+
+volumes:
+  auth_data_local:
+  chart_cache_local:
