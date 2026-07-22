@@ -229,6 +229,41 @@ def truncate_cell(value):
 
 CODE_LABEL_CAP = 2000  # distinct 가 이보다 크면 코드 사전이 아니다(라벨화 부적합)
 
+NUMERIC_TYPE_PREFIXES = ("bigint", "integer", "int", "smallint", "tinyint",
+                         "double", "real", "decimal", "float")
+
+
+def collect_column_stats(rel: str, columns: list[dict]) -> dict[str, dict]:
+    """컬럼별 approx_distinct(전 컬럼) + min/max(숫자형) 실측 — 테이블당 1쿼리.
+
+    Charts Studio 온톨로지가 '선언이 아니라 실측'으로 축 자율성을 판단하는 근거:
+    저카디널리티 숫자 컬럼의 groupby 개방(distinct_count)과 구간화 기본 폭 제안(min/max).
+    실패 시 스킵 — 통계는 부가정보라 스냅샷 자체를 막지 않는다.
+    """
+    parts, keys = [], []
+    for i, c in enumerate(columns):
+        name = c["name"]
+        parts.append(f'approx_distinct("{name}") AS d_{i}')
+        keys.append((f"d_{i}", name, "distinct_count"))
+        if c.get("type", "").split("(")[0] in NUMERIC_TYPE_PREFIXES:
+            parts.append(f'cast(min("{name}") AS double) AS mn_{i}')
+            parts.append(f'cast(max("{name}") AS double) AS mx_{i}')
+            keys.append((f"mn_{i}", name, "min"))
+            keys.append((f"mx_{i}", name, "max"))
+    if not parts:
+        return {}
+    try:
+        row = trino_rows(f"SELECT {', '.join(parts)} FROM {rel}", timeout=120)[0]
+    except (RuntimeError, IndexError) as exc:
+        print(f"  ! column_stats skip: {exc}")
+        return {}
+    stats: dict[str, dict] = {}
+    for alias, name, field in keys:
+        value = row.get(alias)
+        if value is not None:
+            stats.setdefault(name, {})[field] = value
+    return stats
+
 
 def collect_code_labels(rel: str, columns: list[dict]) -> dict[str, dict[str, str]]:
     """식별↔표시 동반 컬럼 쌍의 distinct 값 실측 → {식별필드: {코드: 표시값}}.
@@ -404,6 +439,9 @@ def extract_basic_domain(domain: str, schema: str, meta_lookup: dict) -> list[di
             print(f"  ! skip: {exc}")
             continue
         code_labels = collect_code_labels(rel, columns)
+        stats = collect_column_stats(rel, columns)
+        for c in columns:
+            c.update(stats.get(c["name"], {}))
         tables.append({
             "name": name,
             "domain": domain,
@@ -586,6 +624,9 @@ def main() -> None:
 
         row_count, date_range, sample = measure(rel, columns)
         code_labels = collect_code_labels(rel, columns)
+        stats = collect_column_stats(rel, columns)
+        for c in columns:
+            c.update(stats.get(c["name"], {}))
 
         quality = []
         for silver_uid in quality_parents(uid, nodes):

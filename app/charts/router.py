@@ -17,7 +17,7 @@ from .models import (
     QueryRequest, QueryResponse, ReorderRequest, SourceAvailability,
     SourceDetail, SourcesResponse,
 )
-from .ontology import CHART_TYPES, registry
+from .ontology import CHART_TYPES, field_matches_slot, registry
 
 router = APIRouter(prefix="/api/v1/charts", tags=["charts"])
 
@@ -64,6 +64,18 @@ def _validate_charts(charts) -> None:
             raise querybuilder.SpecError(
                 f"알 수 없는 바인딩 슬롯입니다: {', '.join(sorted(unknown_slots))}"
             )
+        # 구간(bins) 계약 — binnable 슬롯 + 숫자 측정값 + 유한한 양수 폭에서만 성립
+        unknown_bins = set(chart.bins) - set(slots)
+        if unknown_bins:
+            raise querybuilder.SpecError(
+                f"알 수 없는 구간 슬롯입니다: {', '.join(sorted(unknown_bins))}"
+            )
+        for bin_slot, width in chart.bins.items():
+            if not slots[bin_slot].get("binnable"):
+                raise querybuilder.SpecError(f"{bin_slot} 슬롯은 구간(bin)을 지원하지 않습니다")
+            if not chart.bindings.get(bin_slot):
+                raise querybuilder.SpecError(f"구간 슬롯 {bin_slot}에 바인딩된 필드가 없습니다")
+            querybuilder._bin_width(width)
         used_bindings: dict[str, str] = {}
         for slot_name, slot in slots.items():
             field_name = chart.bindings.get(slot_name)
@@ -81,7 +93,16 @@ def _validate_charts(charts) -> None:
                 raise querybuilder.SpecError(
                     f"{field_name} 필드는 분석 축/값으로 안전하지 않아 차트 슬롯에 사용할 수 없습니다"
                 )
-            if field["role"] not in slot["accepts"]:
+            if slot_name in chart.bins:
+                if field["role"] != "measure":
+                    raise querybuilder.SpecError(
+                        f"구간(bin)은 숫자 측정값에만 적용됩니다: {field_name}"
+                    )
+            elif not field_matches_slot(field, slot):
+                if field["role"] == "measure" and slot.get("binnable"):
+                    raise querybuilder.SpecError(
+                        f"{field_name}(숫자)을 {slot_name} 축으로 쓰려면 구간 폭(bins.{slot_name})이 필요합니다"
+                    )
                 raise querybuilder.SpecError(
                     f"{field_name} 필드는 {slot_name} 슬롯에 사용할 수 없습니다"
                 )
@@ -134,9 +155,13 @@ def _validate_charts(charts) -> None:
                 raise querybuilder.SpecError(
                     "이 측정값은 시간 누적 시 중복 합산될 수 있어 누적 경주를 사용할 수 없습니다"
                 )
-        for field_name in used_bindings:
+        for field_name, bound_slot in used_bindings.items():
             field = fields[field_name]
             if field["role"] != "measure":
+                continue
+            # 집계 제약은 '집계되는 슬롯'(value/x/y 처럼 measure 를 받는 슬롯)에만 적용 —
+            # groupable/구간 축으로 바인딩된 measure 는 그룹 키라 집계되지 않는다.
+            if "measure" not in slots[bound_slot]["accepts"]:
                 continue
             allowed = field.get("allowed_aggs")
             if allowed is not None and chart.agg not in allowed:

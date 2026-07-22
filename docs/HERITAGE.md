@@ -48,6 +48,8 @@ Charts Studio 가 라이브 질의를 갖는 이유: 사용자가 소스·차원
 | 지역 코드 | gold 데이터는 전부 **MOIS(행안부)** 체계(종로=11110). GeoJSON 자산의 원 code 는 **KOSTAT(통계청)** 체계(종로=11010) — **혼용 금지**. 단 seoul_dong 폴리곤에는 `scripts/assign_mois_codes.py` 가 MOIS `mois_code`(10자리)를 병기해 코드 매칭을 지원한다. 매칭 규칙은 `geo.js` 상단 주석과 [design-intents D-3](charts-design-intents.md) |
 | 식별 vs 표시 | 코드/이름(en/ko) 동반 컬럼은 **식별·집계=코드, 표기=한글**이 원칙. 서버가 스냅샷 `code_labels` 실측으로 `value_labels`(코드→한글, 중복 동명은 `신사동·강남구`)와 필드 `id_field`/`label_field` 를 서빙하고, 프론트 `effectiveBindings` 가 이름 바인딩을 코드 GROUP BY 로 승격한다(저장물 불변) — 동명이동 합산 방지 |
 | 코드값 | `major`: health/culture/industry/environment · `event_type`: opened/closed · `age_band`: `0_lt1y`~`5_ge20y` (정적 사전은 `ontology.VALUE_LABELS`, 데이터 유래 사전은 스냅샷 `code_labels`) |
+| 축 자율성(실측) | 스냅샷이 컬럼별 `distinct_count`(approx)·`min`/`max` 를 실측 — `distinct≤50` measure 는 `groupable`(category 축 허용), binnable 슬롯 + `chart.bins[슬롯]` 폭이면 measure 구간 축(`floor(값/폭)*폭`, 표기 `시작~끝`). 규칙 정본 [design-intents D-2-7](charts-design-intents.md) |
+| 재빌드 창 폴백 | gold 전량 재생성(rename)의 '테이블 없음' 순간은 `trino.py` 가 TABLE_NOT_FOUND 를 감지해 stale 캐시로 응답(mode=stale 표기) — 0행/에러 대신 직전 정상 스냅샷 |
 | 결측 표기 | 지역 코드 결측은 문자열 `'UNK'` — 지도 매칭에서 제외된다 |
 | 파이썬/실행 | Python 3.9+ 호환. FastAPI·SQLAlchemy·Argon2. 포트 관례 8765(문서)·8799(개발) |
 | 인증 DB | `DATABASE_URL`, 기본 `sqlite:///./data/ask_seoul.db`. PostgreSQL/MySQL dialect DDL도 테스트 |

@@ -65,6 +65,24 @@ def _dim_expr(field: dict) -> str:
     return quoted
 
 
+def _bin_width(raw: Any) -> float:
+    """구간 폭 검증 — 유한한 양수만. (0/음수/무한은 floor 나눗셈 의미가 무너진다.)"""
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        raise SpecError("구간 폭(bin)은 숫자여야 합니다")
+    width = float(raw)
+    if not math.isfinite(width) or width <= 0:
+        raise SpecError("구간 폭(bin)은 유한한 양수여야 합니다")
+    return width
+
+
+def _binned_dim_expr(field: dict, width: float) -> str:
+    """숫자 측정값의 구간 축 — floor(값/폭)*폭 = 구간 시작값. 별칭은 필드명 유지
+    (소비자·정렬·피벗이 일반 dim 과 동일하게 동작). null 값은 구간 null 로 남는다."""
+    quoted = _quote_ident(field["name"])
+    lit = repr(width)
+    return f"cast(floor(try_cast({quoted} as double) / {lit}) * {lit} as double)"
+
+
 def _measure_expr(field_name: str | None, agg: str, fields: dict[str, dict]) -> str:
     if agg not in AGGS:
         raise SpecError(f"허용되지 않는 집계입니다: {agg}")
@@ -200,24 +218,36 @@ def validate_filter(filter_spec: dict, fields: dict[str, dict]) -> None:
 
 
 def build(source: dict, spec: dict) -> str:
-    """spec = {dims: [name], measures: [{field?, agg, alias?}], filters, order_by, limit}"""
+    """spec = {dims: [name | {field, bin_width}], measures: [{field?, agg, alias?}], filters, order_by, limit}
+
+    dim 이 {field, bin_width} 형태면 숫자 측정값을 구간(히스토그램) 축으로 그룹핑한다 —
+    별칭은 필드명 그대로라 소비자는 일반 dim 과 동일하게 읽는다.
+    """
     fields = {f["name"]: f for f in source["fields"]}
 
     dims = spec.get("dims") or []
     measures = spec.get("measures") or []
     if not measures:
         raise SpecError("measures 가 최소 1개 필요합니다")
-    if len(dims) != len(set(dims)):
+    dim_names = [d["field"] if isinstance(d, dict) else d for d in dims]
+    if any(not isinstance(n, str) or not n for n in dim_names):
+        raise SpecError("차원 형식이 올바르지 않습니다")
+    if len(dim_names) != len(set(dim_names)):
         raise SpecError("차원 필드는 서로 달라야 합니다")
 
     select_parts: list[str] = []
     aliases: list[str] = []
     for d in dims:
-        f = fields.get(d)
+        name = d["field"] if isinstance(d, dict) else d
+        f = fields.get(name)
         if f is None:
-            raise SpecError(f"'{d}' 은(는) 이 소스에 없는 필드입니다")
-        select_parts.append(f"{_dim_expr(f)} as {_quote_ident(d)}")
-        aliases.append(d)
+            raise SpecError(f"'{name}' 은(는) 이 소스에 없는 필드입니다")
+        if isinstance(d, dict):
+            expr = _binned_dim_expr(f, _bin_width(d.get("bin_width")))
+        else:
+            expr = _dim_expr(f)
+        select_parts.append(f"{expr} as {_quote_ident(name)}")
+        aliases.append(name)
     for m in measures:
         agg = m.get("agg", "sum")
         field_name = m.get("field")

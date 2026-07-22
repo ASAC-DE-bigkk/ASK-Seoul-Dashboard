@@ -81,6 +81,8 @@ def test_extract_basic_domain_preserves_external_metadata(monkeypatch) -> None:
             return [{"Table": "gold_internal"}]
         if sql.startswith("SHOW COLUMNS"):
             return [{"Column": "cnt", "Type": "bigint", "Comment": ""}]
+        if sql.startswith("SELECT approx_distinct"):  # 컬럼 통계 실측(축 자율성 근거)
+            return [{"d_0": 7, "mn_0": 1.0, "mx_0": 9.0}]
         raise AssertionError(sql)
 
     monkeypatch.setattr(extract, "trino_rows", fake_trino_rows)
@@ -102,3 +104,7 @@ def test_extract_basic_domain_preserves_external_metadata(monkeypatch) -> None:
     )
 
     assert tables[0]["external"] is False
+    # 실측 통계가 컬럼에 병합된다 — ontology groupable/구간 기본 폭의 근거
+    assert tables[0]["columns"][0]["distinct_count"] == 7
+    assert tables[0]["columns"][0]["min"] == 1.0
+    assert tables[0]["columns"][0]["max"] == 9.0

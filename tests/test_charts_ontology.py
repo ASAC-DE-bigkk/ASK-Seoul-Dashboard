@@ -295,6 +295,76 @@ def test_identity_companions_promote_codes_and_serve_korean_labels() -> None:
     assert "geo_dong_code" in CHART_TYPES["map_seoul_dong"]["slots"][0]["accepts"]
 
 
+def test_binned_measure_axis_contract() -> None:
+    """구간화(B) — 숫자 측정값은 bins[슬롯] 폭이 있을 때만 binnable 축이 된다."""
+    lifespan = registry.get("gold_license_lifespan")
+    assert lifespan is not None
+    ok = ChartConfig(
+        id="bin-ok", type="bar", source=lifespan["name"],
+        bindings={"axis": "avg_days", "value": "n_closed"},
+        bins={"axis": 30}, agg="sum",
+    )
+    _validate_charts([ok])  # 축의 avg_days(비가산)는 그룹 키 — value(n_closed) 집계만 제약
+
+    with pytest.raises(querybuilder.SpecError, match="구간 폭"):
+        _validate_charts([ChartConfig(
+            id="bin-missing", type="bar", source=lifespan["name"],
+            bindings={"axis": "avg_days", "value": "n_closed"}, agg="sum",
+        )])
+    flow = registry.get("gold_license_flow_monthly")
+    assert flow is not None
+    with pytest.raises(querybuilder.SpecError, match="구간\\(bin\\)을 지원하지"):
+        _validate_charts([ChartConfig(
+            id="bin-line", type="line", source=flow["name"],
+            bindings={"axis": "ym", "value": "cnt"},
+            bins={"axis": 30}, agg="sum",
+        )])
+    with pytest.raises(querybuilder.SpecError, match="숫자 측정값"):
+        _validate_charts([ChartConfig(
+            id="bin-category", type="bar", source=lifespan["name"],
+            bindings={"axis": "category", "value": "n_closed"},
+            bins={"axis": 30}, agg="sum",
+        )])
+    with pytest.raises(querybuilder.SpecError, match="유한한 양수"):
+        _validate_charts([ChartConfig(
+            id="bin-zero", type="bar", source=lifespan["name"],
+            bindings={"axis": "avg_days", "value": "n_closed"},
+            bins={"axis": 0}, agg="sum",
+        )])
+
+    sql = querybuilder.build(lifespan, {
+        "dims": [{"field": "avg_days", "bin_width": 30}],
+        "measures": [{"field": None, "agg": "count", "alias": "count"}],
+    })
+    assert 'floor(try_cast("avg_days" as double) / 30.0) * 30.0' in sql
+    assert 'as "avg_days"' in sql  # 별칭=필드명 — 소비자는 일반 dim 과 동일
+    with pytest.raises(querybuilder.SpecError, match="서로 달라야"):
+        querybuilder.build(lifespan, {
+            "dims": ["avg_days", {"field": "avg_days", "bin_width": 30}],
+            "measures": [{"field": None, "agg": "count"}],
+        })
+
+
+def test_low_cardinality_measures_open_as_group_axes() -> None:
+    """자율성 개방(A) — 실측 distinct ≤ 임계인 measure 는 category 축 슬롯에 선다."""
+    groupables = [
+        (source["name"], field["name"])
+        for source in registry.sources()
+        for field in source["fields"]
+        if field.get("groupable")
+    ]
+    assert groupables, "스냅샷에 groupable 필드가 없습니다 — extract 컬럼 통계 실측 확인"
+    source_name, field_name = groupables[0]
+    source = registry.get(source_name)
+    _validate_charts([ChartConfig(
+        id="groupable-axis", type="table", source=source_name,
+        bindings={"axis": field_name}, agg="count",
+    )])
+    by_name = {field["name"]: field for field in source["fields"]}
+    assert by_name[field_name]["role"] == "measure"
+    assert by_name[field_name]["distinct_count"] <= 50
+
+
 def test_hidden_chart_types_keep_a_render_contract() -> None:
     meta = registry.meta({"hidden_chart_types": ["bar"]})
     assert "bar" not in meta["chart_types"]

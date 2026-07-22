@@ -16,8 +16,19 @@ const RENDER = (() => {
     const m = META.value_labels && META.value_labels[field];
     return (m && m[String(v)]) || String(v ?? '—');
   };
-  /* 필드 granularity 기반 축 라벨 — month_of_year('03') → '3월' */
+  /* 구간 축(bins) 폭 — 이 필드가 어떤 슬롯에 구간으로 바인딩됐는지 역추적 */
+  const binWidthFor = (ctx, field) => {
+    const bins = (ctx.chart && ctx.chart.bins) || {};
+    const slot = Object.keys(ctx.b || {}).find(s => ctx.b[s] === field && Number(bins[s]) > 0);
+    return slot ? Number(bins[slot]) : null;
+  };
+  /* 필드 granularity 기반 축 라벨 — month_of_year('03') → '3월', 구간 축 → '30~60' */
   const axisLabelFn = (ctx, field) => {
+    const w = binWidthFor(ctx, field);
+    if (w) return v => {
+      const n = Number(v);
+      return Number.isFinite(n) ? `${fmt(n)}~${fmt(n + w)}` : '—';
+    };
     const f = ctx.src && ctx.src.fields.find(x => x.name === field);
     if (f && f.granularity === 'month_of_year') return v => `${Number(v)}월`;
     return v => vlabel(field, v);
@@ -187,7 +198,7 @@ const RENDER = (() => {
     const o = chart.options || {};
     const topN = Math.min(o.top_n || 8, MAX_SERIES);
     const sorted = [...ctx.rows]
-      .map(r => ({ name: vlabel(b.axis, r[0]), value: finiteOrNull(r[1]) }))
+      .map(r => ({ name: axisLabelFn(ctx, b.axis)(r[0]), value: finiteOrNull(r[1]) }))
       .filter(row => row.value != null)
       .sort((a, x) => x.value - a.value);
     const head = sorted.slice(0, topN);
@@ -560,11 +571,17 @@ const RENDER = (() => {
     const cols = ctx.cols;
     const rows = ctx.rows;
     const numeric = cols.map((_, i) => rows.every(r => r[i] == null || !Number.isNaN(Number(r[i]))));
+    // 구간 축 컬럼은 시작값 대신 '시작~끝' 범위로 표기한다
+    const cellFn = cols.map(c => {
+      const w = binWidthFor(ctx, c);
+      return w ? axisLabelFn(ctx, c) : (v => vlabel(c, v));
+    });
+    const binned = cols.map(c => binWidthFor(ctx, c) != null);
     el.innerHTML = `<div class="tbl-wrap"><table>
       <tr>${cols.map(c => `<th>${escapeHtml(ctx.colLabels[c] || c)}</th>`).join('')}</tr>
-      ${rows.map(r => `<tr>${r.map((v, i) => numeric[i] && typeof v === 'number'
+      ${rows.map(r => `<tr>${r.map((v, i) => numeric[i] && typeof v === 'number' && !binned[i]
         ? `<td class="num-cell num">${fmt(v)}</td>`
-        : `<td>${escapeHtml(vlabel(cols[i], v))}</td>`).join('')}</tr>`).join('')}
+        : `<td>${escapeHtml(cellFn[i](v))}</td>`).join('')}</tr>`).join('')}
     </table></div>`;
   }
 

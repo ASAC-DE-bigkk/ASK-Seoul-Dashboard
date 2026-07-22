@@ -70,6 +70,10 @@ NAME_ROLES: dict[str, tuple[str, dict]] = {
 }
 
 ID_PATTERNS = re.compile(r"(_hash$|_id$|^id$|^mgtno$|^opnsfteamcode$|_uri$|_url$)")
+# 저카디널리티 개방(실측 기반 자율성): 스냅샷 approx_distinct 가 이 값 이하인 measure 는
+# 값(집계 대상)이면서 **축(groupby)으로도** 쓸 수 있다 — 등급·층수·요일형 숫자 컬럼이
+# '숫자형=측정값' 규칙에 갇혀 축이 되지 못하던 한계를 실측으로 푼다(선언 아님).
+GROUPABLE_MAX_DISTINCT = 50
 NUMERIC_TYPES = ("bigint", "integer", "int", "smallint", "tinyint", "double", "real", "decimal", "float")
 TIME_DATE_PATTERN = re.compile(r"(^date$|_date$)")
 TIME_AT_PATTERN = re.compile(r"(^time_bucket$|_at$)")
@@ -187,7 +191,8 @@ CHART_TYPES: dict[str, dict] = {
     "bar": {
         "label": "막대", "icon": "bar",
         "slots": [
-            {"name": "axis", "label": "축", "accepts": AXIS_ROLES, "required": True},
+            # binnable: 숫자 measure 를 구간 폭(bins[슬롯])과 함께 축으로 허용 — 히스토그램형
+            {"name": "axis", "label": "축", "accepts": AXIS_ROLES, "required": True, "binnable": True},
             {"name": "value", "label": "값", "accepts": ["measure"], "required": True},
             {"name": "series", "label": "시리즈(누적)", "accepts": ["category", "time", "sequence", "geo_gu", "geo_sido"], "required": False},
         ],
@@ -224,7 +229,7 @@ CHART_TYPES: dict[str, dict] = {
     "pie": {
         "label": "원형", "icon": "pie",
         "slots": [
-            {"name": "axis", "label": "분류", "accepts": ["category", "geo_gu", "geo_dong", "geo_sido"], "required": True},
+            {"name": "axis", "label": "분류", "accepts": ["category", "geo_gu", "geo_dong", "geo_sido"], "required": True, "binnable": True},
             {"name": "value", "label": "값", "accepts": ["measure"], "required": True},
         ],
         "options": {"donut": True, "top_n": 12},
@@ -243,11 +248,11 @@ CHART_TYPES: dict[str, dict] = {
     "heatmap": {
         "label": "히트맵", "icon": "heatmap",
         "slots": [
-            {"name": "x", "label": "X 축", "accepts": ["category", "time", "sequence", "ordinal"], "required": True},
+            {"name": "x", "label": "X 축", "accepts": ["category", "time", "sequence", "ordinal"], "required": True, "binnable": True},
             {"name": "y", "label": "Y 축",
              "accepts": ["category", "geo_gu", "geo_gu_code", "geo_dong",
                          "geo_dong_code", "time"],
-             "required": True},
+             "required": True, "binnable": True},
             {"name": "value", "label": "값", "accepts": ["measure"], "required": True},
         ],
         "options": {"top_n": 30},
@@ -255,7 +260,7 @@ CHART_TYPES: dict[str, dict] = {
     "table": {
         "label": "테이블", "icon": "table",
         "slots": [
-            {"name": "axis", "label": "행 축", "accepts": AXIS_ROLES + ["geo_gu_code", "geo_dong_code", "id"], "required": True},
+            {"name": "axis", "label": "행 축", "accepts": AXIS_ROLES + ["geo_gu_code", "geo_dong_code", "id"], "required": True, "binnable": True},
             {"name": "value", "label": "값", "accepts": ["measure"], "required": True},
         ],
         "options": {"top_n": 50},
@@ -530,6 +535,18 @@ def _is_chartable(name: str, role: str) -> bool:
     return True
 
 
+def field_matches_slot(field: dict, slot: dict) -> bool:
+    """슬롯 배정 규칙의 단일 정본 — role 일치 또는 저카디널리티 groupable 개방.
+
+    groupable(실측 distinct ≤ GROUPABLE_MAX_DISTINCT 인 measure)은 category 를 받는
+    슬롯에 한해 축으로 허용한다. 서버 검증(router)과 추천(compatible_bindings),
+    프론트 후보 목록이 모두 이 규칙 하나를 공유해야 계약이 갈라지지 않는다.
+    """
+    if field["role"] in slot["accepts"]:
+        return True
+    return bool(field.get("groupable")) and "category" in slot["accepts"]
+
+
 def compatible_bindings(
     fields: list[dict], chart_spec: dict, *, count_mode: bool = False
 ) -> dict[str, str] | None:
@@ -544,7 +561,7 @@ def compatible_bindings(
         slot["name"]: [
             field["name"]
             for field in fields
-            if field["role"] in slot["accepts"] and field.get("chartable", True)
+            if field_matches_slot(field, slot) and field.get("chartable", True)
         ]
         for slot in required
     }
@@ -633,6 +650,7 @@ class Registry:
             fields = []
             for c in t["columns"]:
                 role, extra = infer_role(c["name"], c.get("type", ""))
+                distinct = c.get("distinct_count")
                 fields.append({
                     "name": c["name"],
                     "type": c.get("type", ""),
@@ -644,6 +662,14 @@ class Registry:
                     "recommendation_priority": _recommendation_priority(c["name"], role),
                     "chartable": _is_chartable(c["name"], role),
                     "allowed_filter_ops": allowed_filter_ops({"role": role}),
+                    # 실측 통계(extract) — 저카디널리티 groupby 개방·구간화 기본 폭 제안의 근거
+                    **({"distinct_count": int(distinct)} if distinct is not None else {}),
+                    **({"min": c["min"]} if c.get("min") is not None else {}),
+                    **({"max": c["max"]} if c.get("max") is not None else {}),
+                    "groupable": bool(
+                        role == "measure" and distinct is not None
+                        and 0 < int(distinct) <= GROUPABLE_MAX_DISTINCT
+                    ),
                 })
             # 동반 필드 메타 — 표시 필드에 id_field(집계 식별을 코드로 승격), 식별 필드에
             # label_field. 승격은 코드 라벨 사전이 있을 때만 허용(축이 생코드로 노출 방지).

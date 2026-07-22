@@ -104,6 +104,23 @@ function typeDef(t) {
 function fieldsByRole(src, accepts) {
   return src.fields.filter(f => f.chartable !== false && accepts.includes(f.role));
 }
+/* 슬롯 배정 규칙 — 서버 ontology.field_matches_slot 과 동일 계약.
+ * role 일치 외에 ① 저카디널리티 groupable(실측 distinct≤50 measure)은 category 축 허용,
+ * ② 구간 폭(bins[슬롯])이 지정된 measure 는 binnable 축 허용(히스토그램형). */
+function fieldMatchesSlot(field, slot, bins) {
+  if (slot.accepts.includes(field.role)) return true;
+  if (field.groupable && slot.accepts.includes('category')) return true;
+  return field.role === 'measure' && !!slot.binnable && Number((bins || {})[slot.name]) > 0;
+}
+/* 구간 기본 폭 — 실측 min/max 범위를 12구간 안팎의 1·2·5·10 단위로 반올림 */
+function niceBinWidth(field) {
+  const span = Number(field.max) - Number(field.min);
+  if (!Number.isFinite(span) || span <= 0) return 1;
+  const raw = span / 12;
+  const pow = Math.pow(10, Math.floor(Math.log10(raw)));
+  const unit = raw / pow;
+  return (unit >= 5 ? 10 : unit >= 2 ? 5 : unit >= 1 ? 2 : 1) * pow;
+}
 function slotRequired(slot, chart) {
   return !!slot.required && !((chart.agg || 'sum') === 'count' && slot.count_optional);
 }
@@ -112,8 +129,9 @@ function resolveBindings(chart, src) {
   const def = typeDef(chart.type);
   if (!def) throw new Error(`알 수 없는 도표 타입: ${chart.type}`);
   const requested = chart.bindings || {};
+  const bins = chart.bins || {};
   const candidates = slot => {
-    const matches = fieldsByRole(src, slot.accepts);
+    const matches = src.fields.filter(f => f.chartable !== false && fieldMatchesSlot(f, slot, bins));
     const want = requested[slot.name];
     return want
       ? [...matches.filter(field => field.name === want), ...matches.filter(field => field.name !== want)]
@@ -196,8 +214,12 @@ function allowedAggs(chart, src, bindings = chart.bindings || {}) {
     const active = Object.entries(rule.when || {}).every(([key, value]) => options[key] === value);
     if (active) allowed = allowed.filter(agg => (rule.allowed || []).includes(agg));
   });
-  const measureFields = Object.values(bindings)
-    .map(name => src.fields.find(field => field.name === name))
+  // 집계 제약은 '집계되는 슬롯'(value/x/y 처럼 measure 를 받는 슬롯)의 필드에만 적용 —
+  // groupable/구간 축으로 바인딩된 measure 는 그룹 키라 집계되지 않는다(서버와 동일 규칙).
+  const slotByName = Object.fromEntries((def.slots || []).map(slot => [slot.name, slot]));
+  const measureFields = Object.entries(bindings)
+    .filter(([slotName]) => (slotByName[slotName]?.accepts || []).includes('measure'))
+    .map(([, name]) => src.fields.find(field => field.name === name))
     .filter(field => field && field.role === 'measure');
   measureFields.forEach(field => {
     if (field.allowed_aggs) allowed = allowed.filter(agg => field.allowed_aggs.includes(agg));
@@ -287,17 +309,21 @@ function buildSpec(chart, src, b) {
   const m = f => ({ field: agg === 'count' ? null : f, agg, alias: agg === 'count' ? 'count' : `${agg}_${f}` });
   const spec = { source: chart.source, dims: [], measures: [], filters: chart.filters || [], order_by: [], limit: 1000 };
   const t = chart.type;
+  // 구간 축 — bins[슬롯]이 지정되면 dim 을 {field, bin_width} 로 (별칭=필드명, 소비자 동일)
+  const bins = chart.bins || {};
+  const dimFor = slot => (Number(bins[slot]) > 0
+    ? { field: b[slot], bin_width: Number(bins[slot]) } : b[slot]);
 
   if (t === 'stat') { spec.measures = [m(b.value)]; }
   else if (t === 'bar' || t === 'line' || t === 'area') {
-    spec.dims = b.series ? [b.axis, b.series] : [b.axis];
+    spec.dims = b.series ? [dimFor('axis'), b.series] : [dimFor('axis')];
     spec.measures = [m(b.value)];
     // limit 은 서버 상한(5000)까지 — 절단이 피벗/합계를 왜곡하는 것을 최소화 (도달 시 타일에 경고)
     if (t === 'bar') { spec.order_by = [{ field: m(b.value).alias, dir: 'desc' }]; spec.limit = 5000; }
     else { spec.order_by = [{ field: b.axis, dir: 'asc' }]; spec.limit = 5000; }
   }
   else if (t === 'pie') {
-    spec.dims = [b.axis]; spec.measures = [m(b.value)];
+    spec.dims = [dimFor('axis')]; spec.measures = [m(b.value)];
     spec.order_by = [{ field: m(b.value).alias, dir: 'desc' }]; spec.limit = 500;
   }
   else if (t === 'scatter') {
@@ -306,7 +332,7 @@ function buildSpec(chart, src, b) {
     spec.order_by = [{ field: sm(b.x).alias, dir: 'desc' }];
     spec.limit = o.top_n || 300;
   }
-  else if (t === 'heatmap') { spec.dims = [b.x, b.y]; spec.measures = [m(b.value)]; spec.limit = 5000; }
+  else if (t === 'heatmap') { spec.dims = [dimFor('x'), dimFor('y')]; spec.measures = [m(b.value)]; spec.limit = 5000; }
   else if (t === 'race') {
     spec.dims = [b.time, b.axis]; spec.measures = [m(b.value)];
     spec.order_by = [{ field: b.time, dir: 'asc' }]; spec.limit = 5000;
@@ -316,7 +342,7 @@ function buildSpec(chart, src, b) {
   }
   else if (t.startsWith('map_')) { spec.dims = [b.region]; spec.measures = [m(b.value)]; spec.limit = 800; }
   else if (t === 'table') {
-    spec.dims = [b.axis]; spec.measures = [m(b.value)];
+    spec.dims = [dimFor('axis')]; spec.measures = [m(b.value)];
     spec.order_by = [{ field: m(b.value).alias, dir: 'desc' }]; spec.limit = o.top_n || 50;
   }
   return { spec, alias };
@@ -347,7 +373,8 @@ function hasRenderableMeasures(chart, spec, response) {
     return false;
   }
   if (chart.type === 'line' || chart.type === 'race') {
-    const progressionIndex = response.columns.indexOf(spec.dims[0]);
+    const d0 = spec.dims[0];
+    const progressionIndex = response.columns.indexOf(typeof d0 === 'object' ? d0.field : d0);
     if (progressionIndex < 0) return false;
     const points = new Set(response.rows
       .filter(row => indexes.some(index => numeric(row[index])))
@@ -428,6 +455,11 @@ async function loadTile(chart, force, quiet) {
     // 사라진 필드의 role 폴백 결과를 in-memory 저장물에도 반영한다. 그렇지 않으면
     // 화면은 정상인데 다음 레이아웃 저장에서 오래된 필드명 때문에 전체 저장이 실패한다.
     if (JSON.stringify(chart.bindings || {}) !== JSON.stringify(b)) chart.bindings = { ...b };
+    // role 폴백으로 축 필드가 바뀌었으면 measure 가 아닌 슬롯의 구간(bins)은 무효 — 정리
+    Object.keys(chart.bins || {}).forEach(slot => {
+      const bound = src.fields.find(x => x.name === b[slot]);
+      if (!bound || bound.role !== 'measure') delete chart.bins[slot];
+    });
     const { be, promoted } = effectiveBindings(src, b);
     const { spec, alias } = buildSpec(chart, src, be);
     if (force) spec.force = true;               // 신선 캐시 무시 ('다시 조회')
@@ -771,7 +803,7 @@ async function saveLayout() {
 
 /* ── 구성 드로어 (소스 → 도표 → 연결) ─────────────────────── */
 const CFG = { open: false, mode: 'add', chartId: null, step: 'source',
-              source: null, src: null, type: null, bindings: {}, agg: 'sum',
+              source: null, src: null, type: null, bindings: {}, bins: {}, agg: 'sum',
               title: '', titleTouched: false, filters: [], options: {}, domain: 'all', search: '',
               dirty: false, sourceGen: 0, previewGen: 0, previewKey: null,
               previewBusy: false, loadError: '', returnFocus: null };
@@ -798,7 +830,8 @@ function openCfg(mode, chart) {
     Object.assign(CFG, {
       chartId: chart.id, source: chart.source, type: chart.type,
       src: null,
-      bindings: { ...(chart.bindings || {}) }, agg: chart.agg || 'sum',
+      bindings: { ...(chart.bindings || {}) }, bins: { ...(chart.bins || {}) },
+      agg: chart.agg || 'sum',
       title: chart.title, titleTouched: true,
       filters: JSON.parse(JSON.stringify(chart.filters || [])),
       options: optionsForType(chart.type, chart.options || {}), step: 'bind',
@@ -807,9 +840,9 @@ function openCfg(mode, chart) {
     $('cfg-mode-label').textContent = '차트 편집';
     $('cfg-apply').textContent = '적용';
   } else {
-    Object.assign(CFG, { chartId: null, source: null, src: null, type: null, bindings: {}, agg: 'sum',
-                         title: '', titleTouched: false, filters: [], options: {}, step: 'source', search: '',
-                         comboIdx: null });
+    Object.assign(CFG, { chartId: null, source: null, src: null, type: null, bindings: {}, bins: {},
+                         agg: 'sum', title: '', titleTouched: false, filters: [], options: {},
+                         step: 'source', search: '', comboIdx: null });
     $('cfg-mode-label').textContent = '차트 추가';
     $('cfg-apply').textContent = '추가';
   }
@@ -915,7 +948,7 @@ function requiredBound() {
 }
 function currentDraft() {
   return { id: CFG.chartId || 'draft', title: CFG.title, type: CFG.type, source: CFG.source,
-           bindings: { ...CFG.bindings }, agg: CFG.agg,
+           bindings: { ...CFG.bindings }, bins: { ...CFG.bins }, agg: CFG.agg,
            filters: JSON.parse(JSON.stringify(CFG.filters)),
            options: optionsForType(CFG.type, CFG.options) };
 }
@@ -1252,16 +1285,29 @@ function renderCfgBind(body) {
     const usedElsewhere = new Set(Object.entries(CFG.bindings)
       .filter(([name]) => name !== slot.name)
       .map(([, value]) => value));
-    const cands = fieldsByRole(src, slot.accepts)
+    // 후보 = 규칙 일치(role/groupable/구간 지정 measure) ∪ binnable 슬롯의 모든 measure
+    // (선택하는 순간 기본 구간 폭이 자동 설정되어 규칙을 충족하게 된다)
+    const cands = src.fields
+      .filter(f => f.chartable !== false
+        && (fieldMatchesSlot(f, slot, CFG.bins) || (slot.binnable && f.role === 'measure')))
       .filter(field => !usedElsewhere.has(field.name));
     const countValue = CFG.agg === 'count' && slot.count_optional;
+    const roleTag = f => f.role !== 'measure' ? f.role
+      : (f.groupable ? 'measure·그룹' : (slot.binnable ? 'measure·구간' : 'measure'));
+    const curField = src.fields.find(f => f.name === cur);
+    const binRow = slot.binnable && curField && curField.role === 'measure'
+      ? `<div class="bind-row"><label>구간 폭${curField.groupable ? '' : ' <span class="req">*</span>'}</label>
+          <input type="number" data-binslot="${esc(slot.name)}" step="any" min="0"
+                 value="${esc(CFG.bins[slot.name] ?? '')}"
+                 placeholder="${esc(String(niceBinWidth(curField)))}${curField.groupable ? ' (비우면 값 그대로)' : ''}"></div>`
+      : '';
     return `<div class="bind-row">
       <label>${esc(slot.label)} ${slot.required ? '<span class="req">*</span>' : ''}</label>
       <select data-slot="${esc(slot.name)}" ${countValue && !cands.length ? 'disabled' : ''}>
         ${countValue ? '<option value="">행 수 (count *)</option>'
           : (slot.required ? '' : '<option value="">(없음)</option>')}
-        ${cands.map(f => `<option value="${esc(f.name)}" ${f.name === cur ? 'selected' : ''}>${esc(f.label)} — ${esc(f.name)} (${esc(f.role)})</option>`).join('')}
-      </select></div>`;
+        ${cands.map(f => `<option value="${esc(f.name)}" ${f.name === cur ? 'selected' : ''}>${esc(f.label)} — ${esc(f.name)} (${esc(roleTag(f))})</option>`).join('')}
+      </select></div>${binRow}`;
   };
   const filterRow = (f, i) => {
     const field = src.fields.find(item => item.name === f.field);
@@ -1332,8 +1378,26 @@ function renderCfgBind(body) {
   };
   body.querySelectorAll('select[data-slot]').forEach(s => s.onchange = () => {
     if (s.value) CFG.bindings[s.dataset.slot] = s.value; else delete CFG.bindings[s.dataset.slot];
+    // 구간 상태 동기화 — 비-groupable measure 를 binnable 축에 놓으면 기본 폭 자동 설정,
+    // measure 가 아니게 되면 구간 해제(서버 계약: 구간은 숫자 측정값에만)
+    const slotDef = def.slots.find(x => x.name === s.dataset.slot);
+    const picked = src.fields.find(x => x.name === s.value);
+    if (slotDef?.binnable && picked?.role === 'measure') {
+      if (!picked.groupable && !(Number(CFG.bins[slotDef.name]) > 0)) {
+        CFG.bins[slotDef.name] = niceBinWidth(picked);
+      }
+    } else if (slotDef) {
+      delete CFG.bins[slotDef.name];
+    }
     CFG.comboIdx = null;   // 수동으로 만졌으면 추천 조합 선택 표시 해제
     ensureValidAgg();
+    markCfgDirty();
+    renderCfgBind(body);
+  });
+  body.querySelectorAll('input[data-binslot]').forEach(inp => inp.onchange = () => {
+    const width = Number(inp.value);
+    if (Number.isFinite(width) && width > 0) CFG.bins[inp.dataset.binslot] = width;
+    else delete CFG.bins[inp.dataset.binslot];
     markCfgDirty();
     renderCfgBind(body);
   });
@@ -1341,6 +1405,7 @@ function renderCfgBind(body) {
     const combo = combos[Number(ch.dataset.ci)];
     if (!combo) return;
     CFG.bindings = { ...combo.bindings };
+    CFG.bins = {};        // 추천 조합은 role 기반 — 이전 구간 상태를 끌고 가지 않는다
     CFG.agg = combo.agg;
     CFG.options = { ...CFG.options, ...combo.options };
     CFG.comboIdx = Number(ch.dataset.ci);
@@ -1538,7 +1603,8 @@ $('cfg-apply').onclick = async () => {
     } else {
       const chart = S.page.charts.find(c => c.id === CFG.chartId);
       Object.assign(chart, { title: cfg.title, type: cfg.type, source: cfg.source,
-                             bindings: cfg.bindings, agg: cfg.agg, filters: cfg.filters, options: cfg.options });
+                             bindings: cfg.bindings, bins: cfg.bins, agg: cfg.agg,
+                             filters: cfg.filters, options: cfg.options });
       const rec = S.tiles[chart.id];
       if (rec) {
         rec.el.querySelector('.tt b').textContent = chart.title || '차트';
@@ -1800,6 +1866,18 @@ async function selftest() {
     ok('seoul_dong map matches by MOIS code', dongMatch.matched === 2
        && dongMatch.data.some(d => d.name === '신사동·강남구' && d.value === 3)
        && dongMatch.data.some(d => d.name === '신사동·관악구' && d.value === 5));
+
+    // 자율성 개방 — ① 구간 축(bins): 숫자 측정값이 floor 그룹핑으로 축이 된다
+    // ② 저카디널리티(groupable): 실측 distinct 기반으로 measure 가 category 축 후보에 선다
+    const lifespanSrc = S.srcDetails['gold_license_lifespan'] || await API.source('gold_license_lifespan');
+    const binRes = await API.query({ source: lifespanSrc.name,
+      dims: [{ field: 'avg_days', bin_width: 365 }],
+      measures: [{ field: null, agg: 'count', alias: 'count' }], limit: 50 });
+    ok('binned measure axis groups by interval', binRes.rows.length >= 1
+       && /floor\(try_cast/.test(binRes.sql || ''));
+    const summarySrc = S.srcDetails['gold_license_dong_summary'] || await API.source('gold_license_dong_summary');
+    ok('low-cardinality measure opened as axis',
+       summarySrc.fields.some(f => f.groupable && f.role === 'measure'));
 
     // 성격 급한 이용자 — 검색 입력이 첫 글자 뒤 DOM 교체로 포커스를 잃지 않아야 한다.
     openCfg('add');
