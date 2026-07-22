@@ -1,11 +1,16 @@
 /* 지도 자산 로딩 + 지역 매칭 — 이름/코드 어느 쪽으로도 폴리곤에 붙는다.
  *
  * 코드 체계 주의: gold 데이터의 지역 코드는 전부 MOIS(행안부) 체계다
- * (gu_code 5자리, legal_code 10자리). 반면 seoul_gu/seoul_dong 자산의 code 는
- * KOSTAT(통계청) 체계라 그대로 붙이면 '다른 구'에 칠해진다 — 그래서 코드 매칭은
- * MOIS 사전(MOIS_GU, EMD_CD)이 있는 지도에서만 허용하고, KOSTAT 코드는 쓰지 않는다.
- * 동 단위 이름은 구를 넘어 중복될 수 있어(신사동 등) 등록 시 유일한 표시 이름
- * ("신사동·강남구")으로 재작성하고, 모호한 이름 행은 매칭 제외로 계수한다(이중 칠 방지). */
+ * (gu_code 5자리, admin_dong_code/legal_code 10자리). 자산의 원 code 는
+ * KOSTAT(통계청) 체계라 그대로 붙이면 '다른 구'에 칠해진다 — 코드 매칭은
+ * MOIS 값이 있는 지도에서만 허용한다: 자치구=이름 역매핑(MOIS_GU),
+ * 법정동=EMD_CD 자체가 MOIS, 행정동=scripts/assign_mois_codes.py 가 폴리곤에
+ * 병기한 mois_code(행안부 10자리, 참조 bronze_ref_admin_dong 실측 매칭).
+ * KOSTAT code 속성은 여전히 매칭에 쓰지 않는다.
+ * 동 단위 이름은 구를 넘어 중복될 수 있어(신사동: 강남·관악) 등록 시 유일한 표시
+ * 이름("신사동·강남구")으로 재작성하고, 이름 매칭에서 모호한 행은 제외로 계수한다
+ * (이중 칠 방지). 코드 매칭은 중복 이름도 정확히 분리한다 — 데이터 쪽 표기는
+ * 서버 value_labels(코드→한글)가 같은 규칙으로 맞춘다. */
 'use strict';
 
 const GEO = (() => {
@@ -20,9 +25,9 @@ const GEO = (() => {
   const GU_TO_MOIS = Object.fromEntries(Object.entries(MOIS_GU).map(([c, n]) => [n, c]));
 
   const CONF = {
-    /* moisCode: 코드 매칭 방식 — 'byName'(이름→MOIS 역매핑) | 'emd'(속성이 곧 MOIS) | null(코드 매칭 불가) */
+    /* moisCode: 코드 매칭 방식 — 'byName'(이름→MOIS 역매핑) | 'emd'(codeProp 속성이 곧 MOIS) | null(코드 매칭 불가) */
     seoul_gu:         { file: 'seoul_gu.json',         nameProp: 'name',       codeLen: 5, moisCode: 'byName' },
-    seoul_dong:       { file: 'seoul_dong.json',       nameProp: 'name',       codeLen: 0, moisCode: null, guSuffix: true },
+    seoul_dong:       { file: 'seoul_dong.json',       nameProp: 'name',       codeLen: 10, moisCode: 'emd', codeProp: 'mois_code', guSuffix: true },
     seoul_legal_dong: { file: 'seoul_legal_dong.json', nameProp: 'EMD_KOR_NM', codeLen: 8, moisCode: 'emd', codeProp: 'EMD_CD', guSuffix: true },
     korea_sido:       { file: 'korea_sido.json',       nameProp: 'name',       codeLen: 0, moisCode: null },
     world:            { file: 'world.json',            nameProp: 'name',       codeLen: 0, moisCode: null },
