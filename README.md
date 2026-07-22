@@ -23,7 +23,21 @@ app/main.py(FastAPI) ──▶ /api/v1/catalog/... + / (마켓플레이스 화�
 
 ## 실행
 
-### 팀원 로컬 분석 — 로그인 생략
+환경별(로컬 호스트 / 로컬 Docker / 개발 Docker) 기동의 **정본은
+[실행 매뉴얼 docs/running.md](docs/running.md)** 다. 한눈 요약:
+
+```bash
+# 로컬 · 호스트(로그인 없이, 핫리로드)  — Windows
+powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1
+# 로컬 · Docker(로그인 없이, 한 방)
+docker compose -f deploy/compose.local.yaml up --build
+# 개발 · Docker(실제 로그인 + PostgreSQL, Trino는 deploy/trino 로 별도 배포)
+docker compose -f deploy/compose.dev.yaml --env-file deploy/env/dev.env up --build
+```
+
+로컬 계정은 **운영자(operator)** 로 자동 로그인된다. 실 Charts 데이터에는 Trino가 필요하다.
+
+### 팀원 로컬 분석 — 로그인 생략 (호스트 직접 실행)
 
 사람이 따라 하는 전체 순서와 문제 해결은
 [로컬 데이터 분석 시작 가이드](docs/local-analysis-human-guide.md)를 정본으로 사용한다.

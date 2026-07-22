@@ -52,37 +52,15 @@ docker compose exec trino trino --execute 'SELECT 1'  # query engine 확인
 
 ### 1-2. 환경별 Docker Compose (local / dev)
 
-대시보드를 환경별로 Docker Compose로 지정 실행할 수 있다. 운영(prod)은 이번 범위 밖이며,
-서버 배포는 이미지 기반 `deploy/compose.yaml`(CI/서버 전용)을 사용한다.
-
-**local — 로그인 없이 운영자 자동 로그인, Trino는 상위 `sample/`에서 재사용**
+대시보드를 환경별로 Docker Compose로 지정 실행할 수 있다. **명령·결정표·보안 주의의 정본은
+[실행 매뉴얼 running.md](running.md)** 다. 요약:
 
 ```bash
-cd <프로젝트 루트>/sample && docker compose up -d trino      # ① 상위 Trino
-cd dashboard
-docker compose -f deploy/compose.local.yaml up --build       # ② 앱(운영자 자동 로그인)
-# → http://127.0.0.1:8765/charts
+docker compose -f deploy/compose.local.yaml up --build          # 로컬(로그인 없이 운영자, 상위 Trino)
+docker compose -f deploy/compose.dev.yaml --env-file deploy/env/dev.env up --build  # 개발(required + PostgreSQL)
 ```
 
-- 비밀값 불필요(세션 pepper는 컨테이너 `data` 볼륨에 자동 생성). 선택 오버라이드는
-  `deploy/env/local.env.example`.
-- 앱 컨테이너는 클라이언트 IP가 Docker 게이트웨이(사설)로 보이므로 자동 로그인을 위해
-  `AUTH_LOCAL_AUTO_CLIENT_CIDRS`(사설 대역)를 신뢰한다. **반드시 127.0.0.1 에만 publish**하며
-  이 전제에서만 안전하다(`0.0.0.0` 금지).
-
-**dev — 실제 로그인(required) + PostgreSQL, Trino는 별도 compose로 배포**
-
-```bash
-cd dashboard
-cp deploy/env/dev.env.example deploy/env/dev.env       # 값 채우기(관리자·postgres·pepper)
-docker compose -f deploy/trino/compose.yaml --env-file deploy/env/trino.env up -d   # ① Trino 별도
-docker compose -f deploy/compose.dev.yaml  --env-file deploy/env/dev.env   up --build # ② 앱+DB
-# → http://127.0.0.1:8765  (dev.env의 부트스트랩 관리자로 로그인)
-```
-
-- `deploy/trino/compose.yaml`이 `elt_net`을 만들고 앱이 external로 참가해 `http://trino:8080`으로
-  질의한다. Trino용 R2 dev 값은 `deploy/trino/runtime.env.example` 참고.
-- `deploy/env/*.env`(실제 값)는 `.gitignore` 대상이며 `*.example`만 커밋한다.
+운영(prod) 서버 배포는 이미지 기반 `deploy/compose.yaml`(CI/서버 전용)을 사용한다.
 
 ### 1-3. 대시보드 서버 (호스트에서 직접 실행)
 
