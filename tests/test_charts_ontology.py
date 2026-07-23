@@ -8,9 +8,10 @@ import pytest
 
 from app.charts import querybuilder
 from app.charts.layouts import SEED_PATH
-from app.charts.models import ChartConfig
+from app.charts.models import ChartConfig, SourceDetail
 from app.charts.ontology import (
     CHART_TYPES,
+    companion_pairs,
     compatible_bindings,
     registry,
 )
@@ -246,8 +247,130 @@ def test_roles_and_recommendation_metadata_cover_non_commerce_fields() -> None:
     assert by_name(active_city)["event_count"]["cumulative_safe"] is False
     assert by_name(proven_flow)["cnt"]["cumulative_safe"] is True
     assert by_name(city)["hr"]["allowed_filter_ops"] == [
-        "eq", "neq", "gte", "lte", "between", "in", "not_in"
+        "eq", "neq", "gt", "gte", "lt", "lte", "between", "not_between",
+        "in", "not_in", "is_null", "not_null",
     ]
+    # time+granularity 필드는 last_n(최근 N) 이 열린다 — 필드 메타 의존 계약
+    ym_ops = {f["name"]: f for f in registry.get("gold_license_flow_monthly")["fields"]}
+    assert "last_n" in ym_ops["ym"]["allowed_filter_ops"]
+    # 고정폭 코드는 동등/집합/NULL 만 — 대소·패턴 차단
+    assert by_name(commerce_summary)["gu_code"]["allowed_filter_ops"] == [
+        "eq", "neq", "in", "not_in", "is_null", "not_null",
+    ]
+
+
+def test_identity_companions_promote_codes_and_serve_korean_labels() -> None:
+    """식별=코드·표기=한글 계약 — 동명이동(신사동)이 이름 그룹핑으로 합산되지 않도록
+    표시 필드에 id_field(코드 승격), 코드값에 value_labels(한글, 중복은 구명 접미사)."""
+    assert companion_pairs(
+        ["admin_dong_code", "admin_dong", "gu_code", "gu", "legal_code", "legal_dong",
+         "major", "major_ko", "cnt", "ym"]
+    ) == [
+        ("admin_dong_code", "admin_dong"),
+        ("gu_code", "gu"),
+        ("legal_code", "legal_dong"),
+        ("major", "major_ko"),
+    ]
+
+    summary = registry.get("gold_license_dong_summary")
+    assert summary is not None
+    by_name = {field["name"]: field for field in summary["fields"]}
+    assert by_name["admin_dong"]["id_field"] == "admin_dong_code"
+    assert by_name["gu"]["id_field"] == "gu_code"
+    assert by_name["admin_dong_code"]["label_field"] == "admin_dong"
+    # pydantic 응답 계약이 동반 메타를 잘라먹지 않는다
+    detail = SourceDetail.model_validate(summary)
+    assert next(f for f in detail.fields if f.name == "admin_dong").id_field == "admin_dong_code"
+
+    flow = registry.get("gold_license_flow_monthly")
+    assert flow is not None
+    flow_by = {field["name"]: field for field in flow["fields"]}
+    assert flow_by["legal_dong"]["role"] == "geo_legal_dong"
+    assert flow_by["legal_dong"]["id_field"] == "legal_code"
+    matrix = registry.get("gold_license_dong_category_matrix")
+    assert matrix is not None
+    matrix_by = {field["name"]: field for field in matrix["fields"]}
+    assert matrix_by["category_ko"]["id_field"] == "category"
+
+    meta = registry.meta()
+    labels = meta["value_labels"]["admin_dong_code"]
+    assert labels["1168051000"] == "신사동·강남구"   # 강남구 신사동
+    assert labels["1162068500"] == "신사동·관악구"   # 관악구 신사동 — 코드로 분리
+    assert labels["UNK"] == "미상"                   # 정적 큐레이션이 실측 사전 위에 얹힘
+    assert meta["value_labels"]["gu_code"]["11680"] == "강남구"
+    assert meta["value_labels"]["category"]          # 업종 en→ko 실측 사전
+    # 행정동 지도: 자산 mois_code 병기로 코드 role 매칭 허용
+    assert "geo_dong_code" in CHART_TYPES["map_seoul_dong"]["slots"][0]["accepts"]
+
+
+def test_binned_measure_axis_contract() -> None:
+    """구간화(B) — 숫자 측정값은 bins[슬롯] 폭이 있을 때만 binnable 축이 된다."""
+    lifespan = registry.get("gold_license_lifespan")
+    assert lifespan is not None
+    ok = ChartConfig(
+        id="bin-ok", type="bar", source=lifespan["name"],
+        bindings={"axis": "avg_days", "value": "n_closed"},
+        bins={"axis": 30}, agg="sum",
+    )
+    _validate_charts([ok])  # 축의 avg_days(비가산)는 그룹 키 — value(n_closed) 집계만 제약
+
+    with pytest.raises(querybuilder.SpecError, match="구간 폭"):
+        _validate_charts([ChartConfig(
+            id="bin-missing", type="bar", source=lifespan["name"],
+            bindings={"axis": "avg_days", "value": "n_closed"}, agg="sum",
+        )])
+    flow = registry.get("gold_license_flow_monthly")
+    assert flow is not None
+    with pytest.raises(querybuilder.SpecError, match="구간\\(bin\\)을 지원하지"):
+        _validate_charts([ChartConfig(
+            id="bin-line", type="line", source=flow["name"],
+            bindings={"axis": "ym", "value": "cnt"},
+            bins={"axis": 30}, agg="sum",
+        )])
+    with pytest.raises(querybuilder.SpecError, match="숫자 측정값"):
+        _validate_charts([ChartConfig(
+            id="bin-category", type="bar", source=lifespan["name"],
+            bindings={"axis": "category", "value": "n_closed"},
+            bins={"axis": 30}, agg="sum",
+        )])
+    with pytest.raises(querybuilder.SpecError, match="유한한 양수"):
+        _validate_charts([ChartConfig(
+            id="bin-zero", type="bar", source=lifespan["name"],
+            bindings={"axis": "avg_days", "value": "n_closed"},
+            bins={"axis": 0}, agg="sum",
+        )])
+
+    sql = querybuilder.build(lifespan, {
+        "dims": [{"field": "avg_days", "bin_width": 30}],
+        "measures": [{"field": None, "agg": "count", "alias": "count"}],
+    })
+    assert 'floor(try_cast("avg_days" as double) / 30.0) * 30.0' in sql
+    assert 'as "avg_days"' in sql  # 별칭=필드명 — 소비자는 일반 dim 과 동일
+    with pytest.raises(querybuilder.SpecError, match="서로 달라야"):
+        querybuilder.build(lifespan, {
+            "dims": ["avg_days", {"field": "avg_days", "bin_width": 30}],
+            "measures": [{"field": None, "agg": "count"}],
+        })
+
+
+def test_low_cardinality_measures_open_as_group_axes() -> None:
+    """자율성 개방(A) — 실측 distinct ≤ 임계인 measure 는 category 축 슬롯에 선다."""
+    groupables = [
+        (source["name"], field["name"])
+        for source in registry.sources()
+        for field in source["fields"]
+        if field.get("groupable")
+    ]
+    assert groupables, "스냅샷에 groupable 필드가 없습니다 — extract 컬럼 통계 실측 확인"
+    source_name, field_name = groupables[0]
+    source = registry.get(source_name)
+    _validate_charts([ChartConfig(
+        id="groupable-axis", type="table", source=source_name,
+        bindings={"axis": field_name}, agg="count",
+    )])
+    by_name = {field["name"]: field for field in source["fields"]}
+    assert by_name[field_name]["role"] == "measure"
+    assert by_name[field_name]["distinct_count"] <= 50
 
 
 def test_hidden_chart_types_keep_a_render_contract() -> None:
@@ -270,7 +393,7 @@ def test_source_availability_counts_only_registry_fields(monkeypatch) -> None:
     aliases = [f"field_{index}" for index, _ in enumerate(source["fields"])]
     captured: dict[str, object] = {}
 
-    def fake_execute(sql: str, max_rows: int = 0) -> dict:
+    def fake_execute(sql: str, max_rows: int = 0, force: bool = False) -> dict:
         captured.update(sql=sql, max_rows=max_rows)
         return {
             "columns": aliases,

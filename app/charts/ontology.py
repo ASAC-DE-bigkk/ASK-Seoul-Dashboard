@@ -44,6 +44,7 @@ NAME_ROLES: dict[str, tuple[str, dict]] = {
     "admin_dong_name": ("geo_dong", {}),
     "admin_dong_code": ("geo_dong_code", {}),
     "legal_code": ("geo_legal_code", {}),
+    "legal_dong": ("geo_legal_dong", {}),
     "legal_dong_name": ("geo_legal_dong", {}),
     "sido": ("geo_sido", {}),
     "sido_name": ("geo_sido", {}),
@@ -69,6 +70,10 @@ NAME_ROLES: dict[str, tuple[str, dict]] = {
 }
 
 ID_PATTERNS = re.compile(r"(_hash$|_id$|^id$|^mgtno$|^opnsfteamcode$|_uri$|_url$)")
+# 저카디널리티 개방(실측 기반 자율성): 스냅샷 approx_distinct 가 이 값 이하인 measure 는
+# 값(집계 대상)이면서 **축(groupby)으로도** 쓸 수 있다 — 등급·층수·요일형 숫자 컬럼이
+# '숫자형=측정값' 규칙에 갇혀 축이 되지 못하던 한계를 실측으로 푼다(선언 아님).
+GROUPABLE_MAX_DISTINCT = 50
 NUMERIC_TYPES = ("bigint", "integer", "int", "smallint", "tinyint", "double", "real", "decimal", "float")
 TIME_DATE_PATTERN = re.compile(r"(^date$|_date$)")
 TIME_AT_PATTERN = re.compile(r"(^time_bucket$|_at$)")
@@ -116,6 +121,66 @@ DOMAIN_LABELS: dict[str, str] = {
     "transit": "대중교통",
 }
 
+# ── 식별↔표시 동반 컬럼 (코드로 세고, 한글로 보여준다) ────────────
+# 원칙(#geo-identity): 같은 소스에 코드/이름(또는 en/ko) 쌍이 공존하면 **식별·집계는
+# 코드**가 정본이고 이름은 표시 전용이다 — 동명이인 지역(신사동: 강남구·관악구)이 이름
+# 그룹핑에서 하나로 합산되는 것을 막는다. 이 규칙은 세 곳이 나눠 진다:
+#   extract.py  — 쌍의 distinct 값을 실측해 스냅샷 code_labels 로 박제
+#   Registry    — 필드에 id_field(표시→식별)/label_field(식별→표시) 메타 부여,
+#                 meta.value_labels 로 코드→한글 사전 서빙(중복 동명은 '신사동·강남구')
+#   프론트 app.js — 쿼리 시 이름 바인딩을 id_field 로 승격(GROUP BY = 코드),
+#                 render.js vlabel 이 코드를 한글로 표기
+
+# MOIS(행안부) 서울 자치구 코드 — geo.js 의 MOIS_GU 와 동일 사전(수정 시 양쪽 동기).
+MOIS_GU: dict[str, str] = {
+    "11110": "종로구", "11140": "중구", "11170": "용산구", "11200": "성동구", "11215": "광진구",
+    "11230": "동대문구", "11260": "중랑구", "11290": "성북구", "11305": "강북구", "11320": "도봉구",
+    "11350": "노원구", "11380": "은평구", "11410": "서대문구", "11440": "마포구", "11470": "양천구",
+    "11500": "강서구", "11530": "구로구", "11545": "금천구", "11560": "영등포구", "11590": "동작구",
+    "11620": "관악구", "11650": "서초구", "11680": "강남구", "11710": "송파구", "11740": "강동구",
+}
+
+
+def companion_pairs(column_names) -> list[tuple[str, str]]:
+    """(식별 컬럼, 표시 컬럼) 쌍 — 이름 규칙만으로 판정한다(테이블 하드코딩 없음).
+
+    - `X_code` ↔ 첫 공존 후보 `X` / `X_name` / `X_dong` / `X_dong_name`
+      (admin_dong_code↔admin_dong, gu_code↔gu, legal_code↔legal_dong)
+    - `X` ↔ `X_ko` (major↔major_ko, category↔category_ko, dataset↔dataset_ko)
+    """
+    cols = set(column_names)
+    pairs: list[tuple[str, str]] = []
+    for col in cols:
+        if col.endswith("_code"):
+            base = col[: -len("_code")]
+            for cand in (base, f"{base}_name", f"{base}_dong", f"{base}_dong_name"):
+                if cand in cols and cand != col:
+                    pairs.append((col, cand))
+                    break
+        elif f"{col}_ko" in cols:
+            pairs.append((col, f"{col}_ko"))
+    return sorted(pairs)
+
+
+def _disambiguated_labels(raw: dict[str, dict[str, str]]) -> dict[str, dict[str, str]]:
+    """코드→표시 사전에서 중복 표시명을 구명 접미사로 유일화한다.
+
+    geo.js 자산 표시(`신사동·강남구`)와 같은 규칙: 같은 필드 안에서 표시명이 코드
+    여러 개에 걸치고 코드 앞 5자리가 MOIS 구코드면 `이름·구명`. 구를 못 찾으면
+    원명 유지(이중 표기보다 정직한 중복).
+    """
+    out: dict[str, dict[str, str]] = {}
+    for field, mapping in raw.items():
+        counts: dict[str, int] = {}
+        for label in mapping.values():
+            counts[label] = counts.get(label, 0) + 1
+        resolved = {}
+        for code, label in mapping.items():
+            gu = MOIS_GU.get(str(code)[:5])
+            resolved[code] = f"{label}·{gu}" if counts[label] > 1 and gu else label
+        out[field] = resolved
+    return out
+
 # ── 도표 타입 = 슬롯 계약 (서버가 정본, /meta 로 프론트와 공유) ──
 AXIS_ROLES = ["category", "time", "sequence", "ordinal", "geo_gu", "geo_dong", "geo_sido", "geo_country"]
 CHART_TYPES: dict[str, dict] = {
@@ -126,7 +191,8 @@ CHART_TYPES: dict[str, dict] = {
     "bar": {
         "label": "막대", "icon": "bar",
         "slots": [
-            {"name": "axis", "label": "축", "accepts": AXIS_ROLES, "required": True},
+            # binnable: 숫자 measure 를 구간 폭(bins[슬롯])과 함께 축으로 허용 — 히스토그램형
+            {"name": "axis", "label": "축", "accepts": AXIS_ROLES, "required": True, "binnable": True},
             {"name": "value", "label": "값", "accepts": ["measure"], "required": True},
             {"name": "series", "label": "시리즈(누적)", "accepts": ["category", "time", "sequence", "geo_gu", "geo_sido"], "required": False},
         ],
@@ -163,7 +229,7 @@ CHART_TYPES: dict[str, dict] = {
     "pie": {
         "label": "원형", "icon": "pie",
         "slots": [
-            {"name": "axis", "label": "분류", "accepts": ["category", "geo_gu", "geo_dong", "geo_sido"], "required": True},
+            {"name": "axis", "label": "분류", "accepts": ["category", "geo_gu", "geo_dong", "geo_sido"], "required": True, "binnable": True},
             {"name": "value", "label": "값", "accepts": ["measure"], "required": True},
         ],
         "options": {"donut": True, "top_n": 12},
@@ -182,11 +248,11 @@ CHART_TYPES: dict[str, dict] = {
     "heatmap": {
         "label": "히트맵", "icon": "heatmap",
         "slots": [
-            {"name": "x", "label": "X 축", "accepts": ["category", "time", "sequence", "ordinal"], "required": True},
+            {"name": "x", "label": "X 축", "accepts": ["category", "time", "sequence", "ordinal"], "required": True, "binnable": True},
             {"name": "y", "label": "Y 축",
              "accepts": ["category", "geo_gu", "geo_gu_code", "geo_dong",
                          "geo_dong_code", "time"],
-             "required": True},
+             "required": True, "binnable": True},
             {"name": "value", "label": "값", "accepts": ["measure"], "required": True},
         ],
         "options": {"top_n": 30},
@@ -194,7 +260,7 @@ CHART_TYPES: dict[str, dict] = {
     "table": {
         "label": "테이블", "icon": "table",
         "slots": [
-            {"name": "axis", "label": "행 축", "accepts": AXIS_ROLES + ["geo_gu_code", "geo_dong_code", "id"], "required": True},
+            {"name": "axis", "label": "행 축", "accepts": AXIS_ROLES + ["geo_gu_code", "geo_dong_code", "id"], "required": True, "binnable": True},
             {"name": "value", "label": "값", "accepts": ["measure"], "required": True},
         ],
         "options": {"top_n": 50},
@@ -208,10 +274,12 @@ CHART_TYPES: dict[str, dict] = {
         "geo": "seoul_gu",
     },
     "map_seoul_dong": {
-        # 자산 코드가 KOSTAT 체계라 MOIS 행정동코드와 호환 불가 → 이름 role 만 허용
+        # 자산 원 code 는 KOSTAT 체계지만 scripts/assign_mois_codes.py 가 각 폴리곤에
+        # MOIS 행정동코드(mois_code)를 병기 → 코드 role 매칭 지원. 이름 바인딩도 프론트가
+        # id_field 승격으로 코드 집계한다(동명 신사동 강남·관악 분리).
         "label": "지도 · 서울 행정동", "icon": "map",
         "slots": [
-            {"name": "region", "label": "행정동", "accepts": ["geo_dong"], "required": True},
+            {"name": "region", "label": "행정동", "accepts": ["geo_dong", "geo_dong_code"], "required": True},
             {"name": "value", "label": "값", "accepts": ["measure"], "required": True},
         ],
         "geo": "seoul_dong",
@@ -259,12 +327,16 @@ for _chart_spec in CHART_TYPES.values():
         if _slot["name"] == "value":
             _slot["count_optional"] = True
 
-# 값 표기 사전 — 코드값을 화면 라벨로 (원본 값은 그대로 보존, 표시만 바꾼다)
+# 값 표기 사전(정적 큐레이션) — 코드값을 화면 라벨로 (원본 값은 보존, 표시만 바꾼다).
+# 스냅샷 code_labels(데이터 실측)가 기본 사전이고, 여기 항목이 같은 키를 덮어쓴다.
 VALUE_LABELS: dict[str, dict[str, str]] = {
     "event_type": {"opened": "개업", "closed": "폐업"},
     "major": {"health": "보건위생", "culture": "문화체육", "industry": "산업경제", "environment": "환경"},
     "age_band": {"0_lt1y": "1년 미만", "1_1to3y": "1~3년", "2_3to5y": "3~5년",
                  "3_5to10y": "5~10년", "4_10to20y": "10~20년", "5_ge20y": "20년 이상"},
+    # 동 매핑 불가(마스킹 주소) 코드 — dong_category_matrix 의 coalesce('UNK')
+    "admin_dong_code": {"UNK": "미상"},
+    "gu_code": {"UNK": "미상"},
 }
 
 # 라벨·기본 도표 힌트만 얹는 큐레이션 — 구조(role) 자체는 자동 추론이 정본
@@ -463,6 +535,18 @@ def _is_chartable(name: str, role: str) -> bool:
     return True
 
 
+def field_matches_slot(field: dict, slot: dict) -> bool:
+    """슬롯 배정 규칙의 단일 정본 — role 일치 또는 저카디널리티 groupable 개방.
+
+    groupable(실측 distinct ≤ GROUPABLE_MAX_DISTINCT 인 measure)은 category 를 받는
+    슬롯에 한해 축으로 허용한다. 서버 검증(router)과 추천(compatible_bindings),
+    프론트 후보 목록이 모두 이 규칙 하나를 공유해야 계약이 갈라지지 않는다.
+    """
+    if field["role"] in slot["accepts"]:
+        return True
+    return bool(field.get("groupable")) and "category" in slot["accepts"]
+
+
 def compatible_bindings(
     fields: list[dict], chart_spec: dict, *, count_mode: bool = False
 ) -> dict[str, str] | None:
@@ -477,7 +561,7 @@ def compatible_bindings(
         slot["name"]: [
             field["name"]
             for field in fields
-            if field["role"] in slot["accepts"] and field.get("chartable", True)
+            if field_matches_slot(field, slot) and field.get("chartable", True)
         ]
         for slot in required
     }
@@ -544,16 +628,29 @@ class Registry:
         self._mtime: float | None = None
         self._sources: dict[str, dict] = {}
         self._generated_at: str = ""
+        self._code_labels: dict[str, dict[str, str]] = {}
 
     def _build(self) -> None:
         snap = json.loads(self._path.read_text(encoding="utf-8"))
         self._generated_at = snap.get("generated_at", "")
+        # 스냅샷 실측 코드→표시 사전(전역 병합 후 중복 동명 유일화) — meta.value_labels 의 기본층
+        raw_labels: dict[str, dict[str, str]] = {}
+        for t in snap["tables"]:
+            for field, mapping in (t.get("code_labels") or {}).items():
+                raw_labels.setdefault(field, {}).update(
+                    {str(k): str(v) for k, v in mapping.items()}
+                )
+        self._code_labels = _disambiguated_labels(raw_labels)
+        # 승격 게이트는 '실측' 사전만 본다 — 정적 VALUE_LABELS(UNK 등 부분 사전)만으로
+        # 승격을 켜면 라벨 없는 코드가 축에 생으로 노출된다(스냅샷 퇴화 시 안전장치).
+        labeled = set(self._code_labels)
         sources: dict[str, dict] = {}
         for t in snap["tables"]:
             curated = CURATED.get(t["name"], {})
             fields = []
             for c in t["columns"]:
                 role, extra = infer_role(c["name"], c.get("type", ""))
+                distinct = c.get("distinct_count")
                 fields.append({
                     "name": c["name"],
                     "type": c.get("type", ""),
@@ -564,11 +661,36 @@ class Registry:
                     **_measure_semantics(t["name"], c["name"], role),
                     "recommendation_priority": _recommendation_priority(c["name"], role),
                     "chartable": _is_chartable(c["name"], role),
-                    "allowed_filter_ops": allowed_filter_ops({"role": role}),
+                    # granularity(time)·role 을 함께 넘긴다 — last_n 등 op 목록이 필드
+                    # 메타에 의존한다(부분 dict 를 넘기면 조용히 누락된다)
+                    "allowed_filter_ops": allowed_filter_ops({"role": role, **extra}),
+                    # 실측 통계(extract) — 저카디널리티 groupby 개방·구간화 기본 폭 제안의 근거
+                    **({"distinct_count": int(distinct)} if distinct is not None else {}),
+                    **({"min": c["min"]} if c.get("min") is not None else {}),
+                    **({"max": c["max"]} if c.get("max") is not None else {}),
+                    "groupable": bool(
+                        role == "measure" and distinct is not None
+                        and 0 < int(distinct) <= GROUPABLE_MAX_DISTINCT
+                    ),
                 })
+            # 동반 필드 메타 — 표시 필드에 id_field(집계 식별을 코드로 승격), 식별 필드에
+            # label_field. 승격은 코드 라벨 사전이 있을 때만 허용(축이 생코드로 노출 방지).
+            by_name = {f["name"]: f for f in fields}
+            for ident, disp in companion_pairs(by_name):
+                ident_f, disp_f = by_name[ident], by_name[disp]
+                if "measure" in (ident_f["role"], disp_f["role"]):
+                    continue  # 수치 측정값 쌍은 표시/식별 관계가 아니다
+                ident_f["label_field"] = disp
+                if ident in labeled:
+                    disp_f["id_field"] = ident
             sources[t["name"]] = {
                 "name": t["name"],
                 "domain": t.get("domain", ""),
+                # 다중 백엔드(2026-07-23): 소스가 사는 DB — querybuilder 방언·실행 라우팅의 근거.
+                # 미지정(기존 gold 스냅샷)은 trino (하위호환 기본값).
+                "datasource": t.get("datasource", "trino"),
+                "backend": t.get("backend", "trino"),
+                "object_type": t.get("object_type", "table"),
                 "relation": t["relation"],
                 "label": curated.get("label", _label_from_desc(t["name"], t.get("description", ""))),
                 "description": t.get("description", ""),
@@ -621,7 +743,10 @@ class Registry:
                 chart_contracts[key]["label"] = label[:80]
                 if key in chart_types:
                     chart_types[key]["label"] = label[:80]
-        value_labels = deepcopy(VALUE_LABELS)
+        # 기본층 = 스냅샷 실측 code_labels, 그 위에 정적 큐레이션(VALUE_LABELS), 맨 위에 사용자 오버라이드
+        value_labels = {field: dict(mapping) for field, mapping in self._code_labels.items()}
+        for field, mapping in VALUE_LABELS.items():
+            value_labels.setdefault(field, {}).update(deepcopy(mapping))
         for field, mapping in overrides.get("value_label_overrides", {}).items():
             if isinstance(mapping, dict):
                 value_labels.setdefault(field, {}).update(
@@ -633,13 +758,17 @@ class Registry:
         default_domain = str(overrides.get("default_domain", "all"))
         if default_domain != "all" and default_domain not in domains:
             default_domain = "all"
+        # 데이터소스 도메인(외부 DB 연결 이름)은 고정 사전에 없다 — 이름 그대로 라벨 폴백
+        domain_labels = {**DOMAIN_LABELS}
+        for d in domains:
+            domain_labels.setdefault(d, d)
         return {
             "generated_at": self._generated_at,
             "chart_types": chart_types,
             "chart_contracts": chart_contracts,
             "value_labels": value_labels,
             "domains": domains,
-            "domain_labels": DOMAIN_LABELS,
+            "domain_labels": domain_labels,
             "default_domain": default_domain,
         }
 

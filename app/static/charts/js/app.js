@@ -104,6 +104,23 @@ function typeDef(t) {
 function fieldsByRole(src, accepts) {
   return src.fields.filter(f => f.chartable !== false && accepts.includes(f.role));
 }
+/* 슬롯 배정 규칙 — 서버 ontology.field_matches_slot 과 동일 계약.
+ * role 일치 외에 ① 저카디널리티 groupable(실측 distinct≤50 measure)은 category 축 허용,
+ * ② 구간 폭(bins[슬롯])이 지정된 measure 는 binnable 축 허용(히스토그램형). */
+function fieldMatchesSlot(field, slot, bins) {
+  if (slot.accepts.includes(field.role)) return true;
+  if (field.groupable && slot.accepts.includes('category')) return true;
+  return field.role === 'measure' && !!slot.binnable && Number((bins || {})[slot.name]) > 0;
+}
+/* 구간 기본 폭 — 실측 min/max 범위를 12구간 안팎의 1·2·5·10 단위로 반올림 */
+function niceBinWidth(field) {
+  const span = Number(field.max) - Number(field.min);
+  if (!Number.isFinite(span) || span <= 0) return 1;
+  const raw = span / 12;
+  const pow = Math.pow(10, Math.floor(Math.log10(raw)));
+  const unit = raw / pow;
+  return (unit >= 5 ? 10 : unit >= 2 ? 5 : unit >= 1 ? 2 : 1) * pow;
+}
 function slotRequired(slot, chart) {
   return !!slot.required && !((chart.agg || 'sum') === 'count' && slot.count_optional);
 }
@@ -112,8 +129,9 @@ function resolveBindings(chart, src) {
   const def = typeDef(chart.type);
   if (!def) throw new Error(`알 수 없는 도표 타입: ${chart.type}`);
   const requested = chart.bindings || {};
+  const bins = chart.bins || {};
   const candidates = slot => {
-    const matches = fieldsByRole(src, slot.accepts);
+    const matches = src.fields.filter(f => f.chartable !== false && fieldMatchesSlot(f, slot, bins));
     const want = requested[slot.name];
     return want
       ? [...matches.filter(field => field.name === want), ...matches.filter(field => field.name !== want)]
@@ -161,11 +179,61 @@ function fieldLabel(src, name) {
   const f = src.fields.find(f => f.name === name);
   return f ? f.label : name;
 }
+
+/* 식별 승격 — 표시 필드(이름/한글) 바인딩을 동반 코드 필드(id_field)로 바꿔 집계한다.
+ * 저장물(chart.bindings)은 그대로 두고 쿼리·렌더에만 적용: GROUP BY 가 항상 코드가 되어
+ * 동명 지역(신사동: 강남·관악)이 합산되지 않고, 화면 표기는 value_labels(코드→한글)가 맡는다.
+ * 반환 promoted = {승격된필드: 원래필드} — 컬럼 라벨을 사용자가 고른 필드명으로 유지할 때 쓴다. */
+function effectiveBindings(src, b) {
+  const be = {}, promoted = {};
+  const used = new Set(Object.values(b));
+  Object.entries(b).forEach(([slot, name]) => {
+    const f = src.fields.find(x => x.name === name);
+    const target = f && f.id_field
+      && src.fields.some(x => x.name === f.id_field)
+      && !used.has(f.id_field)                       // 코드 필드가 이미 다른 슬롯에 있으면 유지
+      ? f.id_field : name;
+    if (target !== name) { promoted[target] = name; used.add(target); }
+    be[slot] = target;
+  });
+  return { be, promoted };
+}
 const AGG_LABEL = { sum: '합계', avg: '평균', count: '건수', count_distinct: '고유수', min: '최소', max: '최대' };
 const FILTER_OP_LABEL = {
-  eq: '같음', neq: '같지 않음', gte: '이상', lte: '이하',
-  between: '범위', like: '문자 패턴', in: '목록 중 하나', not_in: '목록 제외',
+  eq: '같음', neq: '같지 않음',
+  gt: '초과 (>)', gte: '이상 (≥)', lt: '미만 (<)', lte: '이하 (≤)',
+  between: '범위 안(이상~이하)', not_between: '범위 밖',
+  in: '목록 중 하나', not_in: '목록 제외',
+  contains: '포함(부분일치)', starts_with: '~(으)로 시작', ends_with: '~(으)로 끝남',
+  like: '문자 패턴(%·_ 직접)', not_like: '패턴 불일치(고급)',
+  is_null: '값 없음', not_null: '값 있음',
+  last_n: '최근 N(일/개월/년)',
 };
+const NO_VALUE_OPS = ['is_null', 'not_null'];
+const ARRAY_VALUE_OPS = ['in', 'not_in', 'between', 'not_between'];
+const HAVING_OP_LABEL = { gte: '이상 (≥)', gt: '초과 (>)', lte: '이하 (≤)', lt: '미만 (<)', eq: '같음', neq: '같지 않음' };
+/* 그룹 판별 — 서버 querybuilder._is_group/models._filter_kind 와 동일 한 문장 */
+const isFilterGroup = node => !!node && Object.hasOwn(node, 'logic');
+/* data-fi 경로("i" 또는 "i.j") → {leaf, list, index, group} */
+function filterAt(path) {
+  const [i, j] = String(path).split('.').map(Number);
+  const top = CFG.filters[i];
+  return Number.isInteger(j)
+    ? { leaf: top.filters[j], list: top.filters, index: j, group: top }
+    : { leaf: top, list: CFG.filters, index: i, group: null };
+}
+/* 트리 워커 — [사람용 라벨, leaf] 순회 (검증·표시 공용) */
+function* filterLeaves() {
+  let groupNo = 0;
+  for (const [i, node] of CFG.filters.entries()) {
+    if (isFilterGroup(node)) {
+      groupNo++;
+      for (const [j, leaf] of node.filters.entries()) yield [`그룹 ${groupNo}·조건 ${j + 1}`, leaf];
+    } else {
+      yield [`필터 ${i + 1}`, node];
+    }
+  }
+}
 
 function allowedAggs(chart, src, bindings = chart.bindings || {}) {
   const def = typeDef(chart.type);
@@ -177,8 +245,12 @@ function allowedAggs(chart, src, bindings = chart.bindings || {}) {
     const active = Object.entries(rule.when || {}).every(([key, value]) => options[key] === value);
     if (active) allowed = allowed.filter(agg => (rule.allowed || []).includes(agg));
   });
-  const measureFields = Object.values(bindings)
-    .map(name => src.fields.find(field => field.name === name))
+  // 집계 제약은 '집계되는 슬롯'(value/x/y 처럼 measure 를 받는 슬롯)의 필드에만 적용 —
+  // groupable/구간 축으로 바인딩된 measure 는 그룹 키라 집계되지 않는다(서버와 동일 규칙).
+  const slotByName = Object.fromEntries((def.slots || []).map(slot => [slot.name, slot]));
+  const measureFields = Object.entries(bindings)
+    .filter(([slotName]) => (slotByName[slotName]?.accepts || []).includes('measure'))
+    .map(([, name]) => src.fields.find(field => field.name === name))
     .filter(field => field && field.role === 'measure');
   measureFields.forEach(field => {
     if (field.allowed_aggs) allowed = allowed.filter(agg => field.allowed_aggs.includes(agg));
@@ -266,19 +338,28 @@ function buildSpec(chart, src, b) {
   const o = optionsForType(chart.type, chart.options || {});
   const alias = agg === 'count' ? 'count' : `${agg}_${b.value || b.x || 'v'}`;
   const m = f => ({ field: agg === 'count' ? null : f, agg, alias: agg === 'count' ? 'count' : `${agg}_${f}` });
-  const spec = { source: chart.source, dims: [], measures: [], filters: chart.filters || [], order_by: [], limit: 1000 };
+  const spec = { source: chart.source, dims: [], measures: [], filters: chart.filters || [],
+                 filters_logic: chart.filters_logic || 'and', order_by: [], limit: 1000 };
   const t = chart.type;
+  // 집계 조건(having)은 축 있는 도표에만 — stat 은 무차원이라 서버가 거부한다
+  if (t !== 'stat' && Array.isArray(chart.having) && chart.having.length) {
+    spec.having = chart.having;
+  }
+  // 구간 축 — bins[슬롯]이 지정되면 dim 을 {field, bin_width} 로 (별칭=필드명, 소비자 동일)
+  const bins = chart.bins || {};
+  const dimFor = slot => (Number(bins[slot]) > 0
+    ? { field: b[slot], bin_width: Number(bins[slot]) } : b[slot]);
 
   if (t === 'stat') { spec.measures = [m(b.value)]; }
   else if (t === 'bar' || t === 'line' || t === 'area') {
-    spec.dims = b.series ? [b.axis, b.series] : [b.axis];
+    spec.dims = b.series ? [dimFor('axis'), b.series] : [dimFor('axis')];
     spec.measures = [m(b.value)];
     // limit 은 서버 상한(5000)까지 — 절단이 피벗/합계를 왜곡하는 것을 최소화 (도달 시 타일에 경고)
     if (t === 'bar') { spec.order_by = [{ field: m(b.value).alias, dir: 'desc' }]; spec.limit = 5000; }
     else { spec.order_by = [{ field: b.axis, dir: 'asc' }]; spec.limit = 5000; }
   }
   else if (t === 'pie') {
-    spec.dims = [b.axis]; spec.measures = [m(b.value)];
+    spec.dims = [dimFor('axis')]; spec.measures = [m(b.value)];
     spec.order_by = [{ field: m(b.value).alias, dir: 'desc' }]; spec.limit = 500;
   }
   else if (t === 'scatter') {
@@ -287,7 +368,7 @@ function buildSpec(chart, src, b) {
     spec.order_by = [{ field: sm(b.x).alias, dir: 'desc' }];
     spec.limit = o.top_n || 300;
   }
-  else if (t === 'heatmap') { spec.dims = [b.x, b.y]; spec.measures = [m(b.value)]; spec.limit = 5000; }
+  else if (t === 'heatmap') { spec.dims = [dimFor('x'), dimFor('y')]; spec.measures = [m(b.value)]; spec.limit = 5000; }
   else if (t === 'race') {
     spec.dims = [b.time, b.axis]; spec.measures = [m(b.value)];
     spec.order_by = [{ field: b.time, dir: 'asc' }]; spec.limit = 5000;
@@ -297,7 +378,7 @@ function buildSpec(chart, src, b) {
   }
   else if (t.startsWith('map_')) { spec.dims = [b.region]; spec.measures = [m(b.value)]; spec.limit = 800; }
   else if (t === 'table') {
-    spec.dims = [b.axis]; spec.measures = [m(b.value)];
+    spec.dims = [dimFor('axis')]; spec.measures = [m(b.value)];
     spec.order_by = [{ field: m(b.value).alias, dir: 'desc' }]; spec.limit = o.top_n || 50;
   }
   return { spec, alias };
@@ -328,7 +409,8 @@ function hasRenderableMeasures(chart, spec, response) {
     return false;
   }
   if (chart.type === 'line' || chart.type === 'race') {
-    const progressionIndex = response.columns.indexOf(spec.dims[0]);
+    const d0 = spec.dims[0];
+    const progressionIndex = response.columns.indexOf(typeof d0 === 'object' ? d0.field : d0);
     if (progressionIndex < 0) return false;
     const points = new Set(response.rows
       .filter(row => indexes.some(index => numeric(row[index])))
@@ -409,24 +491,32 @@ async function loadTile(chart, force, quiet) {
     // 사라진 필드의 role 폴백 결과를 in-memory 저장물에도 반영한다. 그렇지 않으면
     // 화면은 정상인데 다음 레이아웃 저장에서 오래된 필드명 때문에 전체 저장이 실패한다.
     if (JSON.stringify(chart.bindings || {}) !== JSON.stringify(b)) chart.bindings = { ...b };
-    const { spec, alias } = buildSpec(chart, src, b);
+    // role 폴백으로 축 필드가 바뀌었으면 measure 가 아닌 슬롯의 구간(bins)은 무효 — 정리
+    Object.keys(chart.bins || {}).forEach(slot => {
+      const bound = src.fields.find(x => x.name === b[slot]);
+      if (!bound || bound.role !== 'measure') delete chart.bins[slot];
+    });
+    const { be, promoted } = effectiveBindings(src, b);
+    const { spec, alias } = buildSpec(chart, src, be);
     if (force) spec.force = true;               // 신선 캐시 무시 ('다시 조회')
     const res = await API.query(spec);
     if (!current()) return;                    // 재조회/페이지 전환의 늦은 응답 폐기
     tileState(el, null);
 
     const ctx = {
-      el, chart, b, src,
+      el, chart, b: be, src,
       rows: res.rows, cols: res.columns,
       geo: def.geo || null,
-      regionRole: b.region ? (src.fields.find(f => f.name === b.region) || {}).role : null,
+      regionRole: be.region ? (src.fields.find(f => f.name === be.region) || {}).role : null,
       valueLabel: chart.agg === 'count' ? '건수' : `${fieldLabel(src, b.value || b.x)} ${AGG_LABEL[chart.agg || 'sum'] || ''}`.trim(),
       xLabel: b.x ? fieldLabel(src, b.x) : '', yLabel: b.y ? fieldLabel(src, b.y) : '',
       colLabels: {},
       raceState: RENDER.raceSnapshot(rec.inst),
       isCurrent: current,
     };
-    ctx.colLabels = Object.fromEntries(res.columns.map(c => [c, c === alias ? ctx.valueLabel : fieldLabel(src, c)]));
+    // 승격된 컬럼의 헤더/툴팁 라벨은 사용자가 고른 표시 필드명으로 유지한다
+    ctx.colLabels = Object.fromEntries(res.columns.map(c =>
+      [c, c === alias ? ctx.valueLabel : fieldLabel(src, promoted[c] || c)]));
     if (!hasRenderableMeasures(chart, spec, res)) {
       const old = echarts.getInstanceByDom(plot);
       if (old) RENDER.dispose(old);             // 직전 렌더 잔상이 '데이터 없음' 뒤로 비치지 않게
@@ -749,8 +839,9 @@ async function saveLayout() {
 
 /* ── 구성 드로어 (소스 → 도표 → 연결) ─────────────────────── */
 const CFG = { open: false, mode: 'add', chartId: null, step: 'source',
-              source: null, src: null, type: null, bindings: {}, agg: 'sum',
-              title: '', titleTouched: false, filters: [], options: {}, domain: 'all', search: '',
+              source: null, src: null, type: null, bindings: {}, bins: {}, agg: 'sum',
+              title: '', titleTouched: false, filters: [], filtersLogic: 'and', having: [],
+              options: {}, domain: 'all', search: '',
               dirty: false, sourceGen: 0, previewGen: 0, previewKey: null,
               previewBusy: false, loadError: '', returnFocus: null };
 
@@ -776,18 +867,22 @@ function openCfg(mode, chart) {
     Object.assign(CFG, {
       chartId: chart.id, source: chart.source, type: chart.type,
       src: null,
-      bindings: { ...(chart.bindings || {}) }, agg: chart.agg || 'sum',
+      bindings: { ...(chart.bindings || {}) }, bins: { ...(chart.bins || {}) },
+      agg: chart.agg || 'sum',
       title: chart.title, titleTouched: true,
       filters: JSON.parse(JSON.stringify(chart.filters || [])),
+      filtersLogic: chart.filters_logic || 'and',
+      having: JSON.parse(JSON.stringify(chart.having || [])),
       options: optionsForType(chart.type, chart.options || {}), step: 'bind',
       comboIdx: null,
     });
     $('cfg-mode-label').textContent = '차트 편집';
     $('cfg-apply').textContent = '적용';
   } else {
-    Object.assign(CFG, { chartId: null, source: null, src: null, type: null, bindings: {}, agg: 'sum',
-                         title: '', titleTouched: false, filters: [], options: {}, step: 'source', search: '',
-                         comboIdx: null });
+    Object.assign(CFG, { chartId: null, source: null, src: null, type: null, bindings: {}, bins: {},
+                         agg: 'sum', title: '', titleTouched: false,
+                         filters: [], filtersLogic: 'and', having: [], options: {},
+                         step: 'source', search: '', comboIdx: null });
     $('cfg-mode-label').textContent = '차트 추가';
     $('cfg-apply').textContent = '추가';
   }
@@ -893,8 +988,10 @@ function requiredBound() {
 }
 function currentDraft() {
   return { id: CFG.chartId || 'draft', title: CFG.title, type: CFG.type, source: CFG.source,
-           bindings: { ...CFG.bindings }, agg: CFG.agg,
+           bindings: { ...CFG.bindings }, bins: { ...CFG.bins }, agg: CFG.agg,
            filters: JSON.parse(JSON.stringify(CFG.filters)),
+           filters_logic: CFG.filtersLogic || 'and',
+           having: JSON.parse(JSON.stringify(CFG.having || [])),
            options: optionsForType(CFG.type, CFG.options) };
 }
 function previewFingerprint() {
@@ -938,35 +1035,79 @@ function filterOpsFor(field) {
   if (Array.isArray(field.allowed_filter_ops) && field.allowed_filter_ops.length) {
     return field.allowed_filter_ops;
   }
-  if (field.role === 'measure' || field.role === 'sequence' || field.role === 'ordinal') {
-    return ['eq', 'neq', 'gte', 'lte', 'between', 'in', 'not_in'];
+  // 서버 querybuilder.allowed_filter_ops 미러(구 스냅샷 폴백) — 서버 변경 시 함께 갱신
+  const codeStrict = ['geo_gu_code', 'geo_dong_code', 'geo_legal_code', 'id'].includes(field.role);
+  if (codeStrict) return ['eq', 'neq', 'in', 'not_in', 'is_null', 'not_null'];
+  if (['measure', 'sequence', 'ordinal'].includes(field.role)) {
+    return ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'between', 'not_between',
+            'in', 'not_in', 'is_null', 'not_null'];
   }
   if (field.role === 'time') {
-    return ['eq', 'neq', 'gte', 'lte', 'between', 'in', 'not_in'];
+    const ops = ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'between', 'not_between',
+                 'in', 'not_in', 'is_null', 'not_null'];
+    if (['year', 'month', 'date', 'datetime'].includes(field.granularity)) ops.push('last_n');
+    return ops;
   }
-  if (field.role === 'category') return ['eq', 'neq', 'like', 'in', 'not_in'];
-  return ['eq', 'neq', 'in', 'not_in'];
+  if (['category', 'geo_gu', 'geo_dong', 'geo_sido', 'geo_legal_dong', 'geo_country'].includes(field.role)) {
+    return ['eq', 'neq', 'in', 'not_in', 'contains', 'starts_with', 'ends_with',
+            'like', 'not_like', 'is_null', 'not_null'];
+  }
+  return ['eq', 'neq', 'in', 'not_in', 'is_null', 'not_null'];
+}
+
+function leafProblem(label, item) {
+  const field = CFG.src.fields.find(candidate => candidate.name === item.field);
+  if (!field) return `${label}의 필드를 선택하세요`;
+  if (field.unavailable) return `${label}의 필드는 실제 값이 없어 사용할 수 없습니다`;
+  if (!filterOpsFor(field).includes(item.op)) return `${label}의 조건이 필드와 맞지 않습니다`;
+  if (NO_VALUE_OPS.includes(item.op)) return null;   // 값 없음/있음 — 값 검사 전체 면제
+  if (item.op === 'last_n') {
+    const n = Number(item.value);
+    return Number.isInteger(n) && n >= 1 ? null : `${label}의 최근 N 값은 1 이상의 정수여야 합니다`;
+  }
+  const value = item.value;
+  const values = ARRAY_VALUE_OPS.includes(item.op) ? value : [value];
+  if (!Array.isArray(values) || !values.length
+      || (['between', 'not_between'].includes(item.op) && values.length !== 2)) {
+    return `${label}의 값을 확인하세요`;
+  }
+  if (values.some(v => v == null || (typeof v === 'string' && !v.trim()))) {
+    return `${label}의 값은 비워둘 수 없습니다`;
+  }
+  const textOps = ['contains', 'starts_with', 'ends_with', 'like', 'not_like'];
+  if (!textOps.includes(item.op)
+      && ['measure', 'sequence', 'ordinal'].includes(field.role)
+      && values.some(v => !Number.isFinite(Number(v)))) {
+    return `${label}에는 숫자를 입력하세요`;
+  }
+  return null;
 }
 
 function filterProblem() {
   if (!CFG.src) return null;
-  for (let i = 0; i < CFG.filters.length; i++) {
-    const item = CFG.filters[i];
-    const field = CFG.src.fields.find(candidate => candidate.name === item.field);
-    if (!field) return `필터 ${i + 1}의 필드를 선택하세요`;
-    if (field.unavailable) return `필터 ${i + 1}의 필드는 실제 값이 없어 사용할 수 없습니다`;
-    if (!filterOpsFor(field).includes(item.op)) return `필터 ${i + 1}의 조건이 필드와 맞지 않습니다`;
-    const value = item.value;
-    const values = ['in', 'not_in', 'between'].includes(item.op) ? value : [value];
-    if (!Array.isArray(values) || !values.length || (item.op === 'between' && values.length !== 2)) {
-      return `필터 ${i + 1}의 값을 확인하세요`;
+  let groupNo = 0;
+  for (const node of CFG.filters) {
+    if (isFilterGroup(node) && !node.filters.length) {
+      return `그룹 ${++groupNo}에 조건을 추가하거나 그룹을 삭제하세요`;
     }
-    if (values.some(v => v == null || (typeof v === 'string' && !v.trim()))) {
-      return `필터 ${i + 1}의 값은 비워둘 수 없습니다`;
+    if (isFilterGroup(node)) groupNo++;
+  }
+  for (const [label, leaf] of filterLeaves()) {
+    const problem = leafProblem(label, leaf);
+    if (problem) return problem;
+  }
+  if ((CFG.having || []).length && CFG.type === 'stat') {
+    return '집계 결과 조건은 축이 있는 도표에서만 쓸 수 있습니다 — 도표를 바꾸거나 조건을 삭제하세요';
+  }
+  for (let i = 0; i < (CFG.having || []).length; i++) {
+    const h = CFG.having[i];
+    if (h.agg !== 'count' && !CFG.src.fields.some(f => f.name === h.field && f.role === 'measure')) {
+      return `집계 조건 ${i + 1}의 대상 측정값을 선택하세요`;
     }
-    if ((field.role === 'measure' || field.role === 'sequence' || field.role === 'ordinal')
-        && values.some(v => !Number.isFinite(Number(v)))) {
-      return `필터 ${i + 1}에는 숫자를 입력하세요`;
+    // Number('')===0 함정 — 빈 값/공백을 유한수로 오인하지 않게 명시 검사
+    if (h.value == null || (typeof h.value === 'string' && !h.value.trim())
+        || !Number.isFinite(Number(h.value))) {
+      return `집계 조건 ${i + 1}의 값은 숫자여야 합니다`;
     }
   }
   return null;
@@ -1209,6 +1350,9 @@ function renderCfgBind(body) {
   if (CFG.agg === 'count') {
     def.slots.filter(slot => slot.count_optional).forEach(slot => delete CFG.bindings[slot.name]);
   }
+  // stat(무차원)으로 전환하면 잔존 having 을 정리한다 — 미리보기(스펙 제외)와 저장물이
+  // 비대칭이면 레이아웃 저장 전체가 400 으로 막힌다(적대적 검증 결함 #1)
+  if (CFG.type === 'stat' && (CFG.having || []).length) CFG.having = [];
   const normalized = resolveBindings(currentDraft(), src);
   CFG.bindings = { ...normalized.b };
   ensureValidAgg();
@@ -1230,44 +1374,107 @@ function renderCfgBind(body) {
     const usedElsewhere = new Set(Object.entries(CFG.bindings)
       .filter(([name]) => name !== slot.name)
       .map(([, value]) => value));
-    const cands = fieldsByRole(src, slot.accepts)
+    // 후보 = 규칙 일치(role/groupable/구간 지정 measure) ∪ binnable 슬롯의 모든 measure
+    // (선택하는 순간 기본 구간 폭이 자동 설정되어 규칙을 충족하게 된다)
+    const cands = src.fields
+      .filter(f => f.chartable !== false
+        && (fieldMatchesSlot(f, slot, CFG.bins) || (slot.binnable && f.role === 'measure')))
       .filter(field => !usedElsewhere.has(field.name));
     const countValue = CFG.agg === 'count' && slot.count_optional;
+    const roleTag = f => f.role !== 'measure' ? f.role
+      : (f.groupable ? 'measure·그룹' : (slot.binnable ? 'measure·구간' : 'measure'));
+    const curField = src.fields.find(f => f.name === cur);
+    const binRow = slot.binnable && curField && curField.role === 'measure'
+      ? `<div class="bind-row"><label>구간 폭${curField.groupable ? '' : ' <span class="req">*</span>'}</label>
+          <input type="number" data-binslot="${esc(slot.name)}" step="any" min="0"
+                 value="${esc(CFG.bins[slot.name] ?? '')}"
+                 placeholder="${esc(String(niceBinWidth(curField)))}${curField.groupable ? ' (비우면 값 그대로)' : ''}"></div>`
+      : '';
     return `<div class="bind-row">
       <label>${esc(slot.label)} ${slot.required ? '<span class="req">*</span>' : ''}</label>
       <select data-slot="${esc(slot.name)}" ${countValue && !cands.length ? 'disabled' : ''}>
         ${countValue ? '<option value="">행 수 (count *)</option>'
           : (slot.required ? '' : '<option value="">(없음)</option>')}
-        ${cands.map(f => `<option value="${esc(f.name)}" ${f.name === cur ? 'selected' : ''}>${esc(f.label)} — ${esc(f.name)} (${esc(f.role)})</option>`).join('')}
-      </select></div>`;
+        ${cands.map(f => `<option value="${esc(f.name)}" ${f.name === cur ? 'selected' : ''}>${esc(f.label)} — ${esc(f.name)} (${esc(roleTag(f))})</option>`).join('')}
+      </select></div>${binRow}`;
   };
-  const filterRow = (f, i) => {
+  const filterRow = (f, path) => {
     const field = src.fields.find(item => item.name === f.field);
-    const ops = filterOpsFor(field);
     const enumLabels = (S.meta.value_labels || {})[f.field];
+    // enum(코드→라벨) 필드에서는 부분일치/패턴을 UI 에서 숨긴다 — DB 엔 코드가 저장되어
+    // 한글 라벨 부분일치가 0행이 되는 함정(서버는 저장물 호환 위해 계속 허용)
+    // 현재 저장된 op 는 숨기지 않는다 — 목록에서 빠지면 select 가 첫 항목('같음')을
+    // 오표시하면서 상태는 like 로 남는 표시·상태 불일치가 생긴다(저장물 하위호환)
+    const ops = filterOpsFor(field).filter(op =>
+      op === f.op
+      || !(enumLabels && ['contains', 'starts_with', 'ends_with', 'like', 'not_like'].includes(op)));
     if (enumLabels && ['eq', 'neq'].includes(f.op)
         && !Object.hasOwn(enumLabels, String(f.value ?? ''))) f.value = '';
+    const noValue = NO_VALUE_OPS.includes(f.op);
+    const rangeOp = ['between', 'not_between'].includes(f.op);
     const displayValue = Array.isArray(f.value) ? f.value.join(',') : (f.value ?? '');
-    const valueControl = enumLabels && ['eq', 'neq', 'in', 'not_in'].includes(f.op)
-      ? `<select class="fv" ${['in', 'not_in'].includes(f.op) ? 'multiple size="4"' : ''} ${field ? '' : 'disabled'}>
-          ${['eq', 'neq'].includes(f.op) ? '<option value="">값 선택</option>' : ''}
-          ${Object.entries(enumLabels).map(([value, label]) => {
-            const selected = Array.isArray(f.value)
-              ? f.value.map(String).includes(value) : String(f.value ?? '') === value;
-            return `<option value="${esc(value)}" ${selected ? 'selected' : ''}>${esc(label)} (${esc(value)})</option>`;
-          }).join('')}</select>`
+    // 값 위젯은 op 우선 디스패치 — 값 없는 op 에 enum select 가 뜨지 않게
+    const valueControl = noValue
+      ? '<span class="fv-none bind-hint" style="align-self:center">값 입력 없음</span>'
+      : f.op === 'last_n'
+        ? `<input type="number" class="fv" min="1" step="1" value="${esc(f.value ?? '')}"
+            placeholder="N (${{ year: '년', month: '개월', date: '일', datetime: '일' }[field?.granularity] || '단위'})" ${field ? '' : 'disabled'}>`
+      : rangeOp
+        ? `<span style="display:flex;gap:4px;align-items:center">
+            <input type="text" class="fv" data-vi="0" placeholder="최소" value="${esc(f.value?.[0] ?? '')}" ${field ? '' : 'disabled'}>~
+            <input type="text" class="fv" data-vi="1" placeholder="최대" value="${esc(f.value?.[1] ?? '')}" ${field ? '' : 'disabled'}></span>`
+      : enumLabels && ['eq', 'neq', 'in', 'not_in'].includes(f.op)
+        ? `<select class="fv" ${['in', 'not_in'].includes(f.op) ? 'multiple size="4"' : ''} ${field ? '' : 'disabled'}>
+            ${['eq', 'neq'].includes(f.op) ? '<option value="">값 선택</option>' : ''}
+            ${Object.entries(enumLabels).map(([value, label]) => {
+              const selected = Array.isArray(f.value)
+                ? f.value.map(String).includes(value) : String(f.value ?? '') === value;
+              return `<option value="${esc(value)}" ${selected ? 'selected' : ''}>${esc(label)} (${esc(value)})</option>`;
+            }).join('')}</select>`
       : `<input type="text" class="fv" value="${esc(displayValue)}"
-          placeholder="${['in', 'not_in'].includes(f.op) ? '쉼표로 구분' : f.op === 'between' ? '최소, 최대' : '값 입력'}"
+          placeholder="${['in', 'not_in'].includes(f.op) ? '쉼표로 구분'
+            : ['contains', 'starts_with', 'ends_with'].includes(f.op) ? '문자 그대로 입력 (%·_ 불필요)' : '값 입력'}"
           ${field ? '' : 'disabled'}>`;
     return `
-    <div class="bind-grid" data-fi="${i}" style="grid-template-columns: 1.2fr .7fr 1fr auto; align-items:end">
+    <div class="bind-grid" data-fi="${esc(String(path))}" style="grid-template-columns: 1.2fr .7fr 1fr auto; align-items:end">
       <div class="bind-row"><label>필드</label><select class="ff">
         <option value="">필드 선택</option>${src.fields.filter(x => !x.unavailable).map(x =>
         `<option value="${esc(x.name)}" ${x.name === f.field ? 'selected' : ''}>${esc(x.label)} — ${esc(x.name)}</option>`).join('')}</select></div>
       <div class="bind-row"><label>조건</label><select class="fo" ${field ? '' : 'disabled'}>${ops.map(o =>
         `<option value="${o}" ${o === f.op ? 'selected' : ''}>${FILTER_OP_LABEL[o] || o}</option>`).join('')}</select></div>
       <div class="bind-row"><label>값</label>${valueControl}</div>
-      <button class="btn ghost fdel" title="필터 삭제" style="height:33px">✕</button>
+      <button class="btn ghost fdel" title="조건 삭제" style="height:33px">✕</button>
+    </div>`;
+  };
+  // 최상위 노드: leaf 는 그대로, 그룹은 박스(logic 토글 + 내부 leaf + 조건 추가/그룹 삭제)
+  const filterNode = (node, i) => {
+    if (!isFilterGroup(node)) return filterRow(node, i);
+    return `
+    <div class="f-group" data-gi="${i}" style="border:1px solid #dfe4ec;border-radius:8px;padding:8px 10px;margin:6px 0">
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
+        <button class="btn ghost glogic" data-lg="${node.logic === 'or' ? 'and' : 'or'}"
+                title="그룹 결합 방식 전환" style="padding:2px 8px;font-size:10.5px">
+          ${node.logic === 'or' ? '하나라도 만족 (또는)' : '모두 만족 (그리고)'}</button>
+        <button class="btn ghost gadd" style="padding:2px 8px;font-size:10.5px">+ 조건</button>
+        <button class="btn ghost gdel" title="그룹 삭제" style="margin-left:auto;padding:2px 8px;font-size:10.5px">그룹 ✕</button>
+      </div>
+      ${node.filters.map((leaf, j) => filterRow(leaf, `${i}.${j}`)).join('')}
+    </div>`;
+  };
+  const havingRow = (h, i) => {
+    const measures = src.fields.filter(x => x.role === 'measure' && !x.unavailable);
+    return `
+    <div class="bind-grid" data-hi="${i}" style="grid-template-columns: .8fr 1.2fr .8fr .8fr auto; align-items:end">
+      <div class="bind-row"><label>집계</label><select class="hagg">
+        ${['count', 'sum', 'avg', 'min', 'max'].map(a =>
+          `<option value="${a}" ${a === h.agg ? 'selected' : ''}>${AGG_LABEL[a] || a}</option>`).join('')}</select></div>
+      <div class="bind-row"><label>대상</label><select class="hfield" ${h.agg === 'count' ? 'disabled' : ''}>
+        <option value="">${h.agg === 'count' ? '행 수 (count *)' : '측정값 선택'}</option>
+        ${measures.map(x => `<option value="${esc(x.name)}" ${x.name === h.field ? 'selected' : ''}>${esc(x.label)} — ${esc(x.name)}</option>`).join('')}</select></div>
+      <div class="bind-row"><label>조건</label><select class="hop">
+        ${Object.entries(HAVING_OP_LABEL).map(([o, l]) => `<option value="${o}" ${o === h.op ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      <div class="bind-row"><label>값</label><input type="text" class="hval" value="${esc(h.value ?? '')}" placeholder="숫자"></div>
+      <button class="btn ghost hdel" title="집계 조건 삭제" style="height:33px">✕</button>
     </div>`;
   };
 
@@ -1291,10 +1498,16 @@ function renderCfgBind(body) {
         ${renderOptToggles(def)}
       </div>
     </section>
-    <section><h3>필터 <button class="btn ghost" id="f-add" style="margin-left:8px;padding:2px 8px;font-size:10.5px">+ 추가</button></h3>
-      <div id="f-list">${CFG.filters.map(filterRow).join('') || '<p class="bind-hint">필터 없음 — 소스 전체를 집계합니다.</p>'}</div>
-      ${CFG.filters.length ? '<p class="bind-hint">목록 조건은 여러 값을 선택하거나 쉼표로 구분하고, 범위는 “최소, 최대” 순서로 입력합니다.</p>' : ''}
+    <section><h3>필터
+        <button class="btn ghost" id="f-add" style="margin-left:8px;padding:2px 8px;font-size:10.5px">+ 조건</button>
+        <button class="btn ghost" id="g-add" style="padding:2px 8px;font-size:10.5px">+ OR 그룹</button></h3>
+      <div id="f-list">${CFG.filters.map(filterNode).join('') || '<p class="bind-hint">필터 없음 — 소스 전체를 집계합니다.</p>'}</div>
+      ${CFG.filters.length ? '<p class="bind-hint">조건들은 ‘그리고’로 결합됩니다. 그룹 안 조건은 그룹의 결합 방식(또는/그리고)을 따릅니다. 범위는 최소·최대 두 칸, 포함은 %·_ 없이 입력한 그대로 부분일치, 값 없음/있음 조건은 값을 입력하지 않습니다.</p>' : ''}
     </section>
+    ${CFG.type === 'stat' ? '' : `<section><h3>집계 결과 조건
+        <button class="btn ghost" id="h-add" style="margin-left:8px;padding:2px 8px;font-size:10.5px">+ 추가</button></h3>
+      <div id="h-list">${(CFG.having || []).map(havingRow).join('') || '<p class="bind-hint">없음 — 예: ‘건수 10건 이상인 그룹만’(소표본 숨기기).</p>'}</div>
+    </section>`}
     ${combos.length ? `<section><h3>추천 조합 — 누르면 위 설정에 바로 적용됩니다</h3>
         <div class="combo-row">${combos.map((c, i) => `
           <button class="combo-chip ${CFG.comboIdx === i ? 'on' : ''}" data-ci="${i}">
@@ -1310,8 +1523,26 @@ function renderCfgBind(body) {
   };
   body.querySelectorAll('select[data-slot]').forEach(s => s.onchange = () => {
     if (s.value) CFG.bindings[s.dataset.slot] = s.value; else delete CFG.bindings[s.dataset.slot];
+    // 구간 상태 동기화 — 비-groupable measure 를 binnable 축에 놓으면 기본 폭 자동 설정,
+    // measure 가 아니게 되면 구간 해제(서버 계약: 구간은 숫자 측정값에만)
+    const slotDef = def.slots.find(x => x.name === s.dataset.slot);
+    const picked = src.fields.find(x => x.name === s.value);
+    if (slotDef?.binnable && picked?.role === 'measure') {
+      if (!picked.groupable && !(Number(CFG.bins[slotDef.name]) > 0)) {
+        CFG.bins[slotDef.name] = niceBinWidth(picked);
+      }
+    } else if (slotDef) {
+      delete CFG.bins[slotDef.name];
+    }
     CFG.comboIdx = null;   // 수동으로 만졌으면 추천 조합 선택 표시 해제
     ensureValidAgg();
+    markCfgDirty();
+    renderCfgBind(body);
+  });
+  body.querySelectorAll('input[data-binslot]').forEach(inp => inp.onchange = () => {
+    const width = Number(inp.value);
+    if (Number.isFinite(width) && width > 0) CFG.bins[inp.dataset.binslot] = width;
+    else delete CFG.bins[inp.dataset.binslot];
     markCfgDirty();
     renderCfgBind(body);
   });
@@ -1319,6 +1550,7 @@ function renderCfgBind(body) {
     const combo = combos[Number(ch.dataset.ci)];
     if (!combo) return;
     CFG.bindings = { ...combo.bindings };
+    CFG.bins = {};        // 추천 조합은 role 기반 — 이전 구간 상태를 끌고 가지 않는다
     CFG.agg = combo.agg;
     CFG.options = { ...CFG.options, ...combo.options };
     CFG.comboIdx = Number(ch.dataset.ci);
@@ -1351,8 +1583,35 @@ function renderCfgBind(body) {
     markCfgDirty();
     renderCfgBind(body);
   };
+  // 새 그룹 기본 logic 은 'or' — AND 그룹은 최상위 leaf 와 동치라 그룹을 만드는 동기가 보통 OR
+  $('g-add').onclick = () => {
+    CFG.filters.push({ logic: 'or', filters: [{ field: '', op: 'eq', value: '' }] });
+    markCfgDirty();
+    renderCfgBind(body);
+  };
+  body.querySelectorAll('#f-list .f-group').forEach(box => {
+    const g = CFG.filters[Number(box.dataset.gi)];
+    if (!isFilterGroup(g)) return;
+    box.querySelector('.glogic').onclick = e => {
+      g.logic = e.currentTarget.dataset.lg === 'or' ? 'or' : 'and';
+      markCfgDirty();
+      renderCfgBind(body);
+    };
+    box.querySelector('.gadd').onclick = () => {
+      g.filters.push({ field: '', op: 'eq', value: '' });
+      markCfgDirty();
+      renderCfgBind(body);
+    };
+    box.querySelector('.gdel').onclick = () => {
+      CFG.filters.splice(Number(box.dataset.gi), 1);
+      markCfgDirty();
+      renderCfgBind(body);
+    };
+  });
   body.querySelectorAll('#f-list [data-fi]').forEach(row => {
-    const i = Number(row.dataset.fi), f = CFG.filters[i];
+    const at = filterAt(row.dataset.fi);
+    const f = at.leaf;
+    if (!f) return;
     row.querySelector('.ff').onchange = e => {
       f.field = e.target.value;
       const field = src.fields.find(item => item.name === f.field);
@@ -1362,24 +1621,81 @@ function renderCfgBind(body) {
       renderCfgBind(body);
     };
     row.querySelector('.fo').onchange = e => {
-      f.op = e.target.value; f.value = '';
+      f.op = e.target.value;
+      // op 모양 인지형 초기화 — between 2칸 / 값없음 null / 목록 [] / 그 외 ''
+      f.value = ['between', 'not_between'].includes(f.op) ? ['', '']
+        : NO_VALUE_OPS.includes(f.op) ? null
+        : ['in', 'not_in'].includes(f.op) ? [] : '';
       markCfgDirty();
       renderCfgBind(body);
     };
-    const valueInput = row.querySelector('.fv');
-    const updateFilterValue = e => {
-      const raw = e.target.multiple
-        ? [...e.target.selectedOptions].map(option => option.value)
-        : e.target.value;
-      f.value = parseFilterValue(f, raw);
+    const rangeInputs = row.querySelectorAll('.fv[data-vi]');
+    if (rangeInputs.length === 2) {
+      // between 두 칸은 재렌더 없이 칸별 갱신 — 타이핑 중 상태 소실 방지
+      rangeInputs.forEach(inp => inp.oninput = e => {
+        if (!Array.isArray(f.value)) f.value = ['', ''];
+        f.value[Number(inp.dataset.vi)] = parseFilterValue(
+          { ...f, op: 'eq' }, e.target.value);
+        markCfgDirty();
+        renderCfgTabs();
+        $('cfg-note').textContent = filterProblem() || '';
+      });
+    } else {
+      const valueInput = row.querySelector('.fv');
+      if (valueInput && valueInput.tagName !== 'SPAN') {
+        const updateFilterValue = e => {
+          const raw = e.target.multiple
+            ? [...e.target.selectedOptions].map(option => option.value)
+            : e.target.value;
+          f.value = parseFilterValue(f, raw);
+          markCfgDirty();
+          renderCfgTabs();
+          $('cfg-note').textContent = filterProblem() || '';
+        };
+        if (valueInput.tagName === 'SELECT') valueInput.onchange = updateFilterValue;
+        else valueInput.oninput = updateFilterValue;
+      }
+    }
+    row.querySelector('.fdel').onclick = () => {
+      at.list.splice(at.index, 1);
+      // 그룹이 비면 그룹 자동 제거 — 빈 그룹은 SQL 불가·검증 걸림보다 제거가 낫다
+      if (at.group && !at.group.filters.length) {
+        CFG.filters.splice(CFG.filters.indexOf(at.group), 1);
+      }
+      markCfgDirty();
+      renderCfgBind(body);
+    };
+  });
+  const hAdd = $('h-add');   // stat(무차원)에서는 섹션 자체가 없다
+  if (hAdd) hAdd.onclick = () => {
+    (CFG.having = CFG.having || []).push({ agg: 'count', field: null, op: 'gte', value: '' });
+    markCfgDirty();
+    renderCfgBind(body);
+  };
+  body.querySelectorAll('#h-list [data-hi]').forEach(row => {
+    const h = CFG.having[Number(row.dataset.hi)];
+    if (!h) return;
+    row.querySelector('.hagg').onchange = e => {
+      h.agg = e.target.value;
+      if (h.agg === 'count') h.field = null;
+      markCfgDirty();
+      renderCfgBind(body);
+    };
+    row.querySelector('.hfield').onchange = e => {
+      h.field = e.target.value || null;
+      markCfgDirty();
+      renderCfgBind(body);
+    };
+    row.querySelector('.hop').onchange = e => { h.op = e.target.value; markCfgDirty(); renderCfgTabs(); };
+    row.querySelector('.hval').oninput = e => {
+      const n = Number(e.target.value);
+      h.value = e.target.value !== '' && Number.isFinite(n) ? n : e.target.value;
       markCfgDirty();
       renderCfgTabs();
       $('cfg-note').textContent = filterProblem() || '';
     };
-    if (valueInput.tagName === 'SELECT') valueInput.onchange = updateFilterValue;
-    else valueInput.oninput = updateFilterValue;
-    row.querySelector('.fdel').onclick = () => {
-      CFG.filters.splice(i, 1);
+    row.querySelector('.hdel').onclick = () => {
+      CFG.having.splice(Number(row.dataset.hi), 1);
       markCfgDirty();
       renderCfgBind(body);
     };
@@ -1407,10 +1723,18 @@ function renderOptToggles(def) {
 
 function parseFilterValue(f, raw) {
   const src = CFG.src, fl = src.fields.find(x => x.name === f.field);
-  const numeric = fl && (fl.role === 'measure' || fl.role === 'sequence' || fl.role === 'ordinal');
+  if (NO_VALUE_OPS.includes(f.op)) return null;
+  if (f.op === 'last_n') {
+    const n = Math.floor(Number(raw));
+    return Number.isFinite(n) && n >= 1 ? n : '';
+  }
+  // 문자열 매칭 op 는 숫자 강제변환 금지 — '123' 부분일치는 문자열 그대로가 의미
+  const textOps = ['contains', 'starts_with', 'ends_with', 'like', 'not_like'];
+  const numeric = !textOps.includes(f.op)
+    && fl && (fl.role === 'measure' || fl.role === 'sequence' || fl.role === 'ordinal');
   const parseOne = value => numeric && value !== '' && !Number.isNaN(Number(value))
     ? Number(value) : value;
-  if (['in', 'not_in', 'between'].includes(f.op)) {
+  if (ARRAY_VALUE_OPS.includes(f.op)) {
     if (Array.isArray(raw)) return raw.map(parseOne);
     return raw.split(',').map(s => s.trim()).filter(Boolean).map(parseOne);
   }
@@ -1434,7 +1758,8 @@ async function runPreview() {
   try {
     const draft = currentDraft();
     const { b, def } = resolveBindings(draft, CFG.src);
-    const { spec, alias } = buildSpec(draft, CFG.src, b);
+    const { be, promoted } = effectiveBindings(CFG.src, b);
+    const { spec, alias } = buildSpec(draft, CFG.src, be);
     const res = await API.query(spec);
     if (!CFG.open || gen !== CFG.previewGen || key !== previewFingerprint()) return false;
     if (!hasRenderableMeasures(draft, spec, res)) {
@@ -1449,11 +1774,11 @@ async function runPreview() {
     const colLabels = Object.fromEntries(res.columns.map(column =>
       [column, column === alias
         ? (draft.agg === 'count' ? '건수' : `${fieldLabel(CFG.src, b.value || b.x)} ${AGG_LABEL[draft.agg] || ''}`.trim())
-        : fieldLabel(CFG.src, column)]));
+        : fieldLabel(CFG.src, promoted[column] || column)]));
     const inst = await RENDER.render(box.querySelector('.plot'), {
-      el: box, chart: draft, b, src: CFG.src, rows: res.rows, cols: res.columns,
+      el: box, chart: draft, b: be, src: CFG.src, rows: res.rows, cols: res.columns,
       geo: def.geo || null,
-      regionRole: b.region ? (CFG.src.fields.find(f => f.name === b.region) || {}).role : null,
+      regionRole: be.region ? (CFG.src.fields.find(f => f.name === be.region) || {}).role : null,
       valueLabel: draft.agg === 'count' ? '건수' : `${fieldLabel(CFG.src, b.value || b.x)} ${AGG_LABEL[draft.agg] || ''}`.trim(),
       xLabel: b.x ? fieldLabel(CFG.src, b.x) : '', yLabel: b.y ? fieldLabel(CFG.src, b.y) : '',
       colLabels,
@@ -1515,7 +1840,9 @@ $('cfg-apply').onclick = async () => {
     } else {
       const chart = S.page.charts.find(c => c.id === CFG.chartId);
       Object.assign(chart, { title: cfg.title, type: cfg.type, source: cfg.source,
-                             bindings: cfg.bindings, agg: cfg.agg, filters: cfg.filters, options: cfg.options });
+                             bindings: cfg.bindings, bins: cfg.bins, agg: cfg.agg,
+                             filters: cfg.filters, filters_logic: cfg.filters_logic,
+                             having: cfg.having, options: cfg.options });
       const rec = S.tiles[chart.id];
       if (rec) {
         rec.el.querySelector('.tt b').textContent = chart.title || '차트';
@@ -1763,6 +2090,50 @@ async function selftest() {
     ok('reco prefers line for time source', recoFlow.line && recoFlow.line.score >= 3);
     ok('reco suggests race for time source', recoFlow.race && recoFlow.race.score >= 3
        && RECO.combos(flowSrc, 'race').length >= 1);
+
+    // 식별 승격 — 이름 바인딩은 쿼리에서 동반 코드로 바뀌고(동명 합산 방지),
+    // 코드값은 value_labels 로 한글 표기, 행정동 지도는 MOIS 코드로 폴리곤 매칭
+    const eb = effectiveBindings(flowSrc, { axis: 'admin_dong', value: 'cnt' });
+    ok('identity promoted to code', eb.be.axis === 'admin_dong_code'
+       && eb.promoted.admin_dong_code === 'admin_dong' && eb.be.value === 'cnt');
+    ok('code value labels served',
+       (S.meta.value_labels.admin_dong_code || {})['1168051000'] === '신사동·강남구'
+       && typeDef('map_seoul_dong').slots[0].accepts.includes('geo_dong_code'));
+    await GEO.ensure('seoul_dong');
+    const dongMatch = GEO.matchRows('seoul_dong', [['1168051000', 3], ['1162068500', 5]], true);
+    ok('seoul_dong map matches by MOIS code', dongMatch.matched === 2
+       && dongMatch.data.some(d => d.name === '신사동·강남구' && d.value === 3)
+       && dongMatch.data.some(d => d.name === '신사동·관악구' && d.value === 5));
+
+    // 자율성 개방 — ① 구간 축(bins): 숫자 측정값이 floor 그룹핑으로 축이 된다
+    // ② 저카디널리티(groupable): 실측 distinct 기반으로 measure 가 category 축 후보에 선다
+    const lifespanSrc = S.srcDetails['gold_license_lifespan'] || await API.source('gold_license_lifespan');
+    const binRes = await API.query({ source: lifespanSrc.name,
+      dims: [{ field: 'avg_days', bin_width: 365 }],
+      measures: [{ field: null, agg: 'count', alias: 'count' }], limit: 50 });
+    ok('binned measure axis groups by interval', binRes.rows.length >= 1
+       && /floor\(try_cast/.test(binRes.sql || ''));
+    const summarySrc = S.srcDetails['gold_license_dong_summary'] || await API.source('gold_license_dong_summary');
+    ok('low-cardinality measure opened as axis',
+       summarySrc.fields.some(f => f.groupable && f.role === 'measure'));
+
+    // 필터 확장 — OR 그룹 괄호 봉인 · is_null 원본 컬럼 · contains 이스케이프 · HAVING
+    const orRes = await API.query({ source: summarySrc.name, dims: ['gu'],
+      measures: [{ field: null, agg: 'count', alias: 'count' }],
+      filters: [{ logic: 'or', filters: [
+        { field: 'gu', op: 'eq', value: '강남구' }, { field: 'gu', op: 'eq', value: '서초구' }] }],
+      limit: 10 });
+    ok('or-group renders parenthesized', orRes.rows.length === 2
+       && / or /.test(orRes.sql || '') && /\(cast\("gu"/.test(orRes.sql || ''));
+    const nullRes = await API.query({ source: summarySrc.name, dims: ['gu'],
+      measures: [{ field: null, agg: 'count', alias: 'count' }],
+      filters: [{ field: 'admin_dong_code', op: 'not_null' }], limit: 5 });
+    ok('is_null family targets raw column', /"admin_dong_code" is not null/.test(nullRes.sql || ''));
+    const havRes = await API.query({ source: summarySrc.name, dims: ['gu'],
+      measures: [{ field: null, agg: 'count', alias: 'count' }],
+      having: [{ agg: 'count', op: 'gte', value: 10 }], limit: 30 });
+    ok('having gates aggregated groups', /having cast\(count\(\*\)/.test(havRes.sql || '')
+       && havRes.rows.every(r => Number(r[1]) >= 10));
 
     // 성격 급한 이용자 — 검색 입력이 첫 글자 뒤 DOM 교체로 포커스를 잃지 않아야 한다.
     openCfg('add');

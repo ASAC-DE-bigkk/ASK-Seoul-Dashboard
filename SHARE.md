@@ -296,13 +296,18 @@ dashboard/
 - 산점도에서 `count`로 X·Y가 같은 값으로 붕괴하는 조합을 허용하지 않는다.
 - 자연 순서가 있는 월·연차·밴드는 사전식/값 크기 정렬로 깨뜨리지 않는다.
 
-### 7.2 지역 코드
+### 7.2 지역 코드 — 식별은 코드, 표기는 한글
 
 - gold 지역 코드는 **MOIS(행안부)** 체계다.
-- `seoul_gu.json`, `seoul_dong.json`의 code는 **KOSTAT(통계청)** 체계일 수 있다.
-- 서로 다른 코드 체계를 직접 조인하지 않는다.
+- `seoul_gu.json`, `seoul_dong.json`의 원 code는 **KOSTAT(통계청)** 체계일 수 있다.
+  서로 다른 코드 체계를 직접 조인하지 않는다. (seoul_dong 은 폴리곤에 병기된
+  MOIS `mois_code` 로만 코드 매칭 — 갱신은 `scripts/assign_mois_codes.py`.)
 - 코드 체계를 검증할 수 없는 지도는 이름 매칭만 사용한다.
-- 동명이동은 중복 칠하기보다 모호한 행을 제외하고 제외 개수를 표시한다.
+- **코드/이름 동반 컬럼은 코드가 식별의 정본**이다: 그룹핑·지도 매칭은 코드로,
+  화면 표기는 `value_labels`(코드→한글)로 한다. 동명이동(신사동)은 코드로 분리되고
+  표기는 `신사동·강남구` 식으로 유일화한다.
+- 이름 매칭만 가능한 경로의 동명이동은 중복 칠하기보다 모호한 행을 제외하고 제외
+  개수를 표시한다.
 - 모든 지도는 `매칭 N/M` 커버리지를 표시한다.
 
 ### 7.3 표현
@@ -352,6 +357,69 @@ dashboard/
 상류 commerce 번들의 `include/security/`는 참고 가능한 이식형 보안 구현이지만,
 대시보드에 복사·도입하는 것은 별도 구조 변경이다. 단순 문서나 UI 변경에 임의로 이식하지 말고,
 서버 보안 체계를 확장하는 작업에서 필요성과 검증 범위를 먼저 합의한다.
+
+### 9.0 다중 백엔드 온톨로지 (2026-07-23)
+
+온톨로지는 스냅샷만 읽는 백엔드 중립 설계다 — Trino(gold) 외에 **외부 RDB 의 테이블·뷰**도
+같은 계약(role·차트·필터·구간·코드→한글 라벨)으로 소스가 된다.
+
+- **연결 정의**: env `CHARTS_DATASOURCES`(JSON — 이름→{backend, path|dsn_env}).
+  자격증명은 dsn_env 간접 참조(값이 설정/로그에 남지 않음). 스냅샷 반영은
+  `python extract.py --refresh-datasource <이름>` (테이블+뷰, 통계·code_labels 실측 포함).
+  레지스트리 키는 `<이름>__<스키마>__<객체명>`(스키마 없는 sqlite 는 `<이름>__<객체명>`),
+  도메인 = 연결 이름. **경고: sqlite/duckdb path 에 앱 내부 DB(app/ 하위 — 인증·레이아웃
+  저장소)를 지정하면 민감 샘플이 카탈로그로 서빙된다 — 코드가 거부하지만 외부 복제본도
+  금지가 운영 계약이다.** 드라이버 예외의 내부 정보(호스트·계정)는 서버 로그로만 남고
+  클라이언트 응답은 일반화된다.
+- **방언(정본: `querybuilder.DIALECTS`)**: trino·postgres·sqlite·mysql·oracle·mssql +
+  별칭(mariadb→mysql, cockroachdb/redshift→postgres, duckdb→trino). **snowflake/
+  clickhouse/bigquery 는 의도적 미지원**(TRY_CAST 의미 상이 등 — 별칭으로 뭉개면 조용히
+  틀린 SQL. 필요 시 전용 프로파일 추가). 버전 하한: MySQL 8.0.17+/MariaDB 10.4+
+  (CAST AS DOUBLE — 연결 시 검사), Oracle 12.2+(conversion-error 캐스트·FETCH FIRST).
+  시간 컬럼 문자 비교는 방언 ISO 직렬화(oracle to_char·mssql convert 121)로 고정 —
+  NLS/스타일 의존 차단. 알려진 한계: sqlite TEXT 컬럼의 비정규형 숫자('5.50','007')는
+  숫자 필터에서 탈락(타 방언과 상이 — 타입드 컬럼 전제).
+  식별자 인용은 전 방언 ANSI `"x"` — mysql 은 실행기가 세션 `ANSI_QUOTES,
+  NO_BACKSLASH_ESCAPES` 를 강제, mssql 은 QUOTED_IDENTIFIER ON. 분기는 숫자
+  안전캐스트(try_cast 에뮬레이션 — sqlite `CAST('abc' AS REAL)=0` · mysql 암묵 변환
+  함정을 검증식으로 차단)·집계 캐스트·bool 리터럴·GROUP BY(oracle/mssql 은 위치지정
+  불가 → 식 반복)·LIMIT(oracle FETCH FIRST·mssql TOP)·LIKE 와일드카드(mssql `[`)뿐.
+  **trino 방언 출력은 byte-동일 유지**(캐시 키 보존).
+- **실행(정본: `app/charts/backends.py`)**: datasource 라우팅 — sqlite 는 `mode=ro`+
+  `query_only`, postgres `default_transaction_read_only`, mysql `SESSION TRANSACTION
+  READ ONLY`+실행시간 상한, oracle `SET TRANSACTION READ ONLY`+call_timeout.
+  **mssql 은 세션 읽기전용이 없다 — 계정 권한을 SELECT 로 제한하는 것이 운영 계약.**
+  드라이버는 선택 설치(psycopg/pymysql/oracledb/pyodbc — 없으면 명확한 502).
+- 계약 테스트: `tests/test_multibackend.py`(sqlite 종단 실행 + 방언 SQL 계약).
+
+### 9.1 입력 표준 필터 (정본: `app/inputguard.py`)
+
+모든 API 입력은 표준 필터 어휘 중 하나를 거친다 — 핸들러마다 검증을 재발명하지 않는다.
+
+| 필터 | 대상 | 집행 지점 |
+|---|---|---|
+| `PYDANTIC:<S>` | 요청 본문 | 스키마 타입·길이·패턴·field_validator |
+| `REGISTRY` | 테이블·소스·필드·레이아웃 id | 화이트리스트 조회(미존재=404); SQL 식별자는 querybuilder 화이트리스트+quote 이중 |
+| `IDENT` | SQL 식별자 후보 | `^[A-Za-z_][A-Za-z0-9_]*$` 패턴(1차) + REGISTRY(2차) |
+| `SAFE_SEGMENT` | id/슬러그 | `^[A-Za-z0-9_-]+$` |
+| `SAFE_TEXT` | 제목·이름 등 표시 텍스트 | 제어문자(개행 포함) 거부 + 길이. 표시 시 프론트 `esc()` 이중 |
+| `ENUM` | op/agg/domain/status/그룹 logic | 고정 화이트리스트(`OPS`·`HAVING_OPS`·`GROUP_LOGICS`) |
+| `INT`/`BOOL`/`NUMBER` | 수치·플래그 | 타입 강제 + 범위(구간 폭 `_bin_width`·last_n 1~3650 정수) |
+| `LITERAL` | 필터 '값' | 제어문자 거부 + `''` 이스케이프(`_lit`) 또는 ORM 바인드 — 값이 식별자로 승격되는 경로 없음. contains 계열은 서버가 `\`→`%`→`_` 순서로 이스케이프 후 `ESCAPE '\'`(상수) 부착 |
+| `OPAQUE` | 토큰·비밀 | 해시 비교, 로그 금지 |
+
+- **모든 라우트×입력은 `ROUTE_INPUT_FILTERS`에 등록한다.** `tests/test_input_guard.py`가
+  실제 라우트를 인트로스펙션해 매핑과 대조하므로, **등록 없는 새 입력부는 테스트가 실패**한다.
+  같은 테스트가 SQL 주입·제어문자·경로조작 페이로드 배터리로 각 필터를 실측 검증한다.
+- **필터 조건 계약(2026-07-23 확장)**: WHERE 는 leaf 조건과 **그룹**({logic: and|or,
+  filters: [leaf…]}) 의 2단 트리 — 그룹 안 그룹 금지(깊이 폭탄 구조 차단), 그룹은 항상
+  괄호, 최상위 결합은 `filters_logic`(기본 and). 총 leaf ≤ 50·그룹당 ≤ 20 을
+  pydantic(422)과 querybuilder(SpecError)가 이중검증한다. 연산자 화이트리스트는
+  `querybuilder.OPS`(비교 6종·범위 2종·집합 2종·문자열 5종·NULL 2종·last_n) —
+  `is_null` 은 원본 컬럼 기준, 고정폭 코드/id 는 문자열 엄격 비교, HAVING 은 SELECT 와
+  동일한 `_measure_expr` 화이트리스트를 재사용한다(금지 집계 우회 불가). 기존 평면
+  배열 저장물은 무마이그레이션 하위호환이며 **평면 필터의 SQL 렌더링은 byte-동일 유지**
+  (캐시 키 = SQL 해시). 계약 테스트: `tests/test_filter_contract.py`.
 
 ---
 

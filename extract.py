@@ -29,6 +29,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 HERE = Path(__file__).parent
+sys.path.insert(0, str(HERE))  # 단독 실행에서도 app.charts 임포트 보장
+
+from app.charts.ontology import companion_pairs  # 식별↔표시 쌍 규칙의 단일 정본
 
 
 def resolve_sample_dir(here: Path) -> Path:
@@ -224,6 +227,81 @@ def truncate_cell(value):
     return value
 
 
+CODE_LABEL_CAP = 2000  # distinct 가 이보다 크면 코드 사전이 아니다(라벨화 부적합)
+
+NUMERIC_TYPE_PREFIXES = ("bigint", "integer", "int", "smallint", "tinyint",
+                         "double", "real", "decimal", "float")
+
+
+def collect_column_stats(rel: str, columns: list[dict]) -> dict[str, dict]:
+    """컬럼별 approx_distinct(전 컬럼) + min/max(숫자형) 실측 — 테이블당 1쿼리.
+
+    Charts Studio 온톨로지가 '선언이 아니라 실측'으로 축 자율성을 판단하는 근거:
+    저카디널리티 숫자 컬럼의 groupby 개방(distinct_count)과 구간화 기본 폭 제안(min/max).
+    실패 시 스킵 — 통계는 부가정보라 스냅샷 자체를 막지 않는다.
+    """
+    parts, keys = [], []
+    for i, c in enumerate(columns):
+        name = c["name"]
+        parts.append(f'approx_distinct("{name}") AS d_{i}')
+        keys.append((f"d_{i}", name, "distinct_count"))
+        if c.get("type", "").split("(")[0] in NUMERIC_TYPE_PREFIXES:
+            parts.append(f'cast(min("{name}") AS double) AS mn_{i}')
+            parts.append(f'cast(max("{name}") AS double) AS mx_{i}')
+            keys.append((f"mn_{i}", name, "min"))
+            keys.append((f"mx_{i}", name, "max"))
+    if not parts:
+        return {}
+    try:
+        row = trino_rows(f"SELECT {', '.join(parts)} FROM {rel}", timeout=120)[0]
+    except (RuntimeError, IndexError) as exc:
+        print(f"  ! column_stats skip: {exc}")
+        return {}
+    stats: dict[str, dict] = {}
+    for alias, name, field in keys:
+        value = row.get(alias)
+        if value is not None:
+            stats.setdefault(name, {})[field] = value
+    return stats
+
+
+def collect_code_labels(rel: str, columns: list[dict]) -> dict[str, dict[str, str]]:
+    """식별↔표시 동반 컬럼 쌍의 distinct 값 실측 → {식별필드: {코드: 표시값}}.
+
+    Charts Studio 가 '코드로 세고 한글로 보여주기'(ontology value_labels)에 쓴다.
+    같은 코드에 표시가 갈리면 사전순 최대값으로 결정(결정적)하고 경고만 남긴다.
+    실패·과대 필드는 스킵 — 라벨은 부가정보라 스냅샷 자체를 막지 않는다.
+    """
+    labels: dict[str, dict[str, str]] = {}
+    for ident, disp in companion_pairs([c["name"] for c in columns]):
+        try:
+            rows = trino_rows(
+                f'SELECT DISTINCT cast("{ident}" AS varchar) AS i, cast("{disp}" AS varchar) AS l '
+                f'FROM {rel} WHERE "{ident}" IS NOT NULL AND "{disp}" IS NOT NULL '
+                f"LIMIT {CODE_LABEL_CAP + 1}",
+                timeout=60,
+            )
+        except RuntimeError as exc:
+            print(f"  ! code_labels skip({ident}): {exc}")
+            continue
+        if len(rows) > CODE_LABEL_CAP:
+            print(f"  ! code_labels skip({ident}): distinct > {CODE_LABEL_CAP}")
+            continue
+        mapping: dict[str, str] = {}
+        conflicts = 0
+        for r in rows:
+            code, label = r["i"], r["l"]
+            if code in mapping and mapping[code] != label:
+                conflicts += 1
+                label = max(mapping[code], label)
+            mapping[code] = label
+        if conflicts:
+            print(f"  ! code_labels conflict({ident}): {conflicts}건 — 사전순 최대값 채택")
+        if mapping:
+            labels[ident] = mapping
+    return labels
+
+
 def measure(rel: str, columns: list[dict]) -> tuple[int, dict | None, list[dict]]:
     """행수·시간축 범위·샘플 5행 — rich/basic 두 경로가 공유하는 Trino 실측."""
     row_count = trino_rows(f"SELECT count(*) AS c FROM {rel}")[0]["c"]
@@ -360,6 +438,10 @@ def extract_basic_domain(domain: str, schema: str, meta_lookup: dict) -> list[di
         except RuntimeError as exc:
             print(f"  ! skip: {exc}")
             continue
+        code_labels = collect_code_labels(rel, columns)
+        stats = collect_column_stats(rel, columns)
+        for c in columns:
+            c.update(stats.get(c["name"], {}))
         tables.append({
             "name": name,
             "domain": domain,
@@ -381,9 +463,350 @@ def extract_basic_domain(domain: str, schema: str, meta_lookup: dict) -> list[di
             "quality": basic_quality(meta.get("lineage", {}).get("silver", []), schema, quality_cache),
             "lineage": meta.get("lineage", {}),
             "sample": sample,
+            **({"code_labels": code_labels} if code_labels else {}),
             **display_meta({"config": {"meta": {"display": meta.get("display", {})}}}),
         })
     return tables
+
+
+# ── 다중 백엔드(온톨로지 확장): SQLite·Postgres 테이블/뷰 실측 ─────────────
+# 온톨로지는 스냅샷만 읽는 백엔드 중립 설계 — 여기서 같은 모양(컬럼·타입·행수·통계·
+# code_labels·샘플)으로 실측해 주면 role 추론·차트 계약·필터·구간이 그대로 적용된다.
+# 연결 정의는 app/charts/backends.py 의 CHARTS_DATASOURCES(env) 계약을 공유한다.
+
+# 물리 타입 → 온톨로지 정본 타입(ontology.NUMERIC_TYPES 어휘)으로 정규화
+_TYPE_CANON = {
+    # postgres 계열
+    "double precision": "double", "numeric": "decimal", "character varying": "varchar",
+    "character": "varchar", "text": "varchar", "smallint": "smallint",
+    "timestamp without time zone": "timestamp(6)", "timestamp with time zone": "timestamp(6)",
+    "boolean": "boolean", "bytea": "varbinary",
+    # sqlite (선언 타입은 대문자 관례)
+    "INTEGER": "bigint", "REAL": "double", "TEXT": "varchar", "NUMERIC": "decimal",
+    "BLOB": "varbinary",
+    # mysql/mariadb
+    "int": "integer", "mediumint": "integer", "datetime": "timestamp(6)",
+    "char": "varchar", "enum": "varchar", "set": "varchar", "json": "varchar",
+    "longtext": "varchar", "mediumtext": "varchar", "tinytext": "varchar",
+    "varbinary": "varbinary", "blob": "varbinary", "year": "integer",
+    # oracle (대문자)
+    "NUMBER": "decimal", "VARCHAR2": "varchar", "NVARCHAR2": "varchar",
+    "CHAR": "varchar", "NCHAR": "varchar", "CLOB": "varchar", "NCLOB": "varchar",
+    "DATE": "timestamp(6)",     # oracle DATE 는 시각 포함
+    "TIMESTAMP": "timestamp(6)", "BINARY_DOUBLE": "double", "BINARY_FLOAT": "real",
+    "FLOAT": "double", "RAW": "varbinary", "LONG": "varchar",
+    # mssql
+    "bit": "boolean", "nvarchar": "varchar", "nchar": "varchar", "ntext": "varchar",
+    "datetime2": "timestamp(6)", "smalldatetime": "timestamp(6)",
+    "datetimeoffset": "timestamp(6)", "money": "decimal", "smallmoney": "decimal",
+    "uniqueidentifier": "varchar", "image": "varbinary",
+}
+_DB_STATS_MAX_ROWS = 1_000_000  # 이보다 큰 표는 distinct/min-max 실측 생략(RDS 부하 보호)
+
+
+def _canon_type(raw: str) -> str:
+    base = (raw or "").split("(")[0].strip()
+    if base in _TYPE_CANON:
+        return _TYPE_CANON[base]
+    # 대문자 원형(oracle/sqlite 관례)만 대문자 사전으로 — pg/mysql 소문자 'date' 가
+    # oracle 'DATE'(=시각 포함 timestamp) 규칙에 오염되지 않게 한다
+    if base != base.lower() and base.upper() in _TYPE_CANON:
+        return _TYPE_CANON[base.upper()]
+    return base.lower() or "varchar"
+
+
+def _db_rows(conn, sql: str) -> list[tuple]:
+    cur = conn.cursor() if hasattr(conn, "cursor") else conn
+    cur = conn.execute(sql) if not hasattr(conn, "cursor") else cur
+    if hasattr(conn, "cursor"):
+        cur = conn.cursor()
+        cur.execute(sql)
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+    return cur.fetchall()
+
+
+def _q(name: str) -> str:
+    return '"' + str(name).replace('"', '""') + '"'
+
+
+_IDENT_RE = __import__("re").compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+# 인트로스펙션 스타일(방언 캐논과 별개 — duckdb 는 방언은 trino 계열이지만 카탈로그는 PG 계열)
+_INTROSPECT_STYLE = {"duckdb": "postgres", "cockroachdb": "postgres", "redshift": "postgres",
+                     "mariadb": "mysql"}
+# oracle LOB/LONG — CAST(varchar2) 4000자 초과 오류·count_distinct ORA-00932·LONG 식 사용
+# 금지라 차트 축/필터 대상이 될 수 없다(적대적 검증 실측) → 컬럼 자체를 제외
+_ORACLE_UNSUPPORTED = {"CLOB", "NCLOB", "LONG", "BLOB", "BFILE", "LONG RAW"}
+
+
+def _limit_sql(style: str, select_sql: str, n: int) -> str:
+    """행수 제한의 방언화 — oracle 은 LIMIT 미지원(FETCH FIRST), mssql 은 TOP.
+    이걸 빼먹으면 code_labels·sample 쿼리가 문법 오류로 **조용히** 누락된다."""
+    if style == "oracle":
+        return f"{select_sql} FETCH FIRST {n} ROWS ONLY"
+    if style == "mssql":
+        return "SELECT TOP " + str(n) + " " + select_sql[len("SELECT "):] \
+            if select_sql.upper().startswith("SELECT ") else select_sql
+    return f"{select_sql} LIMIT {n}"
+
+
+def _db_objects(backend: str, conn) -> list[tuple[str, str, str]]:
+    """(이름, relation(비인용 dotted — querybuilder._relation 이 인용한다), table|view).
+    **뷰 포함**이 계약. IDENT 비호환 이름(공백·특수문자)은 스킵하고 알린다."""
+    if backend == "sqlite":
+        rows = _db_rows(conn, "SELECT name, type FROM sqlite_master "
+                              "WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%'")
+        found = [(r[0], r[0], "view" if r[1] == "view" else "table") for r in rows]
+    elif backend == "oracle":
+        tabs = _db_rows(conn, "SELECT table_name FROM user_tables")
+        views = _db_rows(conn, "SELECT view_name FROM user_views")
+        found = ([(r[0], r[0], "table") for r in tabs]
+                 + [(r[0], r[0], "view") for r in views])
+    elif backend == "mssql":
+        rows = _db_rows(conn, (
+            "SELECT table_schema, table_name, table_type FROM information_schema.tables "
+            "WHERE table_type IN ('BASE TABLE','VIEW') ORDER BY 1,2"))
+        found = [(r[1], f"{r[0]}.{r[1]}", "view" if r[2] == "VIEW" else "table")
+                 for r in rows]
+    elif backend == "mysql":
+        rows = _db_rows(conn, (
+            "SELECT table_schema, table_name, table_type FROM information_schema.tables "
+            "WHERE table_schema = DATABASE() "
+            "AND table_type IN ('BASE TABLE','VIEW') ORDER BY 1,2"))
+        found = [(r[1], f"{r[0]}.{r[1]}", "view" if r[2] == "VIEW" else "table")
+                 for r in rows]
+    else:  # postgres 계열
+        rows = _db_rows(conn, (
+            "SELECT table_schema, table_name, table_type FROM information_schema.tables "
+            "WHERE table_schema NOT IN ('pg_catalog','information_schema') "
+            "AND table_type IN ('BASE TABLE','VIEW') ORDER BY 1,2"))
+        found = [(r[1], f"{r[0]}.{r[1]}", "view" if r[2] == "VIEW" else "table")
+                 for r in rows]
+    kept = []
+    for name, relation, kind in found:
+        if all(_IDENT_RE.fullmatch(p) for p in relation.split(".")):
+            kept.append((name, relation, kind))
+        else:
+            print(f"  ! skip(식별자 비호환 이름): {relation}")
+    return kept
+
+
+def _db_columns(backend: str, conn, obj_name: str, relation: str) -> list[dict]:
+    safe_name = obj_name.replace(chr(39), chr(39) * 2)
+    parts = relation.split(".")
+    schema = parts[0] if len(parts) > 1 else None
+    safe_schema = schema.replace(chr(39), chr(39) * 2) if schema else None
+    if backend == "sqlite":
+        rows = _db_rows(conn, f"PRAGMA table_info({_q(obj_name)})")
+        cols = [{"name": r[1], "type": _canon_type(r[2]) if r[2] else "", "description": ""}
+                for r in rows]
+        # 뷰의 표현식 컬럼은 선언 타입이 비어 있다 — 실제 값의 typeof 로 프로빙
+        # (없으면 varchar 오인 → measure 가 category 로 강등되어 집계 계약이 깨진다)
+        for c in cols:
+            if not c["type"]:
+                try:
+                    got = _db_rows(conn, _limit_sql("sqlite", (
+                        f"SELECT typeof({_q(c['name'])}) FROM {relation} "
+                        f"WHERE {_q(c['name'])} IS NOT NULL"), 1))
+                    kind = got[0][0] if got else "text"
+                except Exception:  # noqa: BLE001
+                    kind = "text"
+                c["type"] = {"integer": "bigint", "real": "double"}.get(kind, "varchar")
+        return cols
+    if backend == "oracle":
+        rows = _db_rows(conn, (
+            "SELECT column_name, data_type FROM user_tab_columns "
+            f"WHERE table_name = '{safe_name}' ORDER BY column_id"))
+        cols = []
+        for r in rows:
+            if str(r[1]).upper().split("(")[0] in _ORACLE_UNSUPPORTED:
+                print(f"  ! column skip(oracle LOB/LONG — 차트 대상 불가): {obj_name}.{r[0]}")
+                continue
+            cols.append({"name": r[0], "type": _canon_type(r[1]), "description": ""})
+        return cols
+    # 스키마 술어 필수 — 동명 테이블(s1.t, s2.t)의 컬럼이 합쳐지는 오염 방지
+    schema_pred = (f"AND table_schema = '{safe_schema}' " if safe_schema
+                   else ("AND table_schema = DATABASE() " if backend == "mysql" else ""))
+    rows = _db_rows(conn, (
+        "SELECT column_name, data_type FROM information_schema.columns "
+        f"WHERE table_name = '{safe_name}' {schema_pred}"
+        "ORDER BY ordinal_position"))
+    return [{"name": r[0], "type": _canon_type(r[1]), "description": ""} for r in rows]
+
+
+def _db_scalar(conn, sql: str):
+    rows = _db_rows(conn, sql)
+    return rows[0][0] if rows else None
+
+
+def extract_datasource(name: str, conf: dict) -> list[dict]:
+    """SQLite/Postgres 연결 하나의 테이블+뷰 전부를 스냅샷 테이블 목록으로 실측한다.
+
+    레지스트리 키 = ``<datasource>__<객체명>`` (IDENT 안전 — gold 테이블명과 충돌 방지),
+    domain = datasource 이름. 통계(distinct/min-max)·code_labels 는 Trino 경로와 같은
+    의미로 실측하되 대형 표는 생략(_DB_STATS_MAX_ROWS)한다.
+    """
+    from app.charts import backends as be   # 연결 계약(읽기전용·세션 강제) 재사용
+
+    raw_backend = conf["backend"]
+    backend = _INTROSPECT_STYLE.get(raw_backend, raw_backend)  # 인트로스펙션 스타일
+    if raw_backend == "sqlite":
+        import sqlite3
+        be.assert_allowed_sqlite_path(str(conf.get("path", "")))
+        conn = sqlite3.connect(f"file:{conf.get('path', '')}?mode=ro", uri=True, timeout=5)
+        conn.execute("PRAGMA query_only = ON")
+    elif raw_backend == "duckdb":
+        conn = be._duckdb_connect(conf)
+    elif backend == "postgres":
+        conn = be._pg_connect(be._dsn_from(conf, "postgres"))
+    elif backend == "mysql":
+        conn = be._mysql_connect(conf)
+    elif backend == "oracle":
+        conn = be._oracle_connect(conf)
+    elif backend == "mssql":
+        conn = be._mssql_connect(conf)
+    else:
+        raise RuntimeError(f"datasource {name}: 미지원 backend {conf['backend']}")
+
+    tables: list[dict] = []
+    try:
+        for obj_name, relation, object_type in _db_objects(backend, conn):
+            print(f"→ [{name}] {obj_name} ({object_type})")
+            try:
+                columns = _db_columns(backend, conn, obj_name, relation)
+                if not columns:
+                    continue
+                row_count = int(_db_scalar(conn, f"SELECT count(*) FROM {relation}") or 0)
+            except Exception as exc:  # noqa: BLE001 — 개별 객체 실패는 스킵(부가정보 철학)
+                print(f"  ! skip: {exc}")
+                continue
+
+            # 컬럼 통계 — 저카디널리티 개방·구간 기본 폭의 근거(대형 표는 생략)
+            if row_count and row_count <= _DB_STATS_MAX_ROWS:
+                for c in columns:
+                    try:
+                        c["distinct_count"] = int(_db_scalar(
+                            conn, f"SELECT count(DISTINCT {_q(c['name'])}) FROM {relation}") or 0)
+                        if c["type"] in ("bigint", "integer", "smallint", "double",
+                                         "real", "decimal"):
+                            mn = _db_scalar(conn, f"SELECT min({_q(c['name'])}) FROM {relation}")
+                            mx = _db_scalar(conn, f"SELECT max({_q(c['name'])}) FROM {relation}")
+                            if mn is not None:
+                                c["min"], c["max"] = float(mn), float(mx)
+                    except Exception:  # noqa: BLE001
+                        break
+
+            # 코드→표시 동반 사전(식별=코드·표기=한글 계약을 DB 소스에도 그대로)
+            code_labels: dict[str, dict[str, str]] = {}
+            colnames = [c["name"] for c in columns]
+            for ident, disp in companion_pairs(colnames):
+                try:
+                    pairs = _db_rows(conn, _limit_sql(backend, (
+                        f"SELECT DISTINCT {_q(ident)}, {_q(disp)} FROM {relation} "
+                        f"WHERE {_q(ident)} IS NOT NULL AND {_q(disp)} IS NOT NULL"),
+                        CODE_LABEL_CAP + 1))
+                except Exception:  # noqa: BLE001
+                    continue
+                if 0 < len(pairs) <= CODE_LABEL_CAP:
+                    code_labels[ident] = {str(k): str(v) for k, v in pairs}
+
+            date_col = next((c["name"] for c in columns
+                             if c["type"].startswith(("date", "timestamp"))), None)
+            date_range = None
+            if date_col and row_count:
+                try:
+                    mn = _db_scalar(conn, f"SELECT min({_q(date_col)}) FROM {relation}")
+                    mx = _db_scalar(conn, f"SELECT max({_q(date_col)}) FROM {relation}")
+                    date_range = {"column": date_col, "min": str(mn), "max": str(mx)}
+                except Exception:  # noqa: BLE001
+                    pass
+
+            try:
+                sample_rows = _db_rows(conn, _limit_sql(backend, f"SELECT * FROM {relation}", 5))
+                sample = [{c["name"]: truncate_cell(v) for c, v in zip(columns, row)}
+                          for row in sample_rows]
+            except Exception:  # noqa: BLE001
+                sample = []
+
+            tables.append({
+                "name": f"{name}__{relation.replace('.', '__')}",
+                "domain": name,
+                "datasource": name,
+                "backend": raw_backend,
+                "object_type": object_type,
+                "external": True,
+                "relation": relation,
+                "description": f"{name} ({backend}) {object_type}: {obj_name}",
+                "tags": [], "contract_enforced": False, "materialized": object_type,
+                "serving_tier": None, "refresh": None, "tests": [],
+                "served_url": None, "on_table_exists": None,
+                "row_count": row_count,
+                "date_range": date_range,
+                "columns": columns,
+                "quality": [], "lineage": {},
+                "sample": sample,
+                **({"code_labels": code_labels} if code_labels else {}),
+            })
+    finally:
+        conn.close()
+    return tables
+
+
+def merge_snapshot_domains(snapshot: dict, replacements: dict[str, list[dict]],
+                           observed_at: str) -> dict:
+    """임의 도메인(datasource 포함) 교체 병합 — merge_basic_domains 의 일반형.
+    비대상 도메인 보존·정합 검사는 동일하되 도메인 화이트리스트 제약이 없다."""
+    if not replacements:
+        raise ValueError("at least one domain replacement is required")
+    for domain, tables in replacements.items():
+        if any(t.get("domain") != domain for t in tables):
+            raise ValueError(f"replacement contains a table from another domain: {domain}")
+
+    merged = deepcopy(snapshot)
+    keep = [t for t in merged.get("tables", []) if t.get("domain") not in set(replacements)]
+    tables = keep + [t for domain in sorted(replacements) for t in replacements[domain]]
+
+    domain_generated_at = dict(merged.get("domain_generated_at", {}))
+    domain_generated_at.update({d: observed_at for d in replacements})
+    domains: dict[str, int] = {}
+    for t in tables:
+        domains[t.get("domain", "")] = domains.get(t.get("domain", ""), 0) + 1
+    merged.update({
+        "generated_at": observed_at,
+        "domain_generated_at": domain_generated_at,
+        "domains": domains, "table_count": len(tables), "tables": tables,
+        # refresh 메타도 이번 병합 기준으로 갱신 — stale 정보 잔존 방지
+        "refresh": {"mode": "partial_datasource", "domains": sorted(replacements),
+                    "observed_at": observed_at},
+    })
+    return merged
+
+
+def refresh_datasources(names: list[str]) -> None:
+    """CHARTS_DATASOURCES(env) 에 정의된 SQLite/Postgres 연결의 테이블·뷰를 스냅샷에 병합."""
+    from app.charts.backends import datasources
+
+    if not OUT_PATH.is_file():
+        raise FileNotFoundError(f"base snapshot does not exist: {OUT_PATH}")
+    defined = datasources()
+    replacements: dict[str, list[dict]] = {}
+    for name in dict.fromkeys(names):
+        conf = defined.get(name)
+        if conf is None:
+            raise RuntimeError(f"CHARTS_DATASOURCES 에 없는 datasource: {name} "
+                               f"(정의됨: {sorted(defined) or '없음'})")
+        tables = extract_datasource(name, conf)
+        if not tables:
+            raise RuntimeError(f"datasource {name}: 테이블/뷰를 찾지 못했습니다")
+        replacements[name] = tables
+
+    observed_at = datetime.now(timezone.utc).isoformat()
+    current = json.loads(OUT_PATH.read_text(encoding="utf-8"))
+    write_snapshot(merge_snapshot_domains(current, replacements, observed_at))
+    total = sum(len(v) for v in replacements.values())
+    print(f"✓ refreshed datasource {','.join(replacements)} — {total} objects → {OUT_PATH}")
 
 
 def write_snapshot(snapshot: dict) -> None:
@@ -540,6 +963,10 @@ def main() -> None:
             ]
 
         row_count, date_range, sample = measure(rel, columns)
+        code_labels = collect_code_labels(rel, columns)
+        stats = collect_column_stats(rel, columns)
+        for c in columns:
+            c.update(stats.get(c["name"], {}))
 
         quality = []
         for silver_uid in quality_parents(uid, nodes):
@@ -575,6 +1002,7 @@ def main() -> None:
             "quality": quality,
             "lineage": upstream_layers(uid, nodes),
             "sample": sample,
+            **({"code_labels": code_labels} if code_labels else {}),
             **display_meta(node),
         })
 
@@ -612,6 +1040,14 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help="전체 culture artifact 없이 지정 basic domain만 현재 Trino에서 갱신",
     )
+    parser.add_argument(
+        "--refresh-datasource",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="CHARTS_DATASOURCES(env) 의 SQLite/Postgres 연결 이름 — 그 DB 의 테이블·뷰를 "
+             "온톨로지 스냅샷에 병합(도메인=연결 이름)",
+    )
     return parser.parse_args()
 
 
@@ -619,5 +1055,7 @@ if __name__ == "__main__":
     args = parse_args()
     if args.refresh_basic_domain:
         refresh_basic_domains(args.refresh_basic_domain)
-    else:
+    if args.refresh_datasource:
+        refresh_datasources(args.refresh_datasource)
+    if not args.refresh_basic_domain and not args.refresh_datasource:
         main()
