@@ -152,11 +152,11 @@
    "charts": [
     {
      "id": "cd-stat-ppltn",
-     "title": "핫플 추정 인구 합 (현재)",
+     "title": "핫플 최대 추정 인구 (현재)",
      "type": "stat",
      "source": "gold_citydata_place_latest",
      "bindings": {"value": "area_ppltn_max"},
-     "agg": "sum",
+     "agg": "max",
      "filters": [],
      "options": {},
      "grid": {"x": 0, "y": 0, "w": 3, "h": 2}
@@ -174,11 +174,11 @@
     },
     {
      "id": "cd-pie-congest",
-     "title": "혼잡도 수준별 인구 구성 (현재)",
+     "title": "혼잡도 수준별 핫플 수 (현재)",
      "type": "pie",
      "source": "gold_citydata_place_latest",
      "bindings": {"axis": "area_congest_lvl", "value": "area_ppltn_max"},
-     "agg": "sum",
+     "agg": "count",
      "filters": [],
      "options": {"donut": true},
      "grid": {"x": 6, "y": 0, "w": 6, "h": 4}
@@ -189,7 +189,7 @@
      "type": "map_seoul",
      "source": "gold_citydata_place_latest",
      "bindings": {"region": "gu", "value": "area_ppltn_max"},
-     "agg": "sum",
+     "agg": "max",
      "filters": [],
      "options": {},
      "grid": {"x": 0, "y": 2, "w": 6, "h": 5}
@@ -222,7 +222,7 @@
      "type": "map_points",
      "source": "gold_citydata_place_latest",
      "bindings": {"lat": "latitude", "lng": "longitude", "value": "area_ppltn_max"},
-     "agg": "sum",
+     "agg": "max",
      "filters": [],
      "options": {},
      "grid": {"x": 6, "y": 9, "w": 6, "h": 5}
@@ -283,7 +283,7 @@
      "type": "table",
      "source": "gold_citydata_place_scorecard",
      "bindings": {"axis": "area_nm", "value": "area_ppltn_max"},
-     "agg": "sum",
+     "agg": "max",
      "filters": [],
      "options": {"top_n": 30},
      "grid": {"x": 0, "y": 8, "w": 6, "h": 4}
