@@ -17,6 +17,7 @@
 | [deployment/r2-secret-management.md](deployment/r2-secret-management.md) | R2 secret 정본·일시 주입·회전·사고 대응 | 배포 운영자·AI |
 | [charts-user-guide.md](charts-user-guide.md) | Charts Studio 화면 사용법 (레이아웃·차트 추가·자동 갱신) | 화면을 쓰는 사람 |
 | [charts-design-intents.md](charts-design-intents.md) | 개발 의도 정리 — 대분류 › 중분류 › 소분류 | 코드를 고치는 사람 |
+| [chat-design.md](chat-design.md) | **Ask Chat 설계 정본** — 결정사항·번들 구성·안전 계약·env 설정 | /chat 을 쓰거나 고치는 사람 |
 | [HERITAGE.md](HERITAGE.md) | **계승 문서** — 규정·설계 바탕·불변식·확장법·검증 절차 | 다음 작업자(사람/AI) |
 | [additional_doc/README.md](additional_doc/README.md) | 인증·RDB·알림·AWS/GCP/Cloudflare 보안 운영 | 보안·DB·인프라 운영자 |
 

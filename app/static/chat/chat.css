@@ -1,0 +1,182 @@
+/* Ask Chat — charts.css 디자인 토큰·골격을 재사용한 채팅 화면 (격리 번들) */
+:root {
+  --accent: #2a78d6; --accent-deep: #1c5cab; --accent-soft: #eaf1fb;
+  --good: #0ca30c; --warn: #fab219; --serious: #ec835a; --good-deep: #0a7d0a;
+  --side-bg: #ffffff; --side-ink: #4c5566; --side-dim: #8a93a5; --side-line: #e8ecf2;
+  --ink: #171c26; --ink-2: #4c5566; --ink-3: #8a93a5; --ink-4: #b3bac7;
+  --line: #e2e6ed; --line-soft: #edf0f5;
+  --bg: #f7f8fa; --panel: #ffffff;
+  --mono: "Cascadia Mono", Consolas, "SF Mono", monospace;
+  --shadow: 0 1px 3px rgba(18,26,44,.06);
+}
+* { box-sizing: border-box; margin: 0; }
+/* 작성자 오리진 display 선언이 UA [hidden]{display:none}를 이기므로 명시 가드
+   (charts.css·auth.css 와 동일) — 이게 없으면 .send{display:grid} 가 hidden 을 덮는다. */
+[hidden] { display: none !important; }
+html { font-size: 14px; }
+html, body { height: 100%; }
+body { display: flex; background: var(--bg); color: var(--ink);
+       font-family: "Pretendard Variable", Pretendard, "Segoe UI", "Malgun Gothic", system-ui, sans-serif; }
+button { font: inherit; cursor: pointer; }
+:focus-visible { outline: 3px solid rgba(42,120,214,.42); outline-offset: 1px; }
+
+/* ── 사이드바 (charts 골격 동일) ── */
+.side { width: 208px; flex: none; background: var(--side-bg); color: var(--side-ink);
+        display: flex; flex-direction: column; padding: 14px 10px;
+        border-right: 1px solid var(--line); }
+.ws { display: flex; align-items: center; gap: 9px; padding: 6px 10px 14px;
+      border-bottom: 1px solid var(--side-line); margin-bottom: 10px; }
+.ws .mark { width: 26px; height: 26px; border-radius: 7px; flex: none;
+            background: linear-gradient(135deg, #2a78d6, #143b78);
+            display: grid; place-items: center; color: #fff; font-weight: 800; font-size: 11px; }
+.ws .mark-chat svg { width: 14px; height: 14px; }
+.ws .t b { display: block; font-size: 12.5px; color: var(--ink); font-weight: 650; letter-spacing: .01em; }
+.ws .t span { font-size: 10px; color: var(--side-dim); letter-spacing: .03em; }
+.side .sec { font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase;
+             color: var(--side-dim); padding: 12px 10px 5px; }
+.nav-item { display: flex; align-items: center; gap: 9px; padding: 6px 10px; border-radius: 7px;
+            color: var(--side-ink); font-size: 12.5px; font-weight: 450; text-decoration: none;
+            border: none; background: none; width: 100%; text-align: left; }
+.nav-item svg { width: 14px; height: 14px; flex: none; opacity: .6; }
+.nav-item:hover { background: #f2f5f9; }
+.side .foot { margin-top: auto; padding: 10px 10px 4px; border-top: 1px solid var(--side-line);
+              font-size: 10px; color: var(--side-dim); line-height: 1.7; letter-spacing: .02em; }
+.side .foot .row { display: flex; justify-content: space-between; gap: 8px; }
+.side .foot b { color: var(--side-ink); font-weight: 600; max-width: 120px; overflow: hidden;
+                text-overflow: ellipsis; white-space: nowrap; }
+
+.new-chat { display: flex; align-items: center; justify-content: center; gap: 7px; width: 100%;
+            padding: 7px 10px; margin: 2px 0 4px; border-radius: 8px; font-size: 12.5px; font-weight: 600;
+            color: var(--accent-deep); background: var(--accent-soft); border: 1px solid #d8e6f8; }
+.new-chat svg { width: 13px; height: 13px; }
+.new-chat:hover { background: #ddebfb; }
+
+.convos { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; min-height: 40px;
+          max-height: 42vh; }
+.convo { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 7px;
+         border: none; background: none; width: 100%; text-align: left;
+         color: var(--side-ink); font-size: 12.5px; }
+.convo .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.convo:hover { background: #f2f5f9; }
+.convo.active { background: var(--accent-soft); color: var(--accent-deep); font-weight: 600; }
+.convo .del { flex: none; border: none; background: none; color: var(--ink-4); padding: 2px;
+              border-radius: 5px; line-height: 0; visibility: hidden; }
+.convo:hover .del { visibility: visible; }
+.convo .del:hover { color: var(--serious); background: #fdecec; }
+.convo .del svg { width: 12px; height: 12px; }
+.convos .empty { padding: 6px 10px; font-size: 11.5px; color: var(--ink-4); }
+
+/* ── 본문 ── */
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100vh; }
+.topbar { height: 46px; flex: none; background: var(--panel); border-bottom: 1px solid var(--line);
+          display: flex; align-items: center; gap: 12px; padding: 0 22px; }
+.crumb { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-3); }
+.crumb b { color: var(--ink); font-weight: 600; max-width: 40vw; overflow: hidden;
+           text-overflow: ellipsis; white-space: nowrap; }
+.crumb svg { width: 11px; height: 11px; }
+.env { font-size: 9.5px; font-weight: 750; letter-spacing: .1em; color: #9a6700;
+       background: #fdf3d5; border: 1px solid #f0dfae; border-radius: 4px; padding: 2px 7px; }
+.topbar .right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+
+.chat-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+.config-banner { flex: none; margin: 10px 22px 0; padding: 8px 14px; border-radius: 8px;
+                 background: #fdf3d5; border: 1px solid #f0dfae; color: #7a5a00;
+                 font-size: 12px; line-height: 1.55; }
+.config-banner.error { background: #fdecec; border-color: #f5c8c0; color: #a03a26; }
+
+.messages { flex: 1; overflow-y: auto; padding: 22px 22px 10px; }
+.msg-col { max-width: 780px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+
+.hello { max-width: 560px; margin: 12vh auto 0; text-align: center; color: var(--ink-3); }
+.hello .art { width: 52px; height: 52px; margin: 0 auto 14px; border-radius: 14px;
+              background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; }
+.hello .art svg { width: 26px; height: 26px; }
+.hello b { display: block; font-size: 16px; color: var(--ink); margin-bottom: 8px; }
+.hello p { font-size: 12.5px; line-height: 2; }
+.hint { border: 1px solid var(--line); background: var(--panel); border-radius: 20px;
+        padding: 3px 12px; font-size: 12px; color: var(--accent-deep); margin: 2px; }
+.hint:hover { border-color: var(--accent); background: var(--accent-soft); }
+
+/* 말풍선 */
+.msg { display: flex; flex-direction: column; gap: 6px; }
+.msg.user { align-items: flex-end; }
+.msg.user .bubble { background: var(--accent-soft); border: 1px solid #d8e6f8;
+                    border-radius: 14px 14px 4px 14px; max-width: 82%; }
+.msg.assistant { align-items: stretch; }
+.msg.assistant .bubble { background: var(--panel); border: 1px solid var(--line);
+                         border-radius: 4px 14px 14px 14px; box-shadow: var(--shadow); }
+.bubble { padding: 11px 15px; font-size: 13.5px; line-height: 1.75; color: var(--ink);
+          overflow-wrap: break-word; }
+.bubble p { margin: 0 0 8px; }
+.bubble p:last-child { margin-bottom: 0; }
+.bubble ul, .bubble ol { margin: 0 0 8px; padding-left: 20px; }
+.bubble li { margin: 2px 0; }
+.bubble code { font-family: var(--mono); font-size: 12px; background: var(--line-soft);
+               border-radius: 4px; padding: 1px 5px; }
+.bubble pre { background: #f2f4f8; border: 1px solid var(--line-soft); border-radius: 8px;
+              padding: 10px 12px; overflow-x: auto; margin: 0 0 8px; }
+.bubble pre code { background: none; padding: 0; }
+.bubble table { border-collapse: collapse; margin: 0 0 8px; font-size: 12.5px; max-width: 100%;
+                display: block; overflow-x: auto; }
+.bubble th, .bubble td { border: 1px solid var(--line); padding: 4px 10px; text-align: left; }
+.bubble th { background: var(--line-soft); font-weight: 650; }
+.bubble strong { font-weight: 700; }
+
+.who { font-size: 10.5px; font-weight: 700; letter-spacing: .06em; color: var(--ink-4);
+       padding: 0 4px; }
+
+/* 도구·상태 표시 */
+.steps { display: flex; flex-direction: column; gap: 4px; }
+.step { display: inline-flex; align-items: center; gap: 7px; align-self: flex-start;
+        font-size: 11.5px; color: var(--ink-3); background: var(--panel);
+        border: 1px solid var(--line-soft); border-radius: 20px; padding: 3px 12px; }
+.step .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--warn); flex: none; }
+.step.ok .dot { background: var(--good); }
+.step.fail .dot { background: var(--serious); }
+.step code { font-family: var(--mono); font-size: 11px; color: var(--ink-2); }
+.step.pulse-anim .dot { animation: chatpulse 1.1s ease-in-out infinite; }
+@keyframes chatpulse { 0%,100% { opacity: .35; } 50% { opacity: 1; } }
+
+/* 근거(조회 내역) */
+.evidence { border: 1px solid var(--line-soft); border-radius: 8px; background: #fbfcfe;
+            font-size: 12px; color: var(--ink-2); }
+.evidence summary { cursor: pointer; padding: 6px 12px; font-weight: 600; color: var(--ink-3);
+                    user-select: none; }
+.evidence[open] summary { border-bottom: 1px solid var(--line-soft); }
+.evidence .q { padding: 8px 12px; border-bottom: 1px solid var(--line-soft); }
+.evidence .q:last-child { border-bottom: none; }
+.evidence .q b { color: var(--ink); font-weight: 650; }
+.evidence .q .meta { color: var(--ink-3); margin-left: 6px; }
+.evidence .q pre { font-family: var(--mono); font-size: 11px; color: var(--ink-2);
+                   background: var(--line-soft); border-radius: 6px; padding: 6px 9px;
+                   margin: 6px 0 0; overflow-x: auto; white-space: pre-wrap; }
+
+.msg .error-note { align-self: flex-start; font-size: 12.5px; color: #a03a26;
+                   background: #fdecec; border: 1px solid #f5c8c0; border-radius: 8px;
+                   padding: 8px 13px; line-height: 1.6; }
+
+/* ── 입력창 ── */
+.composer { flex: none; padding: 8px 22px 14px; background: linear-gradient(transparent, var(--bg) 40%); }
+.composer-inner { max-width: 780px; margin: 0 auto; display: flex; align-items: flex-end; gap: 8px;
+                  background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+                  padding: 8px 8px 8px 16px; box-shadow: var(--shadow); }
+.composer-inner:focus-within { border-color: var(--accent); }
+#input { flex: 1; border: none; resize: none; font: inherit; font-size: 13.5px; line-height: 1.6;
+         color: var(--ink); background: none; max-height: 180px; padding: 4px 0; }
+#input:focus { outline: none; }
+.send { flex: none; width: 34px; height: 34px; border-radius: 10px; border: none;
+        background: var(--accent); color: #fff; display: grid; place-items: center; }
+.send svg { width: 16px; height: 16px; }
+.send:disabled { background: var(--ink-4); cursor: default; }
+.send:hover:not(:disabled) { background: var(--accent-deep); }
+.send.stop { background: var(--serious); }
+.composer-note { max-width: 780px; margin: 6px auto 0; text-align: center;
+                 font-size: 10.5px; color: var(--ink-4); }
+
+@media (max-width: 760px) {
+  .side { display: none; }
+  .messages { padding: 14px 12px 8px; }
+  .composer { padding: 6px 12px 10px; }
+  .msg.user .bubble { max-width: 94%; }
+}
