@@ -641,6 +641,8 @@ def page_key_for_path(path: str) -> str | None:
         "/static/index.html": "catalog",
         "/charts": "charts",
         "/static/charts/index.html": "charts",
+        "/chat": "chat",
+        "/static/chat/index.html": "chat",
         "/profile": "profile",
         "/static/auth/profile.html": "profile",
         "/admin": "admin_users",
@@ -656,6 +658,7 @@ def page_key_for_path(path: str) -> str | None:
     prefixes = (
         ("/api/v1/catalog", "catalog"),
         ("/api/v1/charts", "charts"),
+        ("/api/v1/chat", "chat"),
         ("/api/v1/me", "profile"),
         ("/api/v1/billing", "billing"),
         ("/api/v1/admin/users", "admin_users"),

@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ASK SEOUL · Ask Chat</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"
+      integrity="sha384-GIdEBaqGN9mNkDkMkzMHW8EKUqtpPIe/sLj1X7DIrnc9uPtLROJgmuDlh+3rBw0j" crossorigin="anonymous">
+<link rel="stylesheet" href="/static/chat/chat.css">
+<link rel="stylesheet" href="/static/auth/session-ui.css">
+</head>
+<body>
+
+<aside class="side">
+  <a class="ws" href="/home" style="text-decoration:none" title="홈으로">
+    <div class="mark mark-chat" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 01-8 8H5l-2 2V12a8 8 0 018-8h2a8 8 0 018 8z"/><path d="M9 11h6M9 15h4"/></svg>
+    </div>
+    <div class="t"><b>ASK SEOUL</b><span>Ask Chat</span></div>
+  </a>
+
+  <button class="new-chat" id="new-chat">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+    새 대화
+  </button>
+
+  <div class="sec">대화</div>
+  <nav class="convos" id="convos" aria-label="대화 목록"></nav>
+
+  <div class="sec">Platform</div>
+  <a class="nav-item" href="/catalog" data-page-key="catalog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>Marketplace</a>
+  <a class="nav-item" href="/charts" data-page-key="charts"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 20V10M12 20V4M19 20v-7"/></svg>Charts Studio</a>
+  <div class="foot">
+    <div class="row"><span>API</span><b>chat v1</b></div>
+    <div class="row"><span>Model</span><b id="foot-model">—</b></div>
+    <div class="row"><span>Data</span><b id="foot-data">—</b></div>
+  </div>
+</aside>
+
+<main class="main">
+  <div class="topbar">
+    <div class="crumb">Ask Chat
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg>
+      <b id="crumb-title">새 대화</b>
+    </div>
+    <span class="env">DEV</span>
+    <div class="right">
+      <span id="profile-action-slot"></span>
+    </div>
+  </div>
+
+  <div class="chat-body">
+    <div class="config-banner" id="config-banner" hidden></div>
+
+    <div class="messages" id="messages" aria-live="polite">
+      <div class="hello" id="hello">
+        <div class="art" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 01-8 8H5l-2 2V12a8 8 0 018-8h2a8 8 0 018 8z"/><path d="M9 11h6M9 15h4"/></svg>
+        </div>
+        <b>서울시 gold 데이터에 대해 물어보세요</b>
+        <p>축적된 서빙 데이터(도시데이터·대중교통 등)를 실제로 조회해 근거와 함께 답합니다.<br>
+           예: <button class="hint" data-hint="강남구에서 실시간 인구가 가장 많은 장소 5곳은?">강남구에서 실시간 인구가 가장 많은 장소 5곳은?</button>
+           <button class="hint" data-hint="어떤 데이터를 조회할 수 있어?">어떤 데이터를 조회할 수 있어?</button></p>
+      </div>
+    </div>
+
+    <div class="composer">
+      <div class="composer-inner">
+        <textarea id="input" rows="1" maxlength="8000" placeholder="질문을 입력하세요 (Enter 전송 · Shift+Enter 줄바꿈)"></textarea>
+        <button class="send" id="send" title="전송" aria-label="전송">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+        </button>
+        <button class="send stop" id="stop" title="중지" aria-label="중지" hidden>
+          <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+        </button>
+      </div>
+      <div class="composer-note">응답은 조회된 서빙 데이터를 근거로 생성되며, 근거 조회 내역이 함께 표시됩니다.</div>
+    </div>
+  </div>
+</main>
+
+<script src="/static/auth/session-ui.js"></script>
+<script src="/static/chat/js/api.js"></script>
+<script src="/static/chat/js/render.js"></script>
+<script src="/static/chat/js/app.js"></script>
+</body>
+</html>

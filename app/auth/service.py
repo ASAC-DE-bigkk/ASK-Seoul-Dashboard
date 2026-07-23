@@ -84,6 +84,7 @@ LOCAL_ANALYST_NICKNAME = "local-analyst"
 PAGE_DEFINITIONS = (
     ("catalog", "데이터 마켓플레이스", "/catalog", "published gold 카탈로그와 API"),
     ("charts", "Charts Studio", "/charts", "사용자별 gold 시각화 레이아웃"),
+    ("chat", "Ask Chat", "/chat", "서빙 gold 데이터 근거 조회 LLM 채팅"),
     ("profile", "프로필", "/profile", "내 정보·비밀번호·화면 설정"),
     ("billing", "결제", "/profile#billing", "이용권 결제 요청과 잔여 기간 확인"),
     ("api_docs", "API 문서", "/docs", "Swagger/OpenAPI 문서"),
@@ -98,10 +99,11 @@ PAGE_DEFINITIONS = (
 
 DEFAULT_ROLE_ACCESS = {
     "guest": {"catalog", "profile", "billing"},
-    "member": {"catalog", "charts", "profile", "billing"},
+    "member": {"catalog", "charts", "chat", "profile", "billing"},
     "operator": {
         "catalog",
         "charts",
+        "chat",
         "profile",
         "api_docs",
         "admin_users",

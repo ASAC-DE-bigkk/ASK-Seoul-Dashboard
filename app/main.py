@@ -32,6 +32,7 @@ from .auth.service import (
     verify_database_schema,
 )
 from .charts import router as charts_router
+from .chat import router as chat_router
 from .models import (
     CatalogResponse, CatalogSnapshotResponse, QualityResponse, SampleResponse,
     SchemaResponse, TableDetail, TableSummary,
@@ -368,6 +369,11 @@ def charts_page() -> FileResponse:
     return FileResponse(HERE / "static" / "charts" / "index.html")
 
 
+@app.get("/chat", include_in_schema=False)
+def chat_page() -> FileResponse:
+    return FileResponse(HERE / "static" / "chat" / "index.html")
+
+
 @app.get("/auth/login", include_in_schema=False)
 def login_page() -> FileResponse:
     return FileResponse(HERE / "static" / "auth" / "login.html")
@@ -425,6 +431,7 @@ def admin_page() -> FileResponse:
 
 app.include_router(auth_router)
 app.include_router(charts_router)
+app.include_router(chat_router)
 
 
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")

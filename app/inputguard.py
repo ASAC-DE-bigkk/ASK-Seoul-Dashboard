@@ -68,6 +68,7 @@ def assert_safe_text(value: str, *, field: str = "text", max_length: int = 120) 
 ROUTE_INPUT_FILTERS: dict[str, dict[str, str]] = {
     # ── 정적 페이지·무입력 GET ──
     "GET /": {}, "GET /home": {}, "GET /catalog": {}, "GET /charts": {},
+    "GET /chat": {},
     "GET /docs": {}, "GET /health": {}, "GET /profile": {}, "GET /admin": {},
     "GET /legal/terms": {}, "GET /legal/privacy": {},
     "GET /auth/login": {}, "GET /auth/register": {}, "GET /auth/mfa": {},
@@ -97,6 +98,10 @@ ROUTE_INPUT_FILTERS: dict[str, dict[str, str]] = {
     "DELETE /api/v1/charts/layouts/{page_id}": {"path:page_id": "SAFE_SEGMENT+REGISTRY"},
     "POST /api/v1/charts/layouts/{page_id}/duplicate": {"path:page_id": "SAFE_SEGMENT+REGISTRY"},
     "POST /api/v1/charts/layouts-reorder": {"body": "PYDANTIC:ReorderRequest"},
+
+    # ── Ask Chat (SQL 경계 — chat/queryspec 화이트리스트 + 파라미터 바인딩) ──
+    "GET /api/v1/chat/meta": {},
+    "POST /api/v1/chat/messages": {"body": "PYDANTIC:ChatRequest"},
 
     # ── 인증·계정 (SQLAlchemy 바인드 파라미터 — no_sql_text_injection 감사) ──
     "POST /api/v1/auth/register": {"body": "PYDANTIC:RegisterRequest"},
