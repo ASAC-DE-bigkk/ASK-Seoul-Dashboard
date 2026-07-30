@@ -21,9 +21,31 @@
 | 테스트 | `tests/test_agent_tools.py` 24개 — 전체 스위트 **169 passed** |
 | 부수 정정 | 카탈로그 좌측탭(Ask Chat 추가·운영 관리 개칭·Service Health 제거), 시드 5건 비가산 sum 정정, 정적 HTML 인라인 핸들러/`rel=noopener` 정정 |
 
-**남은 것** — §3 에 우선순위·구현법으로 정리. 요약하면
-`가산성 집행` · `비율(ratio) 지표` · `last_n 상한` · `value_labels 소스별 키잉` ·
-`k-익명성` · `비용 게이트` · `검색/역해결 도구` · `시간 그레인 롤업` · `신선도·계약버전`.
+**2차로 끝난 것 (P1~P4·P6·P7·P9 — 커밋 `41e94eb` 이후)**
+
+| 항목 | 결과 |
+|---|---|
+| **P2 비율 지표** | `agg="ratio"`(`sum(num)/nullif(sum(den),0)`) 추가. 6개 방언 렌더 확인, 분자·분모는 가산 measure 로 제한, SELECT·HAVING 이 같은 화이트리스트 공유. `cohort_survival_rate` 를 가중식으로 교정(+`require_dims`), `early_close_ratio` 추가 |
+| **P1 가산성 집행** | `additive_over` 를 온톨로지 정본으로 두고 querybuilder 가 집행 — 재고성 측정값 + 시간축 + `sum` 거부. 재고의 `preferred_agg` 를 `avg` 로 바꿔 **온톨로지가 스스로 거부할 조합을 추천하지 않게** 함(자기정합성 테스트 포함) |
+| **P3 last_n 상한** | 연·월·일/시각 전 granularity 를 닫힌 구간으로 — 예보 테이블(25/112)의 미래 유입 차단 |
+| **P4 소스별 라벨** | `value_labels` 를 소스별로 키잉(전역 병합은 하위호환 폴백). `gu_code` 는 MOIS 표준을 정본으로 승격해 **잘못된 구 표기 210건** 해소. `SourceDetail.value_labels` 추가(목록 응답 제외) |
+| **P6 비용 게이트** | 실측 통계로 그룹 카디널리티 추정 후 실행 전 거부(`cost_rejected` + 롤업/필터 힌트). 통계가 없으면 통과, 상한에서 곱셈 조기 종료 |
+| **P7 검색·역해결** | `search_ontology`(한글 2-gram 포함)·`resolve_label`(한글→코드, 동명이지역은 후보 전부 + `ambiguous`). 외부 의존성 없음 |
+| **P9 출처·계약버전** | `provenance`(refresh_mode·observed_at·lineage_captured·contract_enforced), `run_query.cached_at` 전파, 매니페스트 `contract_version`/`contract_hash`(런타임 설정과 무관하게 안정) |
+
+검증: pytest **188 passed**(신규 19), 전수 build **968/968**, `node --check`, `compileall`,
+`git diff --check`. 도구 fuzz(잘못된 타입·거대값·유니코드) 결과 **예외 0건**(전부 error dict).
+
+**아직 남은 것** — §3 참조. 요약하면 `k-익명성(P5)` · `시간 그레인 롤업(P8)` · `P10 잡항목`,
+그리고 아래 두 가지 후속:
+
+- **프론트 라벨 스코프**: 백엔드는 소스별 라벨을 서빙하지만 프론트(`render.js` `vlabel`,
+  `app.js`)는 여전히 전역 `meta.value_labels` 를 읽는다. 잔여 불일치는 **표기 변형**
+  (`묵제1동`↔`묵1동`) 1,345건으로 *잘못된 장소가 아니라 철자 차이*라 Minor 다. 전환하려면
+  소스 상세의 `value_labels` 를 우선 쓰도록 바꾸고 **반드시 `/charts?selftest=1`
+  (`SELFTEST_ALL_PASS`)까지 확인**한다(SHARE §11).
+- **recommend.js**: 서버 `preferred_agg` 가 재고에서 `avg` 로 바뀌었으므로 프론트 추천의
+  이름 패턴 규칙(`active…`→합계)도 같은 방향으로 맞추면 UX 가 일관된다.
 
 ---
 

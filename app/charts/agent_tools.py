@@ -503,27 +503,36 @@ def estimate_groups(source: dict, dims: list) -> int | None:
     간주해 막으면 정상 질의가 대량 차단된다. 아는 만큼만 곱하고 모르면 판단을 보류한다.
     """
     fields = {f["name"]: f for f in source["fields"]}
+    # 상한에서 곱셈을 멈춘다 — 아주 작은 구간 폭(1e-300 등)은 수백 자리 정수를 만들고,
+    # 그 값은 포맷·연산 모두에서 낭비다. 어차피 상한을 넘으면 결론(거부)은 같다.
+    ceiling = max(CONFIG.max_groups * 10, 1)
     total = 1
     known = False
     for dim in dims:
         if isinstance(dim, dict):  # 구간 축 — (최대-최소)/폭 만큼 버킷이 생긴다
             field = fields.get(dim.get("field"))
             width = dim.get("bin_width")
-            if not field or not width:
+            try:
+                width = float(width)
+            except (TypeError, ValueError):
+                continue
+            # 폭이 0·음수·비유한이면 구간 자체가 성립하지 않는다(빌더도 거부한다) — 세지 않는다.
+            if field is None or not math.isfinite(width) or width <= 0:
                 continue
             lo, hi = field.get("min"), field.get("max")
-            if lo is None or hi is None or hi <= lo:
+            if lo is None or hi is None or float(hi) <= float(lo):
                 continue
-            total *= max(1, math.ceil((float(hi) - float(lo)) / float(width)))
-            known = True
-            continue
-        field = fields.get(dim)
-        if field is None:
-            continue
-        distinct = field.get("distinct_count")
-        if distinct:
-            total *= max(1, int(distinct))
-            known = True
+            buckets = max(1, math.ceil((float(hi) - float(lo)) / width))
+        else:
+            field = fields.get(dim)
+            distinct = field.get("distinct_count") if field else None
+            if not distinct:
+                continue
+            buckets = max(1, int(distinct))
+        total *= buckets
+        known = True
+        if total >= ceiling:
+            return ceiling
     return total if known else None
 
 
