@@ -426,3 +426,94 @@ def test_manifest_carries_a_stable_contract_hash():
     first = agent_tools.ontology_manifest()
     assert first["contract_version"] == agent_tools.CONTRACT_VERSION
     assert first["contract_hash"] == agent_tools.contract_hash()
+
+
+def test_contract_hash_does_not_drift_with_runtime_config(monkeypatch):
+    """계약 해시가 배포별 env 에 흔들리면 드리프트 게이트로 쓸 수 없다."""
+    before = agent_tools.contract_hash()
+    monkeypatch.setattr(agent_tools, "CONFIG",
+                        agent_tools.AgentToolsConfig(None, None, 17, 2, max_groups=9))
+    assert agent_tools.contract_hash() == before
+
+
+# ── 저장 검증 ↔ 조회 빌드 계약 일치 ───────────────────────────
+def _spec_from_chart(chart):
+    """저장된 차트 → 조회 스펙(프론트 buildSpec 과 같은 규칙)."""
+    source = ontology.registry.get(chart.source)
+    fields = {f["name"]: f for f in source["fields"]}
+    contract = ontology.registry.meta()["chart_contracts"][chart.type]
+    slots = {s["name"]: s for s in contract["slots"]}
+    dims, measures = [], []
+    for slot, name in chart.bindings.items():
+        if slot not in slots or name not in fields:
+            continue
+        if "measure" in slots[slot]["accepts"] and fields[name]["role"] == "measure":
+            measures.append({"field": name, "agg": chart.agg})
+        elif slot in (chart.bins or {}):
+            dims.append({"field": name, "bin_width": chart.bins[slot]})
+        else:
+            dims.append(name)
+    return source, {"dims": dims, "measures": measures or [{"agg": "count"}], "limit": 20}
+
+
+def test_save_validation_and_query_build_never_disagree():
+    """'저장은 되는데 조회가 400' 은 계약 분열이다 — 시드 전량으로 회귀를 막는다."""
+    import importlib
+
+    charts_router = importlib.import_module("app.charts.router")
+    from app.charts.models import ChartConfig
+
+    seed_path = PROJECT_SEED = __import__("pathlib").Path(
+        ontology.SNAPSHOT_PATH).parents[1] / "app" / "charts" / "data" / "layouts.seed.json"
+    if not seed_path.exists():
+        pytest.skip("시드 레이아웃 없음")
+    charts = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            if node.get("type") and node.get("source") and isinstance(node.get("bindings"), dict):
+                try:
+                    charts.append(ChartConfig(**node))
+                except Exception:
+                    pass
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(json.loads(seed_path.read_text(encoding="utf-8")))
+    assert charts, "시드에 차트가 없다"
+    for chart in charts:
+        if ontology.registry.get(chart.source) is None:
+            continue
+        try:
+            charts_router._validate_charts([chart])
+            saved = True
+        except querybuilder.SpecError:
+            saved = False
+        source, spec = _spec_from_chart(chart)
+        try:
+            querybuilder.build(source, spec)
+            built = True
+        except querybuilder.SpecError:
+            built = False
+        assert saved == built, f"{chart.id}: 저장={saved} 조회={built} 계약 분열"
+
+
+def test_stock_chart_is_rejected_by_both_paths():
+    import importlib
+
+    charts_router = importlib.import_module("app.charts.router")
+    from app.charts.models import ChartConfig
+
+    source = ontology.registry.get("gold_culture_boxoffice_daily")
+    if source is None:
+        pytest.skip("소스 없음")
+    chart = ChartConfig(id="stock-time", type="line", source=source["name"],
+                        bindings={"axis": "snapshot_date", "value": "seat_count"}, agg="sum")
+    with pytest.raises(querybuilder.SpecError):
+        charts_router._validate_charts([chart])
+    built_source, spec = _spec_from_chart(chart)
+    with pytest.raises(querybuilder.SpecError):
+        querybuilder.build(built_source, spec)
