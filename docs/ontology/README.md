@@ -12,6 +12,7 @@ SQLite 로 **실증**했다.
 4. [04-mcp-vs-legacy-and-empirical.md](04-mcp-vs-legacy-and-empirical.md) — MCP×온톨로지 vs 레거시(같은 리포 `app/chat`)와 **실증 트랜스크립트**
 5. [05-backend-portability.md](05-backend-portability.md) — Trino(R2)에서 검증한 온톨로지가 **D1·RDB** 에서도 동일 동작하는지 (실증)
 6. [06-issue-43-corrections.md](06-issue-43-corrections.md) — 이슈 #43 의 모순·오류 정정
+7. [07-opus-handoff-guideline.md](07-opus-handoff-guideline.md) — **인수인계 지침** (핵심 개념·불변식·남은 작업·검증·참조)
 
 관련 코드: `app/charts/agent_tools.py`(도구 표면), `examples/ai_analyst_example.py`(AI 붙이기),
 `examples/mcp_ontology_server.py`(MCP 서버). 상위 규약: `SHARE.md`, `docs/charts-design-intents.md`.

@@ -22,6 +22,7 @@ Anthropic tool-use 루프가 곧바로 붙을 수 있게 한다. 이 모듈에�
 """
 from __future__ import annotations
 
+import inspect
 import os
 import re
 from dataclasses import dataclass
@@ -199,6 +200,66 @@ def _source_value_labels(source: dict) -> dict[str, dict[str, str]]:
     return {k: v for k, v in meta["value_labels"].items() if k in field_names}
 
 
+_VALUE_LABEL_CAP = 40  # describe_source 인라인 값 라벨 상한(프롬프트 예산 방어)
+
+
+def _capped_value_labels(source: dict) -> dict:
+    """describe_source 인라인 value_labels 를 필드당 상한으로 자른다(전체는 ontology_export).
+
+    대형 코드 사전(예 dataset 180+)을 통째로 인라인하면 매 호출이 수십 KB 로 프롬프트 예산을
+    잡아먹는다 — 앞 N개 + distinct 개수만 준다.
+    """
+    capped: dict[str, dict] = {}
+    truncated: dict[str, int] = {}
+    for field, mapping in _source_value_labels(source).items():
+        if len(mapping) > _VALUE_LABEL_CAP:
+            capped[field] = dict(list(mapping.items())[:_VALUE_LABEL_CAP])
+            truncated[field] = len(mapping)
+        else:
+            capped[field] = dict(mapping)
+    out: dict[str, Any] = {"value_labels": capped}
+    if truncated:
+        out["value_labels_truncated"] = truncated  # 필드→전체 distinct 수(상한 초과분)
+    return out
+
+
+def _coerce_limit(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return CONFIG.max_rows
+
+
+def promote_dims_to_codes(source: dict, dims: list) -> tuple[list, dict[str, str]]:
+    """표시 필드로 들어온 축을 코드 필드로 승격한다(프론트 app.js effectiveBindings 와 동일 규칙).
+
+    온톨로지 원칙 '식별=코드·표기=한글'은 GROUP BY 가 코드일 때만 성립한다. 이름으로 그룹핑하면
+    동명이지역(신사동: 강남구·관악구)이 한 행으로 합산돼 조용히 틀린다. 표시 필드에 id_field 가
+    있으면(=실측 코드 라벨 사전이 있는 쌍) 그 코드로 바꾸고, 무엇을 바꿨는지 함께 돌려준다.
+    """
+    by_name = {f["name"]: f for f in source["fields"]}
+    promoted: dict[str, str] = {}
+    out: list = []
+    for d in dims:
+        if isinstance(d, str):
+            field = by_name.get(d)
+            code = field.get("id_field") if field else None
+            if code and code in by_name:
+                promoted[d] = code
+                out.append(code)
+                continue
+        out.append(d)
+    return out, promoted
+
+
+def assert_select_only(sql: str) -> None:
+    """심층방어 — 실행 직전 SELECT/WITH 문만 통과. 1차 보증은 querybuilder 화이트리스트 +
+    실행기 읽기전용이며, 이 함수는 회귀 방지용 최후 관문(구조만 검사, 리터럴 내용은 보지 않음)."""
+    head = sql.lstrip().lower()
+    if not (head.startswith("select") or head.startswith("with")):
+        raise ValueError("읽기 전용 SELECT/WITH 만 허용됩니다")
+
+
 def _label_rows(source: dict, columns: list[str], rows: list[list]) -> list[dict]:
     """행을 dict 로 바꾸고, 값 라벨 사전이 있는 열은 ``<열>__label`` 을 덧붙인다.
 
@@ -259,12 +320,11 @@ def describe_source(source: str) -> dict:
         ):
             if key in f and f[key] is not None:
                 item[key] = f[key]
-        rollup = geo_rollup_chain(f["role"])
-        if len(rollup) > 1:
-            item["rollup_to"] = rollup[1:]  # 상위 role 사슬(설명용: 구→시도→국가)
         parent_cols = geo_parent_columns(s, f["name"])
         if parent_cols:
-            item["rollup_columns"] = parent_cols  # 실행 가능한 상위 축(이 소스에 실재하는 컬럼)
+            # 실행 가능한 상위 축(이 소스에 실재하는 컬럼)만 광고한다 — 역할 사슬 전체(구→시도→국가)는
+            # 실행 불가라 오도하므로 여기서 노출하지 않고 manifest.geo_part_of 로만 서술한다.
+            item["rollup_columns"] = parent_cols
         add = additivity(f)
         if add:
             item["additivity"] = add  # additive | semi_additive | non_additive (Kimball 3치)
@@ -280,7 +340,7 @@ def describe_source(source: str) -> dict:
         "supports": s["supports"],
         "default_chart": s.get("default_chart"),
         "fields": fields,
-        "value_labels": _source_value_labels(s),
+        **_capped_value_labels(s),
         "chart_contracts": {
             t: meta["chart_types"][t] for t in s["supports"] if t in meta["chart_types"]
         },
@@ -297,52 +357,101 @@ def run_query(
     having: list | None = None,
     order_by: list | None = None,
     limit: int | None = None,
-    force: bool = False,
 ) -> dict:
     """온톨로지 스펙(축·집계·필터·구간·having)을 안전 SQL 로 실행. raw SQL 불가.
 
-    반환: {sql, mode, columns, rows, labeled_rows, row_count, truncated, elapsed_ms}.
-    스펙이 화이트리스트에 어긋나면 {error:"spec_error"}, 소스가 없거나 실행 실패면 각각의 error.
+    반환: {sql, mode, columns, rows, labeled_rows, row_count, truncated, limit, elapsed_ms}.
+    truncated 는 '요청 한도 초과 여부'를 센티널(limit+1 조회)로 정확히 판정한다. order_by 를
+    안 주고 차원이 있으면 차원 오름차순으로 고정해 절단 슬라이스가 결정적이고 백엔드 간 일치한다.
+    스펙이 화이트리스트에 어긋나면 {error:"spec_error"}(+hint), 소스 없음/실행 실패는 각각의 error.
     """
     s = _resolve(source)
     if s is None:
         return {"error": "unknown_source", "message": f"소스를 찾을 수 없거나 허용되지 않았습니다: {source!r}"}
 
-    eff_limit = CONFIG.max_rows if limit is None else min(int(limit), CONFIG.max_rows)
+    dims, promoted = promote_dims_to_codes(s, dims or [])  # 이름 축 → 코드 축(동명이지역 분리)
+    eff_limit = CONFIG.max_rows if limit is None else min(_coerce_limit(limit), CONFIG.max_rows)
+    eff_limit = max(1, eff_limit)
+    order_by = order_by or []
+    if not order_by and dims:  # 결정적 절단: 차원 오름차순 고정(재현성·백엔드 일치)
+        order_by = [{"field": (d["field"] if isinstance(d, dict) else d), "dir": "asc"} for d in dims]
     spec = {
-        "dims": dims or [],
+        "dims": dims,
         "measures": measures or [{"agg": "count"}],  # 측정값 미지정 시 건수
         "filters": filters or [],
         "filters_logic": filters_logic,
         "having": having or [],
-        "order_by": order_by or [],
-        "limit": max(1, eff_limit),
+        "order_by": order_by,
+        "limit": eff_limit + 1,  # 센티널: has_more 정확 판정 후 eff_limit 로 트림
     }
     try:
         sql = querybuilder.build(s, spec)
     except querybuilder.SpecError as exc:
-        return {"error": "spec_error", "message": str(exc)}
+        return {"error": "spec_error", "message": str(exc),
+                "hint": "describe_source 로 필드의 role·allowed_aggs·allowed_filter_ops 를 확인하세요."}
     except Exception as exc:  # noqa: BLE001 — 스펙 형태 오류를 도구 결과로 통일(루프가 죽지 않게)
-        return {"error": "spec_error", "message": f"{type(exc).__name__}: {exc}"}
+        return {"error": "spec_error", "message": f"{type(exc).__name__}: {exc}",
+                "hint": "describe_source 로 스펙 형태를 확인하세요."}
 
     try:
-        result = backends.execute(s, sql, max_rows=CONFIG.max_rows, force=force)
+        assert_select_only(sql)  # 심층방어(회귀 방지)
+    except ValueError as exc:
+        return {"error": "unsafe_sql", "message": str(exc), "sql": sql}
+    try:
+        result = backends.execute(s, sql, max_rows=eff_limit + 1)
     except Exception as exc:  # noqa: BLE001 — 실행 실패도 도구 결과로(루프가 관찰·재시도 가능)
         return {"error": "query_failed", "message": str(exc), "sql": sql}
 
-    rows = result["rows"]
     columns = result["columns"]
+    rows = result["rows"]
+    truncated = len(rows) > eff_limit  # 센티널 초과 = 더 있음
+    rows = rows[:eff_limit]
     return {
         "source": s["name"],
         "sql": sql,
+        # 이름 축을 코드 축으로 승격했으면 알린다(결론 표기는 __label 을 쓰라는 신호)
+        **({"promoted_dims": promoted} if promoted else {}),
         "mode": result.get("mode"),
         "columns": columns,
         "rows": rows,
         "labeled_rows": _label_rows(s, columns, rows),
         "row_count": len(rows),
-        "truncated": len(rows) >= CONFIG.max_rows,
+        "truncated": truncated,
+        "limit": eff_limit,
         "elapsed_ms": result.get("elapsed_ms"),
     }
+
+
+def plan_query(
+    source: str,
+    dims: list | None = None,
+    measures: list | None = None,
+    filters: list | None = None,
+    filters_logic: str = "and",
+    having: list | None = None,
+    order_by: list | None = None,
+    limit: int | None = None,
+) -> dict:
+    """실행 없이 스펙을 검증하고 렌더된 SQL 만 반환(dry-run). spec_error 를 한 턴에서
+    자가수정하게 해준다 — Trino 를 때리기 전에 형태를 확인. 반환 {ok, sql} 또는 {ok:false, error}."""
+    s = _resolve(source)
+    if s is None:
+        return {"ok": False, "error": "unknown_source",
+                "message": f"소스를 찾을 수 없거나 허용되지 않았습니다: {source!r}"}
+    eff_limit = CONFIG.max_rows if limit is None else min(_coerce_limit(limit), CONFIG.max_rows)
+    spec = {
+        "dims": dims or [], "measures": measures or [{"agg": "count"}],
+        "filters": filters or [], "filters_logic": filters_logic,
+        "having": having or [], "order_by": order_by or [], "limit": max(1, eff_limit),
+    }
+    try:
+        sql = querybuilder.build(s, spec)
+    except querybuilder.SpecError as exc:
+        return {"ok": False, "error": "spec_error", "message": str(exc),
+                "hint": "describe_source 로 필드의 role·allowed_aggs·allowed_filter_ops 를 확인하세요."}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": "spec_error", "message": f"{type(exc).__name__}: {exc}"}
+    return {"ok": True, "source": s["name"], "sql": sql, "backend": s.get("backend", "trino")}
 
 
 # ── 명명 지표(named metrics) 레지스트리 (선언형 — dbt metrics 의 얇은 대응) ──
@@ -488,7 +597,7 @@ def tool_schemas() -> list[dict]:
                         "properties": {"field": {"type": "string"},
                                        "dir": {"type": "string", "enum": ["asc", "desc"]}},
                         "required": ["field"]}},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": CONFIG.max_rows},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": querybuilder.MAX_LIMIT},
                 },
                 "required": ["source"],
             },
@@ -506,10 +615,39 @@ def tool_schemas() -> list[dict]:
                 "properties": {
                     "metric": {"type": "string", "enum": sorted(NAMED_METRICS)},
                     "dims": {"type": "array", "items": _SPEC_DIM},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": CONFIG.max_rows},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": querybuilder.MAX_LIMIT},
                 },
                 "required": ["metric"],
             },
+        },
+        {
+            "name": "plan_query",
+            "description": ("run_query 와 같은 스펙을 받아 실행 없이 검증하고 렌더된 SQL 만 반환한다"
+                            "(dry-run). spec_error 를 한 턴에서 자가수정할 때 쓴다."),
+            "input_schema": {
+                "type": "object", "additionalProperties": False,
+                "properties": {
+                    "source": {"type": "string"},
+                    "dims": {"type": "array", "items": _SPEC_DIM},
+                    "measures": {"type": "array", "items": _SPEC_MEASURE},
+                    "filters": {"type": "array", "items": _SPEC_FILTER},
+                    "filters_logic": {"type": "string", "enum": ["and", "or"]},
+                    "having": {"type": "array", "items": {"type": "object"}},
+                    "order_by": {"type": "array", "items": {
+                        "type": "object", "additionalProperties": False,
+                        "properties": {"field": {"type": "string"},
+                                       "dir": {"type": "string", "enum": ["asc", "desc"]}},
+                        "required": ["field"]}},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": querybuilder.MAX_LIMIT},
+                },
+                "required": ["source"],
+            },
+        },
+        {
+            "name": "ontology_manifest",
+            "description": ("온톨로지 요약(역할 어휘·role 개념·geo part-of·도표 슬롯 계약·집계·예산)을 "
+                            "한 번에 반환한다. 세션 시작 시 그라운딩 프리앰블로 쓴다."),
+            "input_schema": {"type": "object", "additionalProperties": False, "properties": {}},
         },
     ]
 
@@ -518,21 +656,33 @@ def tool_schemas() -> list[dict]:
 TOOL_DISPATCH = {
     "list_sources": list_sources,
     "describe_source": describe_source,
+    "plan_query": plan_query,
     "run_query": run_query,
     "list_metrics": list_metrics,
     "run_metric": run_metric,
+    # "ontology_manifest" 는 파일 하단 정의라 정의 직후 아래에서 등록한다.
 }
 
 
 def call_tool(name: str, arguments: dict | None) -> dict:
-    """도구 이름+인자 → 결과 dict. 알 수 없는 도구는 error 로(루프가 죽지 않게)."""
+    """도구 이름+인자 → 결과 dict. 알 수 없는 도구·잘못된 인자는 error 로(루프가 죽지 않게).
+
+    스키마에 없는 키(force 등 숨은 인자)는 조용히 버리고 남은 인자로만 호출한다 — 인자 주입 차단.
+    """
     fn = TOOL_DISPATCH.get(name)
     if fn is None:
         return {"error": "unknown_tool", "message": f"알 수 없는 도구: {name!r}"}
+    args = arguments or {}
+    if not isinstance(args, dict):
+        return {"error": "bad_arguments", "message": "arguments 는 객체(dict)여야 합니다"}
+    accepted = set(inspect.signature(fn).parameters)
+    clean = {k: v for k, v in args.items() if k in accepted}
     try:
-        return fn(**(arguments or {}))
+        return fn(**clean)
     except TypeError as exc:
         return {"error": "bad_arguments", "message": str(exc)}
+    except Exception as exc:  # noqa: BLE001 — 도구 내부 예외도 결과로(루프가 죽지 않게)
+        return {"error": "tool_error", "message": f"{type(exc).__name__}: {exc}"}
 
 
 # ── 온톨로지 매니페스트 (기계 판독형 요약 — 스키마 압축기 겸 보강 노출) ──
@@ -561,3 +711,7 @@ def ontology_manifest() -> dict:
         "aggregations": sorted(querybuilder.AGGS),
         "budget": {"max_rows": CONFIG.max_rows, "max_turns": CONFIG.max_turns},
     }
+
+
+# 파일 하단 정의라 여기서 dispatch 에 등록한다(정의 후 바인딩).
+TOOL_DISPATCH["ontology_manifest"] = ontology_manifest
