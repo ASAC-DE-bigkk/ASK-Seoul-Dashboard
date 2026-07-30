@@ -34,13 +34,20 @@ def _ontology(db: Session, user: User) -> dict:
     return AccessService(db).effective_ontology(user)
 
 
-def _personalize_source(source: dict, ontology: dict) -> dict:
+def _personalize_source(source: dict, ontology: dict, *,
+                        include_value_labels: bool = False) -> dict:
     data = {**source}
     hidden = set(ontology.get("hidden_chart_types", []))
     data["supports"] = [item for item in source.get("supports", []) if item not in hidden]
     labels = ontology.get("source_label_overrides", {})
     if source["name"] in labels:
         data["label"] = str(labels[source["name"]])[:80]
+    if include_value_labels:
+        # 이 소스의 코드→표시 사전(전역 병합본이 아니라 소스 자신의 것) — 같은 필드명이
+        # 소스마다 다른 코드 체계를 담아도 표기가 섞이지 않는다. 목록 응답에는 싣지 않는다
+        # (행정동 사전만 400여 항목이라 소스마다 붙이면 목록이 비대해진다).
+        data["value_labels"] = registry.value_labels_for(
+            source["name"], ontology.get("value_label_overrides"))
     return data
 
 
@@ -168,6 +175,23 @@ def _validate_charts(charts) -> None:
                 raise querybuilder.SpecError(
                     f"{field_name} 필드에는 {chart.agg} 집계를 사용할 수 없습니다"
                 )
+        # 가산성(재고 × 시간 접기)도 **조회와 같은 함수**로 검증한다 — 규칙을 두 번 쓰면
+        # 한쪽만 고쳐져 '저장은 되는데 조회가 400' 이 된다(프론트 buildSpec 과 동일한 축 구성).
+        dims_for_check: list = []
+        measures_for_check: list = []
+        for name, slot_name in used_bindings.items():
+            if "measure" in slots[slot_name]["accepts"] and fields[name]["role"] == "measure":
+                measures_for_check.append({"field": name, "agg": chart.agg})
+            elif slot_name in chart.bins:
+                dims_for_check.append({"field": name, "bin_width": chart.bins[slot_name]})
+            else:
+                dims_for_check.append(name)
+        querybuilder.assert_additive_over_dims(
+            dims_for_check, measures_for_check, fields,
+            filters=[node.model_dump() for node in chart.filters],
+            date_range=source.get("date_range"),
+        )
+
         # 레이아웃 저장 시에도 query 단계와 **같은 워커**로 검증한다 — 저장/조회 경로가
         # 다른 walker 를 가지면 '저장은 되는데 조회가 400' 계약 분열이 생긴다.
         dialect = querybuilder.resolve_dialect(source.get("backend"))
@@ -230,7 +254,7 @@ def source_detail(
     if s is None:
         return _problem(404, "source not found",
                         f"'{name}' 은 차트 소스에 없습니다. GET /api/v1/charts/sources 로 확인하세요.")
-    return _personalize_source(s, _ontology(db, user))
+    return _personalize_source(s, _ontology(db, user), include_value_labels=True)
 
 
 @router.get(
