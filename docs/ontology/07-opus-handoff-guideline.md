@@ -26,7 +26,7 @@
 | 항목 | 결과 |
 |---|---|
 | **P2 비율 지표** | `agg="ratio"`(`sum(num)/nullif(sum(den),0)`) 추가. 6개 방언 렌더 확인, 분자·분모는 가산 measure 로 제한, SELECT·HAVING 이 같은 화이트리스트 공유. `cohort_survival_rate` 를 가중식으로 교정(+`require_dims`), `early_close_ratio` 추가 |
-| **P1 가산성 집행** | `additive_over` 를 온톨로지 정본으로 두고 querybuilder 가 집행 — 재고성 측정값 + 시간축 + `sum` 거부. 재고의 `preferred_agg` 를 `avg` 로 바꿔 **온톨로지가 스스로 거부할 조합을 추천하지 않게** 함(자기정합성 테스트 포함) |
+| **P1 가산성 집행** | `additive_over` 를 온톨로지 정본으로 두고 querybuilder 가 집행. **방향이 핵심** — 시간축이 GROUP BY 에 *있으면* 시각별 합이라 옳고(일자별 `sum(seat_count)` = 그 날 총 좌석), 시간축이 *없어야* 여러 시점이 접혀 이중계산이다. 그래서 **시간이 접히는 경우만** 거부한다(분석용 시간축이 없거나·단일 시점 스냅샷·필터가 시각을 한 점으로 고정하면 통과). ratio·HAVING 도 같은 검사를 받고, router 는 같은 함수를 호출해 계약 분열을 구조적으로 막는다. `preferred_agg` 는 **접을 시간축이 있는 소스에서만** `avg` 로 낮춘다 |
 | **P3 last_n 상한** | 연·월·일/시각 전 granularity 를 닫힌 구간으로 — 예보 테이블(25/112)의 미래 유입 차단 |
 | **P4 소스별 라벨** | `value_labels` 를 소스별로 키잉(전역 병합은 하위호환 폴백). `gu_code` 는 MOIS 표준을 정본으로 승격해 **잘못된 구 표기 210건** 해소. `SourceDetail.value_labels` 추가(목록 응답 제외) |
 | **P6 비용 게이트** | 실측 통계로 그룹 카디널리티 추정 후 실행 전 거부(`cost_rejected` + 롤업/필터 힌트). 통계가 없으면 통과, 상한에서 곱셈 조기 종료 |
