@@ -89,6 +89,22 @@ NON_ADDITIVE_PATTERN = re.compile(
 MAX_VALUE_PATTERN = re.compile(r"(^max_|_max($|_)|_peak($|_)|^peak_|^tmx($|_))")
 MIN_VALUE_PATTERN = re.compile(r"(^min_|_min($|_)|^tmn($|_))")
 DURATION_UNIT_PATTERN = re.compile(r"(duration|latency|elapsed)_min$")
+# 재고(stock)성 측정값 — 어느 한 시점의 '수위'라 **시간축과 함께 합산하면 이중계산**된다
+# (Kimball semi-additive). 공간·범주로는 합산해도 옳다: 구별 active_cnt 합 = 서울 active_cnt.
+# 좁고 확실한 이름만 넣는다 — 넓히면 진짜 flow(시간 합산이 옳은 건수)를 오분류해 정상 차트를
+# 막는다. 실측(112 소스): 29개 이름만 잡고 **시드 차트 0건**을 깨뜨린다.
+# 주의: cumulative_safe 는 race 차트 누적 옵션 전용 allowlist(4개 flow 테이블)라 가산성
+# 모델이 아니다 — 그것으로 semi-additive 를 판정하면 진짜 flow 가 대량 오분류된다.
+STOCK_MEASURE_PATTERN = re.compile(
+    r"(^stock_|_stock($|_)|^active_cnt$|_active_cnt$|_active$|^active_rows$|"
+    r"^total_cnt$|^seat_count$|capacity|^occ_|occupancy|inventory|balance|"
+    r"(^|_)ppltn$|^business_open_count$|^business_count$|^license_total$|"
+    r"_lot_cnt$|_available$|^available_count$|^total_chargers$|"
+    r"_rack_total($|_)|_parking_total($|_)|_spot_cnt$|_station_cnt$)"
+)
+# 가산 가능한 축(dimension) 종류 — semi-additive 는 시간축만 빠진다.
+ADDITIVE_OVER_ALL = ["time", "sequence", "category", "geo"]
+ADDITIVE_OVER_STOCK = ["category", "geo"]
 CUMULATIVE_SAFE_FIELDS: dict[str, set[str]] = {
     "gold_license_churn_yearly": {"opened", "closed", "net_change"},
     "gold_license_flow_daily": {"cnt"},
@@ -336,7 +352,10 @@ VALUE_LABELS: dict[str, dict[str, str]] = {
                  "3_5to10y": "5~10년", "4_10to20y": "10~20년", "5_ge20y": "20년 이상"},
     # 동 매핑 불가(마스킹 주소) 코드 — dong_category_matrix 의 coalesce('UNK')
     "admin_dong_code": {"UNK": "미상"},
-    "gu_code": {"UNK": "미상"},
+    # 자치구 코드는 MOIS 표준 체계라 **큐레이션이 실측보다 정본**이다 — 일부 gold 의
+    # 실측 code_labels 가 어긋나 있어(11680 을 '중구'로 표기하는 등) 그대로 두면
+    # 지도·축 표기가 잘못된 구 이름으로 나간다(SHARE §7.2 잘못된 지역 매칭 = Critical).
+    "gu_code": {**MOIS_GU, "UNK": "미상"},
 }
 
 # 라벨·기본 도표 힌트만 얹는 큐레이션 — 구조(role) 자체는 자동 추론이 정본
@@ -487,9 +506,18 @@ def _measure_semantics(source_name: str, name: str, role: str) -> dict[str, Any]
     allowed = ["sum", "avg", "min", "max", "count", "count_distinct"]
     if not additive:
         allowed.remove("sum")
+    stock = additive and bool(STOCK_MEASURE_PATTERN.search(lowered))
+    if stock:
+        # 재고성은 sum 을 **허용**하되(구별 합계는 옳다) 기본 제안은 avg 로 둔다 —
+        # 자동 추천·자동 바인딩은 축을 가리지 않고 preferred_agg 를 집으므로, sum 을 기본으로
+        # 두면 시간축과 짝지어졌을 때 빌더가 거부하는 조합을 온톨로지 스스로 추천하게 된다.
+        preferred = "avg"
     return {
         "preferred_agg": preferred,
         "additive": additive,
+        "additive_over": list(
+            ADDITIVE_OVER_STOCK if stock else ADDITIVE_OVER_ALL if additive else []
+        ),
         "allowed_aggs": allowed,
         "cumulative_safe": bool(
             additive and name in CUMULATIVE_SAFE_FIELDS.get(source_name, set())
@@ -629,23 +657,44 @@ class Registry:
         self._sources: dict[str, dict] = {}
         self._generated_at: str = ""
         self._code_labels: dict[str, dict[str, str]] = {}
+        self._source_code_labels: dict[str, dict[str, dict[str, str]]] = {}
 
     def _build(self) -> None:
         snap = json.loads(self._path.read_text(encoding="utf-8"))
         self._generated_at = snap.get("generated_at", "")
-        # 스냅샷 실측 코드→표시 사전(전역 병합 후 중복 동명 유일화) — meta.value_labels 의 기본층
+        # 스냅샷 출처·신선도(전역) — 소비자가 '얼마나 최신인지·통계가 완전한지'를 알고 답하도록.
+        # refresh.mode=partial_basic 이면 상당수 컬럼에 통계가 없다(추정·구간 제안이 보수적).
+        self._provenance = {
+            "generated_at": self._generated_at,
+            "refresh_mode": (snap.get("refresh") or {}).get("mode"),
+            "observed_at": (snap.get("refresh") or {}).get("observed_at"),
+            "source_system": (snap.get("refresh") or {}).get("source_system"),
+            "domain_generated_at": snap.get("domain_generated_at") or {},
+        }
+        # 스냅샷 실측 코드→표시 사전. **소스별로 따로 보관**하는 것이 정본이다 —
+        # 필드명(gu_code·admin_dong_code·category…)은 소스마다 다른 코드 체계를 담을 수 있어
+        # 전역으로 병합하면 마지막에 읽힌 테이블이 다른 소스의 라벨을 덮어쓴다(실측: 같은
+        # 필드·같은 코드에 서로 다른 라벨이 붙는 충돌 210건 — 11680 이 '강남구'가 아니라
+        # '중구'로 표기되는 등 잘못된 지역 표기가 생겼다).
         raw_labels: dict[str, dict[str, str]] = {}
+        per_source: dict[str, dict[str, dict[str, str]]] = {}
         for t in snap["tables"]:
             for field, mapping in (t.get("code_labels") or {}).items():
-                raw_labels.setdefault(field, {}).update(
-                    {str(k): str(v) for k, v in mapping.items()}
-                )
+                clean = {str(k): str(v) for k, v in mapping.items()}
+                per_source.setdefault(t["name"], {})[field] = clean
+                # 전역 병합본은 /api/v1/charts/meta 하위호환 폴백으로만 남긴다.
+                raw_labels.setdefault(field, {}).update(clean)
         self._code_labels = _disambiguated_labels(raw_labels)
-        # 승격 게이트는 '실측' 사전만 본다 — 정적 VALUE_LABELS(UNK 등 부분 사전)만으로
-        # 승격을 켜면 라벨 없는 코드가 축에 생으로 노출된다(스냅샷 퇴화 시 안전장치).
-        labeled = set(self._code_labels)
+        self._source_code_labels = {
+            name: _disambiguated_labels(mapping) for name, mapping in per_source.items()
+        }
         sources: dict[str, dict] = {}
         for t in snap["tables"]:
+            # 승격 게이트는 '실측' 사전만 본다 — 정적 VALUE_LABELS(UNK 등 부분 사전)만으로
+            # 승격을 켜면 라벨 없는 코드가 축에 생으로 노출된다(스냅샷 퇴화 시 안전장치).
+            # **이 소스의** 사전만 본다: 옆 소스에 라벨이 있다고 승격하면 이 소스의 축이
+            # 라벨 없는 생코드로 노출된다.
+            labeled = set(self._source_code_labels.get(t["name"], {}))
             curated = CURATED.get(t["name"], {})
             fields = []
             for c in t["columns"]:
@@ -703,6 +752,13 @@ class Registry:
                     date_range=t.get("date_range"),
                 ),
                 "default_chart": curated.get("default_chart"),
+                # 계보·품질·계약 메타(스냅샷 원본에 있으나 지금까지 버려졌다). lineage 는
+                # 33/112 에만 있으므로 '의존성 없음'과 '수집 안 됨'을 구분해 실어 보낸다.
+                "materialized": t.get("materialized"),
+                "contract_enforced": bool(t.get("contract_enforced")),
+                "lineage": t.get("lineage") or None,
+                "quality": t.get("quality") or None,
+                "tags": t.get("tags") or [],
             }
         self._sources = sources
 
@@ -717,6 +773,12 @@ class Registry:
         self._fresh()
         return self._generated_at
 
+    @property
+    def provenance(self) -> dict:
+        """스냅샷 출처·신선도 — 소비자가 낡음/부분통계를 알고 답하게 한다."""
+        self._fresh()
+        return dict(self._provenance)
+
     def sources(self, domain: str | None = None) -> list[dict]:
         self._fresh()
         out = list(self._sources.values())
@@ -727,6 +789,33 @@ class Registry:
     def get(self, name: str) -> dict | None:
         self._fresh()
         return self._sources.get(name)
+
+    def value_labels_for(self, source_name: str,
+                         overrides: dict | None = None) -> dict[str, dict[str, str]]:
+        """이 소스의 코드→표시 사전(정본). 전역 병합본이 아니라 **소스 자신의 실측 사전**을
+        기본층으로 쓰고, 그 위에 정적 큐레이션(VALUE_LABELS)·사용자 오버라이드를 얹는다.
+
+        같은 필드명이라도 소스마다 코드 체계가 다를 수 있어(gu_code·admin_dong_code·category)
+        전역 병합본을 쓰면 다른 소스의 라벨이 새어 들어온다.
+        """
+        self._fresh()
+        source = self._sources.get(source_name)
+        field_names = {f["name"] for f in source["fields"]} if source else set()
+        labels: dict[str, dict[str, str]] = {
+            field: dict(mapping)
+            for field, mapping in self._source_code_labels.get(source_name, {}).items()
+            if not field_names or field in field_names
+        }
+        for field, mapping in VALUE_LABELS.items():
+            if field_names and field not in field_names:
+                continue
+            labels.setdefault(field, {}).update(deepcopy(mapping))
+        for field, mapping in (overrides or {}).items():
+            if isinstance(mapping, dict) and (not field_names or field in field_names):
+                labels.setdefault(field, {}).update(
+                    {str(key): str(value)[:80] for key, value in mapping.items()}
+                )
+        return labels
 
     def meta(self, overrides: dict | None = None) -> dict:
         self._fresh()

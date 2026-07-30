@@ -181,9 +181,105 @@ def test_named_metrics_resolve_against_the_live_registry():
         if source is None:
             pytest.skip(f"{name}: 스냅샷에 소스 없음")
         fields = {f["name"]: f for f in source["fields"]}
+        if spec.get("kind") == "ratio":
+            # 가중 비율은 원자 분자·분모가 실재하고 둘 다 가산이어야 성립한다.
+            for part in ("num", "den"):
+                column = spec[part]
+                assert column in fields, f"{name}: {part} 컬럼 {column} 없음"
+                assert fields[column].get("additive"), f"{name}: {part} {column} 이 비가산"
+            continue
         assert spec["measure"] in fields, f"{name}: 측정값 {spec['measure']} 없음"
         allowed = fields[spec["measure"]].get("allowed_aggs")
         assert allowed is None or spec["agg"] in allowed, f"{name}: {spec['agg']} 불가"
+
+
+def test_named_metrics_are_executable_specs():
+    """지표 정의가 실제로 조립 가능한 스펙인지 — 이름만 맞고 빌드가 깨지면 소용없다."""
+    for name, spec in agent_tools.NAMED_METRICS.items():
+        source = ontology.registry.get(spec["source"])
+        if source is None:
+            continue
+        built = querybuilder.build(source, {
+            "dims": list(spec.get("require_dims") or []),
+            "measures": [agent_tools._metric_measure(name, spec)],
+            "filters": [spec["filter"]] if spec.get("filter") else [],
+            "limit": 5,
+        })
+        assert built.lower().startswith("select")
+
+
+def test_weighted_ratio_differs_from_unweighted_avg():
+    """가중 비율은 비가중 평균과 다른 식이어야 한다(SHARE §7.1 — 단순평균 왜곡 금지)."""
+    source = ontology.registry.get("gold_license_cohort_survival")
+    if source is None:
+        pytest.skip("코호트 소스 없음")
+    weighted = querybuilder.build(source, {
+        "dims": ["years_elapsed"],
+        "measures": [{"agg": "ratio", "num": "survivors", "den": "cohort_n"}], "limit": 5})
+    naive = querybuilder.build(source, {
+        "dims": ["years_elapsed"],
+        "measures": [{"field": "survival_rate", "agg": "avg"}], "limit": 5})
+    assert "nullif" in weighted and 'sum("survivors")' in weighted
+    assert weighted != naive
+
+
+def test_ratio_rejects_non_additive_parts():
+    source = ontology.registry.get("gold_license_cohort_survival")
+    if source is None:
+        pytest.skip("코호트 소스 없음")
+    with pytest.raises(querybuilder.SpecError):
+        querybuilder.build(source, {"dims": [], "measures": [
+            {"agg": "ratio", "num": "survival_rate", "den": "cohort_n"}]})
+    with pytest.raises(querybuilder.SpecError):
+        querybuilder.build(source, {"dims": [], "measures": [{"agg": "ratio", "num": "survivors"}]})
+
+
+# ── 가산성 집행 (재고 × 시간축) ───────────────────────────────
+def test_stock_measure_cannot_be_summed_over_time():
+    """재고성 측정값 + 시간축 + sum = 이중계산 → 거부. 같은 필드도 시간축이 없으면 통과."""
+    source = ontology.registry.get("gold_culture_boxoffice_daily")
+    if source is None:
+        pytest.skip("소스 없음")
+    fields = {f["name"]: f for f in source["fields"]}
+    if "seat_count" not in fields:
+        pytest.skip("seat_count 없음")
+    assert agent_tools.additivity(fields["seat_count"]) == "semi_additive"
+    with pytest.raises(querybuilder.SpecError):
+        querybuilder.build(source, {"dims": ["snapshot_date"],
+                                    "measures": [{"field": "seat_count", "agg": "sum"}]})
+    # avg 는 시간축에서도 허용된다
+    querybuilder.build(source, {"dims": ["snapshot_date"],
+                                "measures": [{"field": "seat_count", "agg": "avg"}]})
+
+
+def test_non_additive_keeps_its_own_error_message():
+    """비가산 필드는 '재고' 가 아니라 '집계 불가' 사유로 거부돼야 한다(오진단 방지)."""
+    source = ontology.registry.get("gold_culture_booking_curve")
+    if source is None:
+        pytest.skip("소스 없음")
+    fields = {f["name"]: f for f in source["fields"]}
+    if not (fields.get("days_to_peak") and not fields["days_to_peak"].get("additive")):
+        pytest.skip("대상 필드 없음")
+    with pytest.raises(querybuilder.SpecError) as excinfo:
+        querybuilder.build(source, {"dims": ["event_start_date"],
+                                    "measures": [{"field": "days_to_peak", "agg": "sum"}]})
+    assert "재고" not in str(excinfo.value)
+
+
+def test_ontology_never_recommends_a_spec_it_would_reject():
+    """preferred_agg 는 빌더가 거부하는 조합을 스스로 추천하면 안 된다(자기정합성)."""
+    for source in ontology.registry.sources():
+        fields = {f["name"]: f for f in source["fields"]}
+        time_dims = [n for n, f in fields.items() if f["role"] in ("time", "sequence")]
+        if not time_dims:
+            continue
+        for field in source["fields"]:
+            if field["role"] != "measure" or not field.get("preferred_agg"):
+                continue
+            querybuilder.build(source, {
+                "dims": [time_dims[0]],
+                "measures": [{"field": field["name"], "agg": field["preferred_agg"]}],
+                "limit": 5})
 
 
 def test_unknown_metric_is_rejected():
@@ -202,3 +298,131 @@ def test_skos_export_uses_broader_and_is_acyclic():
 def test_jsonld_export_carries_context():
     doc = agent_tools.ontology_export("jsonld")
     assert "@context" in doc and "geo_part_of" in doc["@context"]
+
+
+# ── last_n 닫힌 구간 (미래 예보 유입 차단) ───────────────────
+@pytest.mark.parametrize("field_name", ["ym"])
+def test_last_n_is_a_closed_window(field_name):
+    """하한만 걸면 예보 테이블에서 '최근 N'이 미래를 끌어온다 — 상한이 함께 있어야 한다."""
+    source = ontology.registry.get(SOURCE)
+    fields = {f["name"]: f for f in source["fields"]}
+    if field_name not in fields:
+        pytest.skip("시간 필드 없음")
+    sql = querybuilder.build(source, {
+        "dims": [], "measures": [{"agg": "count"}],
+        "filters": [{"field": field_name, "op": "last_n", "value": 7}], "limit": 5})
+    where = sql.split(" where ")[1].split(" limit")[0]
+    assert ">=" in where and ("<=" in where or "<" in where), where
+
+
+def test_last_n_covers_every_supported_granularity():
+    seen = set()
+    for source in ontology.registry.sources():
+        for field in source["fields"]:
+            gran = field.get("granularity")
+            if field["role"] != "time" or gran in seen or gran is None:
+                continue
+            if "last_n" not in (field.get("allowed_filter_ops") or []):
+                continue
+            seen.add(gran)
+            sql = querybuilder.build(source, {
+                "dims": [], "measures": [{"agg": "count"}],
+                "filters": [{"field": field["name"], "op": "last_n", "value": 3}],
+                "limit": 5})
+            where = sql.split(" where ")[1].split(" limit")[0]
+            assert where.count(field["name"]) >= 2, f"{gran}: 상·하한 둘 다 필요 — {where}"
+    assert seen, "last_n 을 지원하는 시간 필드가 없다"
+
+
+# ── 소스별 값 라벨 (교차 오염 차단) ──────────────────────────
+def test_value_labels_are_scoped_to_their_source():
+    """전역 병합본을 쓰면 같은 필드명을 쓰는 다른 소스의 라벨이 새어 들어온다."""
+    for name in ("gold_license_flow_monthly", "gold_detail_area_profile"):
+        source = ontology.registry.get(name)
+        if source is None:
+            continue
+        own_fields = {f["name"] for f in source["fields"]}
+        labels = ontology.registry.value_labels_for(name)
+        assert set(labels).issubset(own_fields), f"{name}: 남의 필드 라벨이 섞였다"
+
+
+def test_gu_code_labels_follow_the_authoritative_mois_dictionary():
+    """자치구 코드는 MOIS 표준이 정본 — 일부 gold 의 어긋난 실측이 표기를 오염시키면 안 된다."""
+    for name in ("gold_detail_area_profile", "gold_weather_x_culture_event_risk_daily"):
+        source = ontology.registry.get(name)
+        if source is None:
+            continue
+        labels = ontology.registry.value_labels_for(name).get("gu_code", {})
+        for code, expected in (("11680", "강남구"), ("11215", "광진구")):
+            if code in labels:
+                assert labels[code] == expected, f"{name}: {code} -> {labels[code]}"
+
+
+# ── 비용 게이트 ──────────────────────────────────────────────
+def test_estimate_groups_multiplies_known_cardinalities():
+    source = ontology.registry.get(SOURCE)
+    fields = {f["name"]: f for f in source["fields"]}
+    dims = [n for n, f in fields.items() if f.get("distinct_count")][:2]
+    if len(dims) < 2:
+        pytest.skip("통계 있는 축이 부족")
+    expected = fields[dims[0]]["distinct_count"] * fields[dims[1]]["distinct_count"]
+    assert agent_tools.estimate_groups(source, dims) == expected
+
+
+def test_estimate_groups_returns_none_without_stats():
+    """통계가 없으면 '모른다'여야 한다 — 모른다고 막으면 정상 질의가 대량 차단된다."""
+    source = ontology.registry.get(SOURCE)
+    assert agent_tools.estimate_groups(source, ["does_not_exist"]) is None
+
+
+def test_cost_gate_rejects_before_execution(monkeypatch):
+    monkeypatch.setattr(agent_tools, "CONFIG",
+                        agent_tools.AgentToolsConfig(None, None, 50, 3, max_groups=1))
+    source = ontology.registry.get(SOURCE)
+    dims = [f["name"] for f in source["fields"] if f.get("distinct_count")][:1]
+    if not dims:
+        pytest.skip("통계 있는 축 없음")
+    out = agent_tools.run_query(SOURCE, dims=dims, measures=[{"agg": "count"}])
+    assert out["error"] == "cost_rejected" and "hint" in out
+    assert out["estimated_groups"] >= 1
+
+
+# ── 검색·역해결 ──────────────────────────────────────────────
+def test_search_ontology_finds_sources_by_korean_and_english():
+    for query in ("개폐업", "subway"):
+        out = agent_tools.search_ontology(query, k=5)
+        assert out["count"] >= 1, query
+        assert all(r["score"] > 0 for r in out["results"])
+
+
+def test_search_ontology_requires_a_query():
+    assert agent_tools.search_ontology("")["error"] == "bad_arguments"
+
+
+def test_resolve_label_maps_korean_name_to_code():
+    out = agent_tools.resolve_label("강남구", field="gu_code")
+    assert out["count"] >= 1
+    assert any(c["code"] == "11680" and c["exact"] for c in out["candidates"])
+
+
+def test_resolve_label_reports_homonyms_instead_of_guessing():
+    """동명이지역은 후보를 모두 돌려줘야 한다 — 하나를 임의로 고르면 조용히 틀린 지역을 센다."""
+    out = agent_tools.resolve_label("신사동")
+    if out["count"] < 2:
+        pytest.skip("스냅샷에 동명이지역이 없음")
+    assert out["ambiguous"] is True
+    assert len({c["code"] for c in out["candidates"]}) > 1
+
+
+# ── 출처·계약 버전 ───────────────────────────────────────────
+def test_describe_source_exposes_provenance():
+    provenance = agent_tools.describe_source(SOURCE)["provenance"]
+    assert "refresh_mode" in provenance and "generated_at" in provenance
+    # lineage 는 일부 도메인만 수집됐다 — '없음'과 '수집 안 됨'을 구분해야 한다
+    assert isinstance(provenance["lineage_captured"], bool)
+
+
+def test_manifest_carries_a_stable_contract_hash():
+    first = agent_tools.ontology_manifest()
+    assert first["contract_version"] == agent_tools.CONTRACT_VERSION
+    assert first["contract_hash"] == agent_tools.contract_hash()

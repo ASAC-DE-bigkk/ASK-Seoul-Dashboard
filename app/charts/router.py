@@ -34,13 +34,20 @@ def _ontology(db: Session, user: User) -> dict:
     return AccessService(db).effective_ontology(user)
 
 
-def _personalize_source(source: dict, ontology: dict) -> dict:
+def _personalize_source(source: dict, ontology: dict, *,
+                        include_value_labels: bool = False) -> dict:
     data = {**source}
     hidden = set(ontology.get("hidden_chart_types", []))
     data["supports"] = [item for item in source.get("supports", []) if item not in hidden]
     labels = ontology.get("source_label_overrides", {})
     if source["name"] in labels:
         data["label"] = str(labels[source["name"]])[:80]
+    if include_value_labels:
+        # 이 소스의 코드→표시 사전(전역 병합본이 아니라 소스 자신의 것) — 같은 필드명이
+        # 소스마다 다른 코드 체계를 담아도 표기가 섞이지 않는다. 목록 응답에는 싣지 않는다
+        # (행정동 사전만 400여 항목이라 소스마다 붙이면 목록이 비대해진다).
+        data["value_labels"] = registry.value_labels_for(
+            source["name"], ontology.get("value_label_overrides"))
     return data
 
 
@@ -155,6 +162,13 @@ def _validate_charts(charts) -> None:
                 raise querybuilder.SpecError(
                     "이 측정값은 시간 누적 시 중복 합산될 수 있어 누적 경주를 사용할 수 없습니다"
                 )
+        # 그룹 축 role 집합 — measure 를 받지 않는 슬롯이 곧 GROUP BY 축이다
+        # (프론트 buildSpec 의 dims 구성과 정확히 같은 규칙). 구간(bin) 축은 measure 라 제외.
+        group_roles = frozenset(
+            fields[name]["role"]
+            for name, slot_name in used_bindings.items()
+            if "measure" not in slots[slot_name]["accepts"] and slot_name not in chart.bins
+        )
         for field_name, bound_slot in used_bindings.items():
             field = fields[field_name]
             if field["role"] != "measure":
@@ -167,6 +181,13 @@ def _validate_charts(charts) -> None:
             if allowed is not None and chart.agg not in allowed:
                 raise querybuilder.SpecError(
                     f"{field_name} 필드에는 {chart.agg} 집계를 사용할 수 없습니다"
+                )
+            if chart.agg == "sum" and (
+                group_roles & querybuilder.TIME_GROUP_ROLES
+            ) and "time" not in (field.get("additive_over") or ["time"]):
+                raise querybuilder.SpecError(
+                    f"'{field_name}' 은(는) 특정 시점의 상태(재고)라 시간축과 함께 합산하면 "
+                    f"이중계산이 됩니다 — max/avg 집계를 쓰거나 시간축을 빼세요"
                 )
         # 레이아웃 저장 시에도 query 단계와 **같은 워커**로 검증한다 — 저장/조회 경로가
         # 다른 walker 를 가지면 '저장은 되는데 조회가 400' 계약 분열이 생긴다.
@@ -230,7 +251,7 @@ def source_detail(
     if s is None:
         return _problem(404, "source not found",
                         f"'{name}' 은 차트 소스에 없습니다. GET /api/v1/charts/sources 로 확인하세요.")
-    return _personalize_source(s, _ontology(db, user))
+    return _personalize_source(s, _ontology(db, user), include_value_labels=True)
 
 
 @router.get(

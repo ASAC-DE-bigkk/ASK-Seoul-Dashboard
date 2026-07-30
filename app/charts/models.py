@@ -28,6 +28,9 @@ class FieldInfo(BaseModel):
     granularity: Optional[str] = None
     preferred_agg: Optional[str] = None
     additive: Optional[bool] = None
+    # 어떤 축 종류로 합산해도 되는가(Kimball) — 재고성 측정값은 time 이 빠진다.
+    # 프론트는 이 값으로 '시간축 + sum' 조합을 미리 제외할 수 있다(서버도 거부한다).
+    additive_over: Optional[list[str]] = None
     allowed_aggs: Optional[list[str]] = None
     cumulative_safe: bool = False
     recommendation_priority: int = 40
@@ -63,6 +66,9 @@ class SourceDetail(SourceSummary):
     datasource: str = "trino"
     backend: str = "trino"
     object_type: str = "table"
+    # 이 소스의 코드→표시 사전(소스 스코프). meta.value_labels 는 전역 병합본이라 같은
+    # 필드명이 소스마다 다른 코드 체계를 담으면 표기가 섞인다 — 이 값이 이 소스의 정본이다.
+    value_labels: dict[str, dict[str, str]] = Field(default_factory=dict)
 
 
 class SourceAvailability(BaseModel):
@@ -82,6 +88,10 @@ class MeasureSpec(BaseModel):
     field: Optional[str] = Field(default=None, max_length=120, pattern=IDENT_PATTERN)
     agg: str = Field(default="sum", max_length=30, pattern=r"^[a-z_]+$")
     alias: Optional[str] = Field(default=None, max_length=120, pattern=ALIAS_PATTERN)
+    # 가중 비율(agg="ratio") 전용 — sum(num)/nullif(sum(den),0). 둘 다 가산 measure 여야 하며
+    # querybuilder._ratio_expr 가 화이트리스트로 재검증한다(비가중 평균 왜곡 방지, SHARE §7.1).
+    num: Optional[str] = Field(default=None, max_length=120, pattern=IDENT_PATTERN)
+    den: Optional[str] = Field(default=None, max_length=120, pattern=IDENT_PATTERN)
 
 
 class FilterSpec(BaseModel):
@@ -131,6 +141,9 @@ class HavingSpec(BaseModel):
     """집계 결과 조건(HAVING) — 집계식은 SELECT 와 동일 화이트리스트로 재조립된다."""
     field: Optional[str] = Field(default=None, max_length=120, pattern=IDENT_PATTERN)
     agg: str = Field(default="count", max_length=30, pattern=r"^[a-z_]+$")
+    # SELECT 와 같은 집계 어휘를 쓴다 — ratio 조건도 동일 화이트리스트로 재조립된다.
+    num: Optional[str] = Field(default=None, max_length=120, pattern=IDENT_PATTERN)
+    den: Optional[str] = Field(default=None, max_length=120, pattern=IDENT_PATTERN)
     op: str = Field(default="gte", max_length=20, pattern=r"^[a-z_]+$")
     value: Any = None  # 숫자 또는 between [최소, 최대] — querybuilder._numeric 검증
 

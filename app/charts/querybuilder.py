@@ -24,6 +24,8 @@ OPS = {
 HAVING_OPS = {"eq", "neq", "gt", "gte", "lt", "lte", "between"}  # 집계 결과 비교 전용
 GROUP_LOGICS = {"and", "or"}
 NUMERIC_FILTER_ROLES = {"measure", "sequence", "ordinal"}
+# 시간성 그룹 축 — 재고(semi-additive) 측정값을 이 축과 함께 sum 하면 이중계산이다.
+TIME_GROUP_ROLES = {"time", "sequence"}
 # 고정폭 코드·식별자 — 숫자로 와도 문자열 비교로 고정(선행 0·정밀도·체계 확장 안전)
 CODE_STRICT_ROLES = {"geo_gu_code", "geo_dong_code", "geo_legal_code", "id"}
 NO_VALUE_OPS = {"is_null", "not_null"}
@@ -228,6 +230,84 @@ def _measure_expr(field_name: str | None, agg: str, fields: dict[str, dict],
     return f"cast({agg}({quoted}) as {DIALECTS[dialect]['agg']})"
 
 
+def _ratio_expr(num: Any, den: Any, fields: dict[str, dict],
+                dialect: str = "trino") -> str:
+    """가중 비율 — ``sum(분자)/nullif(sum(분모),0)``.
+
+    사전계산된 비율 컬럼(survival_rate·lq 등)을 여러 행에 걸쳐 보려면 지금까지 ``avg`` 뿐이었고,
+    그것은 **비가중 평균**이라 코호트·모집단 크기를 무시해 통계적으로 틀린다(SHARE.md §7.1 —
+    "비율 재집계가 필요한 경우 단순평균을 정확한 값처럼 표현하지 않는다"). 원자 분자·분모가
+    gold 에 있으면 이 형태로 가중 비율을 낸다.
+
+    분모 0 은 NULL 로 떨어뜨린다(결측≠0 규칙) — 전 방언 공통 ANSI ``nullif``.
+    분자·분모는 **가산 measure 만** 허용한다(비가산을 합치면 비율 자체가 무의미해진다).
+    """
+    if not num or not den:
+        raise SpecError("비율(ratio) 집계에는 분자(num)와 분모(den) 필드가 모두 필요합니다")
+    for name in (num, den):
+        field = fields.get(name)
+        if field is None:
+            raise SpecError(f"'{name}' 은(는) 이 소스에 없는 필드입니다")
+        if field.get("role") != "measure":
+            raise SpecError(f"'{name}' 은(는) 측정값이 아니라 비율의 분자·분모로 쓸 수 없습니다")
+        if not field.get("additive"):
+            raise SpecError(f"'{name}' 은(는) 비가산 값이라 비율의 분자·분모로 쓸 수 없습니다")
+    cast = DIALECTS[dialect]["agg"]
+    numerator = f"cast(sum({_quote_ident(num)}) as {cast})"
+    denominator = f"cast(sum({_quote_ident(den)}) as {cast})"
+    return f"{numerator} / nullif({denominator}, 0)"
+
+
+def assert_additive_over_dims(dims: list, measures: list,
+                              fields: dict[str, dict]) -> None:
+    """재고(semi-additive) 측정값을 시간축과 함께 sum 하는 것을 막는다 — 이중계산 방지.
+
+    Kimball semi-additive: 한 시점의 '수위'(재고·정원·활성수)는 공간·범주로는 합산해도 옳지만
+    시간으로 합산하면 같은 대상을 여러 번 센다. 온톨로지의 ``additive_over`` 가 정본이고
+    여기서는 집행만 한다(분류는 ontology._measure_semantics).
+
+    **거부만 한다 — 통과하는 스펙의 SQL 텍스트는 바뀌지 않는다**(캐시 키 불변, SHARE §9.0).
+    구간(bin) 축으로 쓰인 measure 는 그룹 키라 집계 대상이 아니므로 검사에서 제외된다.
+    """
+    bin_fields = {d["field"] for d in dims if isinstance(d, dict)}
+    # role 이 없는 손수 만든 source dict(테스트·외부 호출)도 안전하게 통과시킨다 — 여기서
+    # KeyError 가 나면 안전 계약이 아니라 크래시가 된다.
+    group_roles = {
+        fields[name].get("role")
+        for name in (d if isinstance(d, str) else d["field"] for d in dims)
+        if name in fields and name not in bin_fields
+    }
+    if not (group_roles & TIME_GROUP_ROLES):
+        return
+    for m in measures:
+        if m.get("agg") != "sum":
+            continue
+        field = fields.get(m.get("field") or "")
+        if field is None:
+            continue
+        # 비가산 필드는 애초에 allowed_aggs 에 sum 이 없어 _measure_expr 가 제 메시지로 거부한다
+        # (additive_over 가 빈 목록이라 여기서 먼저 잡으면 '재고' 라는 틀린 이유를 대게 된다).
+        additive_over = field.get("additive_over")
+        if field.get("additive") and additive_over is not None and "time" not in additive_over:
+            raise SpecError(
+                f"'{field['name']}' 은(는) 특정 시점의 상태(재고)라 시간축과 함께 합산하면 "
+                f"이중계산이 됩니다 — max/avg 집계를 쓰거나 시간축을 빼세요"
+            )
+
+
+def measure_expr_from_spec(spec: dict, fields: dict[str, dict],
+                           dialect: str = "trino") -> str:
+    """측정 스펙(dict) → 집계식. ``agg='ratio'`` 만 분기하고 나머지는 기존 경로 그대로.
+
+    불변식: 비-ratio 스펙의 출력은 종전 ``_measure_expr`` 과 **byte-동일**(캐시 키 보존).
+    SELECT 와 HAVING 이 이 한 함수를 공유해야 금지 집계를 HAVING 으로 우회할 수 없다.
+    """
+    agg = spec.get("agg", "sum")
+    if agg == "ratio":
+        return _ratio_expr(spec.get("num"), spec.get("den"), fields, dialect)
+    return _measure_expr(spec.get("field"), agg, fields, dialect)
+
+
 def _str_lit(value: Any) -> str:
     """값을 문자열 리터럴로 — 컬럼 쪽을 varchar 로 캐스팅해 비교하므로 타입 드리프트에 안전."""
     if isinstance(value, bool):
@@ -302,7 +382,13 @@ def _code_str(value: Any) -> str:
 
 def _last_n_condition(field: dict, s_col: str, n_col: str, value: Any) -> str:
     """최근 N(일/개월/년) — time granularity 연동. 컷오프는 **빌드 시점 리터럴**로 해석:
-    SQL 이 재현 가능한 산출물이 되고 캐시 키가 자정에 자연 회전한다(오늘 포함 N단위)."""
+    SQL 이 재현 가능한 산출물이 되고 캐시 키가 자정에 자연 회전한다(오늘 포함 N단위).
+
+    **닫힌 구간**으로 낸다 — 하한만 걸면 예보/미래 일자 테이블(스냅샷 112개 중 25개가
+    date_range.max 가 미래)에서 '최근 7일'이 앞으로 올 예보까지 끌어와 과거 집계를 오염시킨다.
+    상한은 오늘까지: 날짜·시각은 '내일 미만'(시각 문자열 'YYYY-MM-DD HH:MM:SS' 도 사전순으로
+    내일보다 작다), 월은 이번 달까지, 연은 올해까지.
+    """
     from datetime import date, timedelta
 
     if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 3650:
@@ -310,14 +396,18 @@ def _last_n_condition(field: dict, s_col: str, n_col: str, value: Any) -> str:
     gran = field.get("granularity")
     today = date.today()
     if gran == "year":
-        return f"{n_col} >= {float(today.year - (value - 1))!r}"
+        return (f"{n_col} >= {float(today.year - (value - 1))!r}"
+                f" and {n_col} <= {float(today.year)!r}")
     if gran == "month":
         months = today.year * 12 + (today.month - 1) - (value - 1)
         year, month = divmod(months, 12)
-        return f"{s_col} >= {_str_lit(f'{year:04d}-{month + 1:02d}')}"
+        return (f"{s_col} >= {_str_lit(f'{year:04d}-{month + 1:02d}')}"
+                f" and {s_col} <= {_str_lit(f'{today.year:04d}-{today.month:02d}')}")
     if gran in ("date", "datetime"):
         cutoff = today - timedelta(days=value - 1)
-        return f"{s_col} >= {_str_lit(cutoff.isoformat())}"
+        tomorrow = today + timedelta(days=1)
+        return (f"{s_col} >= {_str_lit(cutoff.isoformat())}"
+                f" and {s_col} < {_str_lit(tomorrow.isoformat())}")
     raise SpecError("이 필드는 최근 N 조건을 지원하지 않습니다")
 
 
@@ -481,7 +571,7 @@ def _having_condition(h: dict, fields: dict[str, dict], dialect: str = "trino") 
     if op not in HAVING_OPS:
         raise SpecError(f"집계 조건에 허용되지 않는 연산자입니다: {op}")
     agg = h.get("agg", "count")
-    expr = _measure_expr(h.get("field"), agg, fields, dialect)
+    expr = measure_expr_from_spec(h, fields, dialect)
     v = h.get("value")
     if op == "between":
         if not isinstance(v, (list, tuple)) or len(v) != 2:
@@ -531,6 +621,7 @@ def build(source: dict, spec: dict) -> str:
         raise SpecError("차원 형식이 올바르지 않습니다")
     if len(dim_names) != len(set(dim_names)):
         raise SpecError("차원 필드는 서로 달라야 합니다")
+    assert_additive_over_dims(dims, measures, fields)
 
     select_parts: list[str] = []
     aliases: list[str] = []
@@ -550,13 +641,17 @@ def build(source: dict, spec: dict) -> str:
     for m in measures:
         agg = m.get("agg", "sum")
         field_name = m.get("field")
-        alias = m.get("alias") or (f"{agg}_{field_name}" if field_name else "count")
+        if agg == "ratio":
+            default_alias = f"ratio_{m.get('num')}_{m.get('den')}"
+        else:
+            default_alias = f"{agg}_{field_name}" if field_name else "count"
+        alias = m.get("alias") or default_alias
         if not alias.replace("_", "").isalnum():
             raise SpecError(f"alias 형식이 잘못됐습니다: {alias}")
         if alias in aliases:
             alias = f"{alias}_{len(aliases)}"
         select_parts.append(
-            f"{_measure_expr(field_name, agg, fields, dialect)} as {_quote_ident(alias)}"
+            f"{measure_expr_from_spec(m, fields, dialect)} as {_quote_ident(alias)}"
         )
         aliases.append(alias)
 

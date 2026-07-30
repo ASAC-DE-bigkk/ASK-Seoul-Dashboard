@@ -23,6 +23,8 @@ Anthropic tool-use 루프가 곧바로 붙을 수 있게 한다. 이 모듈에�
 from __future__ import annotations
 
 import inspect
+import json
+import math
 import os
 import re
 from dataclasses import dataclass
@@ -49,6 +51,7 @@ class AgentToolsConfig:
     allowed_domains: frozenset[str] | None
     max_rows: int
     max_turns: int
+    max_groups: int = 500_000
 
     @staticmethod
     def _parse_set(name: str) -> frozenset[str] | None:
@@ -68,11 +71,16 @@ class AgentToolsConfig:
             max_turns = max(1, int(os.environ.get("CHARTS_AGENT_MAX_TURNS", "8")))
         except ValueError:
             max_turns = 8
+        try:
+            max_groups = max(1, int(os.environ.get("CHARTS_AGENT_MAX_GROUPS", "500000")))
+        except ValueError:
+            max_groups = 500_000
         return cls(
             allowed_sources=cls._parse_set("CHARTS_AGENT_ALLOWED_SOURCES"),
             allowed_domains=cls._parse_set("CHARTS_AGENT_ALLOWED_DOMAINS"),
             max_rows=max_rows,
             max_turns=max_turns,
+            max_groups=max_groups,
         )
 
 
@@ -162,17 +170,20 @@ def geo_parent_columns(source: dict, field_name: str) -> list[str]:
 
 
 def additivity(field: dict) -> str | None:
-    """3치 가산성(Kimball) — additive / semi_additive / non_additive. 기존 메타에서 유도.
+    """3치 가산성(Kimball) — additive / semi_additive / non_additive.
 
-    additive=false → non_additive(비율·평균·순위·LQ). additive=true 이지만 cumulative_safe=false
-    → semi_additive(공간·범주엔 합산 가능하나 시간축 누적 합산은 왜곡: 재고·활성 건수형).
-    둘 다 true → 완전 가산(개·폐업 flow 처럼 시간 누적도 안전).
+    온톨로지의 ``additive_over``(가산 가능한 축 종류)가 정본이다 — querybuilder 가 집행하는
+    규칙과 **같은 근거**를 보고해야 "된다고 해놓고 400" 이 나지 않는다.
+    시간축이 빠져 있으면 semi_additive(재고성: 한 시점의 수위라 시간 합산 시 이중계산).
     """
     if field.get("role") != "measure":
         return None
     if not field.get("additive", True):
         return "non_additive"
-    return "additive" if field.get("cumulative_safe") else "semi_additive"
+    additive_over = field.get("additive_over")
+    if additive_over is not None and "time" not in additive_over:
+        return "semi_additive"
+    return "additive"
 
 
 # ── 내부 헬퍼 ─────────────────────────────────────────────────
@@ -194,10 +205,12 @@ def _resolve(name: Any) -> dict | None:
 
 
 def _source_value_labels(source: dict) -> dict[str, dict[str, str]]:
-    """이 소스의 필드에 해당하는 코드→한글 사전만 추린다(meta.value_labels 는 전역 키)."""
-    meta = ontology.registry.meta()
-    field_names = {f["name"] for f in source["fields"]}
-    return {k: v for k, v in meta["value_labels"].items() if k in field_names}
+    """이 소스의 코드→한글 사전(소스 스코프 정본).
+
+    전역 병합본을 필드명으로 거르면 같은 필드명을 쓰는 다른 소스의 라벨이 새어 들어온다
+    (실측 충돌 210건) — 레지스트리의 소스별 사전을 그대로 쓴다.
+    """
+    return ontology.registry.value_labels_for(source["name"])
 
 
 _VALUE_LABEL_CAP = 40  # describe_source 인라인 값 라벨 상한(프롬프트 예산 방어)
@@ -339,6 +352,17 @@ def describe_source(source: str) -> dict:
         "date_range": s.get("date_range"),
         "supports": s["supports"],
         "default_chart": s.get("default_chart"),
+        # 출처·신선도 — 낡았거나 통계가 부분적이면 그 사실을 알고 답해야 한다.
+        # lineage 는 일부 도메인만 수집돼 있어 '의존성 없음'과 '수집 안 됨'을 구분한다.
+        "provenance": {
+            **ontology.registry.provenance,
+            "materialized": s.get("materialized"),
+            "contract_enforced": s.get("contract_enforced"),
+            "lineage": s.get("lineage"),
+            "lineage_captured": s.get("lineage") is not None,
+            "quality": s.get("quality"),
+            "tags": s.get("tags") or [],
+        },
         "fields": fields,
         **_capped_value_labels(s),
         "chart_contracts": {
@@ -397,6 +421,21 @@ def run_query(
         assert_select_only(sql)  # 심층방어(회귀 방지)
     except ValueError as exc:
         return {"error": "unsafe_sql", "message": str(exc), "sql": sql}
+
+    # 사전 비용 게이트 — 실측 통계로 그룹 폭발을 실행 전에 막는다(통계가 없으면 통과).
+    estimated = estimate_groups(s, dims)
+    if estimated is not None and estimated > CONFIG.max_groups:
+        rollups = sorted({
+            column
+            for dim in dims if isinstance(dim, str)
+            for column in geo_parent_columns(s, dim)
+        })
+        hint = "축을 줄이거나 필터를 추가하세요."
+        if rollups:
+            hint = f"상위 축({', '.join(rollups)})으로 롤업하거나 필터를 추가하세요."
+        return {"error": "cost_rejected", "sql": sql,
+                "message": f"예상 그룹 수 {estimated:,} 가 상한 {CONFIG.max_groups:,} 를 넘습니다",
+                "estimated_groups": estimated, "hint": hint}
     try:
         result = backends.execute(s, sql, max_rows=eff_limit + 1)
     except Exception as exc:  # noqa: BLE001 — 실행 실패도 도구 결과로(루프가 관찰·재시도 가능)
@@ -418,6 +457,8 @@ def run_query(
         "row_count": len(rows),
         "truncated": truncated,
         "limit": eff_limit,
+        # mode 만으로는 'cache/stale 이 얼마나 낡았는지'를 알 수 없다 — 나이를 함께 준다.
+        "cached_at": result.get("cached_at"),
         "elapsed_ms": result.get("elapsed_ms"),
     }
 
@@ -454,6 +495,38 @@ def plan_query(
     return {"ok": True, "source": s["name"], "sql": sql, "backend": s.get("backend", "trino")}
 
 
+# ── 사전 비용 게이트 (실측 통계로 실행 전에 판정 — Trino 를 때리기 전에 막는다) ──
+def estimate_groups(source: dict, dims: list) -> int | None:
+    """그룹 카디널리티 추정 = ∏ distinct_count(축). 통계가 없으면 None(모르면 막지 않는다).
+
+    스냅샷 refresh 가 partial_basic 이라 상당수 컬럼에 통계가 없다 — 추정 불가를 '위험'으로
+    간주해 막으면 정상 질의가 대량 차단된다. 아는 만큼만 곱하고 모르면 판단을 보류한다.
+    """
+    fields = {f["name"]: f for f in source["fields"]}
+    total = 1
+    known = False
+    for dim in dims:
+        if isinstance(dim, dict):  # 구간 축 — (최대-최소)/폭 만큼 버킷이 생긴다
+            field = fields.get(dim.get("field"))
+            width = dim.get("bin_width")
+            if not field or not width:
+                continue
+            lo, hi = field.get("min"), field.get("max")
+            if lo is None or hi is None or hi <= lo:
+                continue
+            total *= max(1, math.ceil((float(hi) - float(lo)) / float(width)))
+            known = True
+            continue
+        field = fields.get(dim)
+        if field is None:
+            continue
+        distinct = field.get("distinct_count")
+        if distinct:
+            total *= max(1, int(distinct))
+            known = True
+    return total if known else None
+
+
 # ── 명명 지표(named metrics) 레지스트리 (선언형 — dbt metrics 의 얇은 대응) ──
 # 온톨로지 필드 위에 '이름 붙은 지표'를 얹는다. 비율 KPI(생존율·LQ 등)는 gold 에 이미 필드로
 # materialize 되어 있으므로 여기서는 (소스·측정값·집계·단위·필터)만 이름에 매핑한다.
@@ -464,28 +537,157 @@ NAMED_METRICS: dict[str, dict] = {
     "business_closed": {"source": "gold_license_flow_monthly", "measure": "cnt", "agg": "sum",
                         "filter": {"field": "event_type", "op": "eq", "value": "closed"},
                         "unit": "count", "label": "폐업 건수"},
-    "cohort_survival_rate": {"source": "gold_license_cohort_survival", "measure": "survival_rate",
-                             "agg": "avg", "unit": "ratio", "label": "코호트 생존율(평균)"},
+    # 가중 비율 — 종전 avg(survival_rate)는 코호트 크기를 무시한 비가중 평균이라 틀렸다(SHARE §7.1).
+    # require_dims: 경과연차를 고정하지 않고 전 구간을 합치면 '몇 년 차 생존율'인지 없는 수가 된다.
+    "cohort_survival_rate": {"source": "gold_license_cohort_survival", "kind": "ratio",
+                             "num": "survivors", "den": "cohort_n", "unit": "ratio",
+                             "require_dims": ["years_elapsed"],
+                             "label": "코호트 생존율(가중)"},
+    "early_close_ratio": {"source": "gold_license_lifespan", "kind": "ratio",
+                          "num": "closed_within_1y", "den": "n_closed", "unit": "ratio",
+                          "label": "1년 내 폐업 비율(가중)"},
+    # lq 는 원자 분자·분모가 gold 에 없는 파생 지수라 가중 재집계가 불가능하다 — 최대값으로만 읽는다.
     "industry_lq": {"source": "gold_license_gu_specialization", "measure": "lq", "agg": "max",
                     "unit": "index", "label": "자치구 특화지수(LQ, 최대)"},
 }
 
 
+def _metric_measure(name: str, spec: dict) -> dict:
+    """지표 정의 → run_query measures 항목."""
+    if spec.get("kind") == "ratio":
+        return {"agg": "ratio", "num": spec["num"], "den": spec["den"], "alias": name}
+    return {"field": spec["measure"], "agg": spec["agg"], "alias": name}
+
+
 def list_metrics() -> dict:
-    """명명 지표 목록(이름→소스·측정값·집계·단위). 도구/RAG 가 KPI 를 이름으로 부른다."""
-    return {"count": len(NAMED_METRICS),
-            "metrics": [{"name": k, **{f: v[f] for f in ("label", "unit", "source", "measure", "agg")}}
-                        for k, v in NAMED_METRICS.items()]}
+    """명명 지표 목록(이름→소스·집계 형태·단위). 도구/RAG 가 KPI 를 이름으로 부른다.
+
+    허용되지 않은(또는 스냅샷에 없는) 소스의 지표는 광고하지 않는다 — 부를 수 없는 지표를
+    목록에 남기면 에이전트가 존재하지 않는 능력을 시도한다.
+    """
+    out = []
+    for name, spec in NAMED_METRICS.items():
+        if _resolve(spec["source"]) is None:
+            continue
+        item = {"name": name, "label": spec["label"], "unit": spec["unit"],
+                "source": spec["source"], "kind": spec.get("kind", "simple")}
+        if spec.get("kind") == "ratio":
+            item.update(num=spec["num"], den=spec["den"])
+        else:
+            item.update(measure=spec["measure"], agg=spec["agg"])
+        if spec.get("require_dims"):
+            item["require_dims"] = spec["require_dims"]
+        out.append(item)
+    return {"count": len(out), "metrics": out}
 
 
 def run_metric(metric: str, dims: list | None = None, limit: int | None = None) -> dict:
     """명명 지표를 축(dims)별로 실행 — run_query 로 위임(온톨로지 계약·안전 경계 그대로)."""
-    m = NAMED_METRICS.get(metric)
-    if m is None:
+    spec = NAMED_METRICS.get(metric)
+    if spec is None:
         return {"error": "unknown_metric", "message": f"알 수 없는 지표: {metric!r}"}
-    return run_query(m["source"], dims=dims or [],
-                     measures=[{"field": m["measure"], "agg": m["agg"], "alias": metric}],
-                     filters=[m["filter"]] if m.get("filter") else [], limit=limit)
+    dims = dims or []
+    dim_names = {d["field"] if isinstance(d, dict) else d for d in dims}
+    missing = [d for d in spec.get("require_dims", []) if d not in dim_names]
+    if missing:
+        return {"error": "missing_required_dims", "message":
+                f"{metric} 지표는 {missing} 축이 있어야 의미가 성립합니다",
+                "hint": f"dims 에 {missing} 를 포함해 다시 호출하세요."}
+    return run_query(spec["source"], dims=dims,
+                     measures=[_metric_measure(metric, spec)],
+                     filters=[spec["filter"]] if spec.get("filter") else [], limit=limit)
+
+
+# ── 검색·역해결 (열거 전용 표면을 '찾을 수 있는' 표면으로) ──
+# 112개 소스를 나열만 할 수 있으면 LLM 은 소스 선택에서 헤맨다. 외부 의존성 없이(SHARE §2)
+# 스냅샷 문자열만으로 인덱스를 만들고, 레지스트리 갱신 시각으로 캐시를 무효화한다.
+_SEARCH_CACHE: dict[str, Any] = {"generated_at": None, "docs": []}
+
+
+def _tokens(text: str) -> list[str]:
+    """영문/숫자 토큰 + 한글 2-gram — 형태소 분석기 없이 한국어 부분일치를 잡는다."""
+    lowered = (text or "").lower()
+    words = re.findall(r"[a-z0-9]+", lowered)
+    hangul = re.findall(r"[가-힣]+", lowered)
+    grams = [chunk[i:i + 2] for chunk in hangul for i in range(max(1, len(chunk) - 1))]
+    return words + hangul + grams
+
+
+def _search_docs() -> list[dict]:
+    """소스별 검색 문서(이름·라벨·설명·필드). 스냅샷이 바뀌면 자동 재구축."""
+    generated_at = ontology.registry.generated_at
+    if _SEARCH_CACHE["generated_at"] == generated_at and _SEARCH_CACHE["docs"]:
+        return _SEARCH_CACHE["docs"]
+    docs = []
+    for source in ontology.registry.sources():
+        field_text = " ".join(
+            f"{f['name']} {f.get('label', '')}" for f in source["fields"])
+        haystack = " ".join([
+            source["name"], source.get("label", ""), source.get("description", ""),
+            source.get("domain", ""), field_text,
+        ])
+        docs.append({"source": source["name"], "domain": source["domain"],
+                     "label": source["label"], "tokens": set(_tokens(haystack)),
+                     "text": haystack.lower()})
+    _SEARCH_CACHE.update(generated_at=generated_at, docs=docs)
+    return docs
+
+
+def search_ontology(query: str, k: int = 8, domain: str | None = None) -> dict:
+    """자연어로 소스를 찾는다 — 이름·라벨·설명·필드명을 토큰/부분일치로 점수화."""
+    if not isinstance(query, str) or not query.strip():
+        return {"error": "bad_arguments", "message": "query 가 필요합니다"}
+    needles = set(_tokens(query))
+    raw = query.lower().strip()
+    hits = []
+    for doc in _search_docs():
+        source = ontology.registry.get(doc["source"])
+        if source is None or not _source_allowed(source):
+            continue
+        if domain and doc["domain"] != domain:
+            continue
+        score = len(needles & doc["tokens"])
+        if raw and raw in doc["text"]:
+            score += 5          # 원문 그대로 등장하면 강한 신호
+        if score:
+            hits.append({"source": doc["source"], "label": doc["label"],
+                         "domain": doc["domain"], "score": score})
+    hits.sort(key=lambda h: (-h["score"], h["source"]))
+    return {"count": len(hits), "results": hits[:max(1, int(k or 8))]}
+
+
+def resolve_label(text: str, field: str | None = None, source: str | None = None) -> dict:
+    """한글 표기 → 코드 (value_labels 역인덱스). 예: '강남구' → gu_code 11680.
+
+    온톨로지는 코드로 집계하므로 사람 말(한글 지명·업종명)을 필터에 쓰려면 코드가 필요하다.
+    동명이지역은 후보를 모두 돌려준다 — 임의로 하나를 고르면 조용히 틀린 지역을 세게 된다.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return {"error": "bad_arguments", "message": "text 가 필요합니다"}
+    needle = text.strip().lower()
+    names = [source] if source else [s["name"] for s in ontology.registry.sources()]
+    seen: set[tuple] = set()
+    candidates = []
+    for name in names:
+        resolved = _resolve(name)
+        if resolved is None:
+            continue
+        for field_name, mapping in ontology.registry.value_labels_for(name).items():
+            if field and field_name != field:
+                continue
+            for code, label in mapping.items():
+                low = str(label).lower()
+                if needle == low or needle in low:
+                    key = (field_name, str(code), str(label))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    candidates.append({"field": field_name, "code": str(code),
+                                       "label": str(label), "source": name,
+                                       "exact": needle == low})
+    candidates.sort(key=lambda c: (not c["exact"], c["field"], c["code"]))
+    return {"count": len(candidates), "candidates": candidates[:50],
+            "ambiguous": len({(c["field"], c["code"]) for c in candidates}) > 1}
 
 
 # ── 형식적 내보내기: JSON-LD @context / SKOS 개념 스킴 (정직한 '시맨틱' 노출, 추론기 불필요) ──
@@ -532,8 +734,11 @@ _SPEC_MEASURE = {
     "type": "object", "additionalProperties": False,
     "properties": {
         "field": {"type": "string", "description": "측정 대상 필드명(count 는 생략 가능)"},
-        "agg": {"type": "string", "enum": sorted(querybuilder.AGGS),
-                "description": "집계. 필드의 allowed_aggs 안에서만. 비가산(additive=false)은 sum 금지"},
+        "agg": {"type": "string", "enum": sorted(querybuilder.AGGS) + ["ratio"],
+                "description": ("집계. 필드의 allowed_aggs 안에서만. 비가산(additive=false)은 sum 금지. "
+                                "'ratio' 는 가중 비율 — field 대신 num·den 을 준다")},
+        "num": {"type": "string", "description": "ratio 분자(가산 measure). 예: survivors"},
+        "den": {"type": "string", "description": "ratio 분모(가산 measure). 예: cohort_n"},
         "alias": {"type": "string"},
     },
 }
@@ -649,6 +854,35 @@ def tool_schemas() -> list[dict]:
                             "한 번에 반환한다. 세션 시작 시 그라운딩 프리앰블로 쓴다."),
             "input_schema": {"type": "object", "additionalProperties": False, "properties": {}},
         },
+        {
+            "name": "search_ontology",
+            "description": ("자연어로 소스를 찾는다(이름·라벨·설명·필드명 검색). 112개 소스를 "
+                            "전부 나열하는 대신 이걸로 좁힌 뒤 describe_source 를 부른다."),
+            "input_schema": {
+                "type": "object", "additionalProperties": False,
+                "properties": {
+                    "query": {"type": "string", "description": "예: '자치구 개폐업', '지하철 혼잡'"},
+                    "k": {"type": "integer", "minimum": 1, "maximum": 50},
+                    "domain": {"type": "string"},
+                },
+                "required": ["query"],
+            },
+        },
+        {
+            "name": "resolve_label",
+            "description": ("한글 표기를 코드로 되돌린다(예: '강남구' → gu_code 11680). 집계·필터는 "
+                            "코드로 하므로 사람 말을 필터 값으로 쓰기 전에 이걸 부른다. "
+                            "동명이지역은 후보를 모두 돌려주므로 ambiguous 를 확인한다."),
+            "input_schema": {
+                "type": "object", "additionalProperties": False,
+                "properties": {
+                    "text": {"type": "string"},
+                    "field": {"type": "string", "description": "특정 필드로 한정(선택)"},
+                    "source": {"type": "string", "description": "특정 소스로 한정(선택)"},
+                },
+                "required": ["text"],
+            },
+        },
     ]
 
 
@@ -660,6 +894,8 @@ TOOL_DISPATCH = {
     "run_query": run_query,
     "list_metrics": list_metrics,
     "run_metric": run_metric,
+    "search_ontology": search_ontology,
+    "resolve_label": resolve_label,
     # "ontology_manifest" 는 파일 하단 정의라 정의 직후 아래에서 등록한다.
 }
 
@@ -685,6 +921,28 @@ def call_tool(name: str, arguments: dict | None) -> dict:
         return {"error": "tool_error", "message": f"{type(exc).__name__}: {exc}"}
 
 
+# ── 계약 버전 (자동 파생 표면을 '버전 있는 계약'으로) ──
+# 도구 표면은 스냅샷에서 자동 파생되므로 상류가 바뀌면 조용히 계약이 변한다.
+# semver 는 손으로 올리고, hash 는 실제 표면에서 계산해 CI 가 드리프트를 잡는다.
+CONTRACT_VERSION = "1.1.0"
+
+
+def contract_hash() -> str:
+    """도구 계약(도구 이름·입력 스키마·역할 어휘·도표 슬롯)의 결정적 해시."""
+    import hashlib
+
+    meta = ontology.registry.meta()
+    payload = json.dumps({
+        "tools": [{"name": t["name"], "input_schema": t["input_schema"]}
+                  for t in sorted(tool_schemas(), key=lambda t: t["name"])],
+        "roles": sorted(set(ROLE_CONCEPT) | set(GEO_PARENT)),
+        "charts": {name: [s["name"] for s in spec["slots"]]
+                   for name, spec in sorted(meta["chart_types"].items())},
+        "aggregations": sorted(querybuilder.AGGS) + ["ratio"],
+    }, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
 # ── 온톨로지 매니페스트 (기계 판독형 요약 — 스키마 압축기 겸 보강 노출) ──
 def ontology_manifest() -> dict:
     """온톨로지 전체를 프롬프트 예산에 맞게 압축한 기계 판독형 요약.
@@ -695,6 +953,9 @@ def ontology_manifest() -> dict:
     meta = ontology.registry.meta()
     return {
         "generated_at": meta["generated_at"],
+        "contract_version": CONTRACT_VERSION,
+        "contract_hash": contract_hash(),
+        "provenance": ontology.registry.provenance,
         "identity_rule": "코드↔한글 동반 컬럼이 있으면 집계·식별은 코드(GROUP BY), 표기는 한글(value_labels).",
         "role_vocabulary": sorted(set(ROLE_CONCEPT) | set(GEO_PARENT)),
         "role_concepts": ROLE_CONCEPT,
