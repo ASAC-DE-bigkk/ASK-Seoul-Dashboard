@@ -223,6 +223,52 @@ def test_weighted_ratio_differs_from_unweighted_avg():
     assert weighted != naive
 
 
+def test_having_defaults_to_count_not_sum():
+    """HAVING 기본 집계는 count 다 — SELECT 기본값(sum)을 빌리면 기존 스펙의 SQL 이 조용히
+    바뀌고(캐시 무효) `having count(*) >= N` 관용구가 깨진다."""
+    source = ontology.registry.get("gold_culture_activity_by_dong")
+    if source is None:
+        pytest.skip("소스 없음")
+    sql = querybuilder.build(source, {
+        "dims": ["admin_dong_code"],
+        "measures": [{"field": "activities_count", "agg": "max"}],
+        "having": [{"field": "activities_count", "op": "gte", "value": 1}], "limit": 10})
+    assert 'count("activities_count")' in sql.split("having")[1]
+
+
+def test_having_supports_the_count_star_small_cell_idiom():
+    source = ontology.registry.get("gold_culture_activity_by_dong")
+    if source is None:
+        pytest.skip("소스 없음")
+    sql = querybuilder.build(source, {
+        "dims": ["admin_dong_code"], "measures": [{"agg": "count"}],
+        "having": [{"op": "gte", "value": 5}], "limit": 10})
+    assert "count(*)" in sql.split("having")[1]
+
+
+def test_ratio_and_having_cannot_bypass_the_stock_gate():
+    """ratio 는 내부적으로 sum 을 두 번 쓰고, HAVING 도 같은 집계 어휘를 쓴다 —
+    집계 '이름'만 보면 둘 다 게이트를 우회한다."""
+    source = ontology.registry.get("gold_culture_boxoffice_daily")
+    if source is None:
+        pytest.skip("소스 없음")
+    fields = {f["name"]: f for f in source["fields"]}
+    geo = next((n for n, f in fields.items()
+                if f["role"].startswith("geo") and f.get("chartable", True)), None)
+    additive = next((n for n, f in fields.items()
+                     if f["role"] == "measure" and f.get("additive")
+                     and "time" in (f.get("additive_over") or [])), None)
+    if not (geo and additive and "seat_count" in fields):
+        pytest.skip("대상 필드 없음")
+    with pytest.raises(querybuilder.SpecError):  # ratio 경로
+        querybuilder.build(source, {"dims": [geo], "measures": [
+            {"agg": "ratio", "num": "seat_count", "den": additive}]})
+    with pytest.raises(querybuilder.SpecError):  # HAVING 경로
+        querybuilder.build(source, {"dims": [geo], "measures": [{"agg": "count"}],
+                                    "having": [{"field": "seat_count", "agg": "sum",
+                                                "op": "gte", "value": 1}]})
+
+
 def test_ratio_rejects_non_additive_parts():
     source = ontology.registry.get("gold_license_cohort_survival")
     if source is None:
@@ -235,8 +281,11 @@ def test_ratio_rejects_non_additive_parts():
 
 
 # ── 가산성 집행 (재고 × 시간축) ───────────────────────────────
-def test_stock_measure_cannot_be_summed_over_time():
-    """재고성 측정값 + 시간축 + sum = 이중계산 → 거부. 같은 필드도 시간축이 없으면 통과."""
+def test_stock_measure_may_be_summed_per_time_slice():
+    """방향이 핵심 — 시간축이 GROUP BY 에 **있으면** 시각별 합이라 옳다(거부하면 안 된다).
+
+    일자별 sum(seat_count) = 그 날 전체 좌석 수. 이걸 막으면 재고 시계열 자체가 불가능해진다.
+    """
     source = ontology.registry.get("gold_culture_boxoffice_daily")
     if source is None:
         pytest.skip("소스 없음")
@@ -244,12 +293,41 @@ def test_stock_measure_cannot_be_summed_over_time():
     if "seat_count" not in fields:
         pytest.skip("seat_count 없음")
     assert agent_tools.additivity(fields["seat_count"]) == "semi_additive"
-    with pytest.raises(querybuilder.SpecError):
-        querybuilder.build(source, {"dims": ["snapshot_date"],
-                                    "measures": [{"field": "seat_count", "agg": "sum"}]})
-    # avg 는 시간축에서도 허용된다
     querybuilder.build(source, {"dims": ["snapshot_date"],
+                                "measures": [{"field": "seat_count", "agg": "sum"}]})
+
+
+def test_stock_measure_cannot_be_summed_across_time():
+    """시간축이 **없으면** 여러 시점이 한 그룹으로 접혀 이중계산 → 거부."""
+    source = ontology.registry.get("gold_culture_boxoffice_daily")
+    if source is None:
+        pytest.skip("소스 없음")
+    fields = {f["name"]: f for f in source["fields"]}
+    geo = next((n for n, f in fields.items()
+                if f["role"].startswith("geo") and f.get("chartable", True)), None)
+    if not geo or "seat_count" not in fields:
+        pytest.skip("대상 필드 없음")
+    with pytest.raises(querybuilder.SpecError):
+        querybuilder.build(source, {"dims": [geo],
+                                    "measures": [{"field": "seat_count", "agg": "sum"}]})
+    # avg 는 시간을 접어도 의미가 유지된다
+    querybuilder.build(source, {"dims": [geo],
                                 "measures": [{"field": "seat_count", "agg": "avg"}]})
+
+
+def test_pinning_a_single_instant_makes_the_stock_sum_valid():
+    """시각을 한 점으로 고정하면 접을 시간이 없으므로 합산이 옳다."""
+    source = ontology.registry.get("gold_culture_boxoffice_daily")
+    if source is None:
+        pytest.skip("소스 없음")
+    fields = {f["name"]: f for f in source["fields"]}
+    geo = next((n for n, f in fields.items()
+                if f["role"].startswith("geo") and f.get("chartable", True)), None)
+    if not geo or "seat_count" not in fields:
+        pytest.skip("대상 필드 없음")
+    querybuilder.build(source, {
+        "dims": [geo], "measures": [{"field": "seat_count", "agg": "sum"}],
+        "filters": [{"field": "snapshot_date", "op": "eq", "value": "2026-07-01"}]})
 
 
 def test_non_additive_keeps_its_own_error_message():
@@ -264,6 +342,30 @@ def test_non_additive_keeps_its_own_error_message():
         querybuilder.build(source, {"dims": ["event_start_date"],
                                     "measures": [{"field": "days_to_peak", "agg": "sum"}]})
     assert "재고" not in str(excinfo.value)
+
+
+def test_preferred_agg_for_stocks_depends_on_whether_time_can_be_folded():
+    """재고의 기본 집계는 소스에 접을 시간축이 있을 때만 avg 로 낮춘다.
+
+    preferred_agg 는 문맥을 모르는 스칼라인데 sum 의 타당성은 '시간을 접는가'에 달려 있다.
+    시간축이 없는 소스에서까지 avg 로 낮추면 원형(sum/count 전용) 추천이 사라진다.
+    """
+    checked = 0
+    for source in ontology.registry.sources():
+        has_time_grain = any(f["role"] in ("time", "sequence") and f.get("chartable", True)
+                             for f in source["fields"])
+        for field in source["fields"]:
+            additive_over = field.get("additive_over")
+            if additive_over is None or "time" in additive_over or not field.get("additive"):
+                continue
+            checked += 1
+            if has_time_grain:
+                assert field["preferred_agg"] != "sum", (
+                    f"{source['name']}.{field['name']}: 시간축이 있는데 sum 을 기본 제안")
+            else:
+                assert field["preferred_agg"] == "sum", (
+                    f"{source['name']}.{field['name']}: 접을 시간이 없는데 sum 을 뺏겼다")
+    assert checked, "재고성 측정값을 하나도 찾지 못했다"
 
 
 def test_ontology_never_recommends_a_spec_it_would_reject():
@@ -399,6 +501,23 @@ def test_search_ontology_requires_a_query():
     assert agent_tools.search_ontology("")["error"] == "bad_arguments"
 
 
+def test_search_ontology_coerces_and_clamps_k():
+    """모델이 k 를 문자열·거대값으로 줘도 예외 대신 흡수해야 한다(I5)."""
+    for k in ("abc", None, -5, 10**9, 3.7):
+        out = agent_tools.search_ontology("개폐업", k=k)
+        assert "error" not in out
+        assert len(out["results"]) <= 50
+
+
+def test_resolve_label_dedupes_by_field_and_code():
+    """소스별 표기 이형(신사동 / 신사동·강남구)이 같은 코드를 여러 후보로 부풀리면 안 된다."""
+    out = agent_tools.resolve_label("신사동")
+    if out["count"] < 1:
+        pytest.skip("대상 라벨 없음")
+    keys = [(c["field"], c["code"]) for c in out["candidates"]]
+    assert len(keys) == len(set(keys))
+
+
 def test_resolve_label_maps_korean_name_to_code():
     out = agent_tools.resolve_label("강남구", field="gu_code")
     assert out["count"] >= 1
@@ -501,17 +620,22 @@ def test_save_validation_and_query_build_never_disagree():
         assert saved == built, f"{chart.id}: 저장={saved} 조회={built} 계약 분열"
 
 
-def test_stock_chart_is_rejected_by_both_paths():
+def test_time_folding_stock_chart_is_rejected_by_both_paths():
+    """저장 검증과 조회 빌드가 **같은 함수**를 쓰는지 — 규칙이 두 벌이면 갈라진다."""
     import importlib
 
     charts_router = importlib.import_module("app.charts.router")
     from app.charts.models import ChartConfig
 
     source = ontology.registry.get("gold_culture_boxoffice_daily")
-    if source is None:
-        pytest.skip("소스 없음")
-    chart = ChartConfig(id="stock-time", type="line", source=source["name"],
-                        bindings={"axis": "snapshot_date", "value": "seat_count"}, agg="sum")
+    if source is None or "map_seoul" not in source.get("supports", []):
+        pytest.skip("대상 소스/도표 없음")
+    fields = {f["name"]: f for f in source["fields"]}
+    if "seat_count" not in fields or "gu" not in fields:
+        pytest.skip("대상 필드 없음")
+    # 지역만 축으로 두면 여러 날짜가 접힌다 → 양쪽 모두 거부해야 한다
+    chart = ChartConfig(id="stock-folded", type="map_seoul", source=source["name"],
+                        bindings={"region": "gu", "value": "seat_count"}, agg="sum")
     with pytest.raises(querybuilder.SpecError):
         charts_router._validate_charts([chart])
     built_source, spec = _spec_from_chart(chart)

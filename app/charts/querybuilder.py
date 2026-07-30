@@ -258,41 +258,95 @@ def _ratio_expr(num: Any, den: Any, fields: dict[str, dict],
     return f"{numerator} / nullif({denominator}, 0)"
 
 
-def assert_additive_over_dims(dims: list, measures: list,
-                              fields: dict[str, dict]) -> None:
-    """재고(semi-additive) 측정값을 시간축과 함께 sum 하는 것을 막는다 — 이중계산 방지.
+def assert_additive_over_dims(dims: list, measures: list, fields: dict[str, dict],
+                              *, filters: list | None = None,
+                              date_range: dict | None = None) -> None:
+    """재고(semi-additive) 측정값을 **시간을 접어서** sum 하는 것을 막는다 — 이중계산 방지.
 
     Kimball semi-additive: 한 시점의 '수위'(재고·정원·활성수)는 공간·범주로는 합산해도 옳지만
-    시간으로 합산하면 같은 대상을 여러 번 센다. 온톨로지의 ``additive_over`` 가 정본이고
-    여기서는 집행만 한다(분류는 ontology._measure_semantics).
+    **시간으로 합산하면** 같은 대상을 여러 번 센다. 여기서 방향이 중요하다 —
+
+    - 시간축이 GROUP BY 에 **있으면** 시각별로 나눠 보는 것이라 안전하다
+      (일자별 sum(seat_count) = 그 날 전체 좌석 수).
+    - 시간축이 **없으면** 여러 시점이 한 그룹으로 접히므로 이중계산이다
+      (자치구별 sum(seat_count) = 같은 극장 좌석을 날짜 수만큼 더한 값).
+
+    그래서 '시간이 접히는 경우'만 거부한다. 접을 시간이 없거나(분석용 시간 필드 없음),
+    스냅샷이 단일 시점이거나, 필터가 시각을 한 점으로 고정했으면 통과시킨다.
+    분류 정본은 ontology.additive_over 이고 여기서는 집행만 한다.
 
     **거부만 한다 — 통과하는 스펙의 SQL 텍스트는 바뀌지 않는다**(캐시 키 불변, SHARE §9.0).
-    구간(bin) 축으로 쓰인 measure 는 그룹 키라 집계 대상이 아니므로 검사에서 제외된다.
     """
+    stock_measures = []
+    for m in measures:
+        # ratio 도 내부적으로 분자·분모를 sum 하므로 같은 검사를 받아야 한다 —
+        # 집계 '이름'만 보면 sum 을 두 번 쓰는 ratio 가 게이트를 우회한다.
+        agg = m.get("agg", "sum")
+        if agg == "sum":
+            names = [m.get("field")]
+        elif agg == "ratio":
+            names = [m.get("num"), m.get("den")]
+        else:
+            continue
+        for name in names:
+            # 비가산 필드는 allowed_aggs 에 sum 이 없어 _measure_expr 가 제 사유로 거부한다
+            # (additive_over 가 빈 목록이라 여기서 먼저 잡으면 '재고'라는 틀린 이유를 대게 된다).
+            field = fields.get(name or "")
+            if field is None or not field.get("additive"):
+                continue
+            additive_over = field.get("additive_over")
+            if additive_over is not None and "time" not in additive_over:
+                stock_measures.append(field)
+    if not stock_measures:
+        return
+
+    # 접을 시간축이 있는가 — 적재/수집 시각(technical)은 분석 그레인이 아니라 세지 않는다.
+    if not any(f.get("role") in TIME_GROUP_ROLES and f.get("chartable", True)
+               for f in fields.values()):
+        return
+    # 단일 시점 스냅샷이면 접을 시간 자체가 없다.
+    if (date_range and date_range.get("min") is not None
+            and date_range.get("min") == date_range.get("max")):
+        return
+
     bin_fields = {d["field"] for d in dims if isinstance(d, dict)}
-    # role 이 없는 손수 만든 source dict(테스트·외부 호출)도 안전하게 통과시킨다 — 여기서
-    # KeyError 가 나면 안전 계약이 아니라 크래시가 된다.
+    # role 이 없는 손수 만든 source dict(테스트·외부 호출)도 안전히 통과 — 여기서 KeyError 가
+    # 나면 안전 계약이 아니라 크래시가 된다.
     group_roles = {
         fields[name].get("role")
         for name in (d if isinstance(d, str) else d["field"] for d in dims)
         if name in fields and name not in bin_fields
     }
-    if not (group_roles & TIME_GROUP_ROLES):
+    if group_roles & TIME_GROUP_ROLES:
+        return  # 시각별로 나눠 보는 중 — 시간을 접지 않았다
+    if _pins_single_instant(filters or [], fields):
         return
-    for m in measures:
-        if m.get("agg") != "sum":
+
+    names = ", ".join(sorted({f["name"] for f in stock_measures}))
+    raise SpecError(
+        f"'{names}' 은(는) 특정 시점의 상태(재고)라 여러 시점을 한데 합산하면 이중계산이 "
+        f"됩니다 — 시간축을 축에 추가하거나 시각을 하나로 고정하거나 max/avg 를 쓰세요"
+    )
+
+
+def _pins_single_instant(nodes: list, fields: dict[str, dict]) -> bool:
+    """필터가 시간축을 한 시점으로 고정했는지(eq, 또는 값 1개짜리 in)."""
+    for node in nodes:
+        children = node.get("filters", []) if _is_group(node) else [node]
+        if not isinstance(children, list):
             continue
-        field = fields.get(m.get("field") or "")
-        if field is None:
-            continue
-        # 비가산 필드는 애초에 allowed_aggs 에 sum 이 없어 _measure_expr 가 제 메시지로 거부한다
-        # (additive_over 가 빈 목록이라 여기서 먼저 잡으면 '재고' 라는 틀린 이유를 대게 된다).
-        additive_over = field.get("additive_over")
-        if field.get("additive") and additive_over is not None and "time" not in additive_over:
-            raise SpecError(
-                f"'{field['name']}' 은(는) 특정 시점의 상태(재고)라 시간축과 함께 합산하면 "
-                f"이중계산이 됩니다 — max/avg 집계를 쓰거나 시간축을 빼세요"
-            )
+        for leaf in children:
+            if not isinstance(leaf, dict):
+                continue
+            field = fields.get(leaf.get("field") or "")
+            if field is None or field.get("role") not in TIME_GROUP_ROLES:
+                continue
+            op, value = leaf.get("op", "eq"), leaf.get("value")
+            if op == "eq" and not _is_blank(value):
+                return True
+            if op == "in" and isinstance(value, (list, tuple)) and len(value) == 1:
+                return True
+    return False
 
 
 def measure_expr_from_spec(spec: dict, fields: dict[str, dict],
@@ -570,8 +624,10 @@ def _having_condition(h: dict, fields: dict[str, dict], dialect: str = "trino") 
     op = h.get("op", "gte")
     if op not in HAVING_OPS:
         raise SpecError(f"집계 조건에 허용되지 않는 연산자입니다: {op}")
-    agg = h.get("agg", "count")
-    expr = measure_expr_from_spec(h, fields, dialect)
+    # HAVING 의 기본 집계는 **count** 다(models.HavingSpec 계약) — SELECT 의 기본값(sum)을
+    # 빌려 쓰면 agg 를 생략한 기존 스펙의 SQL 이 조용히 바뀌고(캐시 키 무효), 소표본 억제
+    # 관용구 `having count(*) >= N`(필드 없는 형태)이 "sum 집계에는 필드가 필요합니다" 로 깨진다.
+    expr = measure_expr_from_spec({**h, "agg": h.get("agg", "count")}, fields, dialect)
     v = h.get("value")
     if op == "between":
         if not isinstance(v, (list, tuple)) or len(v) != 2:
@@ -621,7 +677,11 @@ def build(source: dict, spec: dict) -> str:
         raise SpecError("차원 형식이 올바르지 않습니다")
     if len(dim_names) != len(set(dim_names)):
         raise SpecError("차원 필드는 서로 달라야 합니다")
-    assert_additive_over_dims(dims, measures, fields)
+    # HAVING 도 SELECT 와 같은 집계 어휘를 쓰므로 같은 가산성 검사를 받는다 —
+    # 안 그러면 SELECT 에서 막힌 재고 합산을 HAVING 으로 우회할 수 있다.
+    assert_additive_over_dims(dims, list(measures) + list(spec.get("having") or []), fields,
+                              filters=spec.get("filters") or [],
+                              date_range=source.get("date_range"))
 
     select_parts: list[str] = []
     aliases: list[str] = []

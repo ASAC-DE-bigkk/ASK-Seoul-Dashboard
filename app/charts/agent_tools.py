@@ -157,6 +157,8 @@ def geo_parent_columns(source: dict, field_name: str) -> list[str]:
     소스에 gu_code 가 있으면 [gu_code] 를 돌려주고, AI 는 그 컬럼으로 그룹핑해 구 단위로 올린다.
     querybuilder 를 건드리지 않고 '이미 화이트리스트에 있는 상위 컬럼 선택'으로 롤업을 실현한다.
     """
+    if not isinstance(field_name, str):
+        return []
     field = next((f for f in source["fields"] if f["name"] == field_name), None)
     if field is None:
         return []
@@ -253,6 +255,10 @@ def promote_dims_to_codes(source: dict, dims: list) -> tuple[list, dict[str, str
     by_name = {f["name"]: f for f in source["fields"]}
     promoted: dict[str, str] = {}
     out: list = []
+    # 축 목록이 리스트가 아니면(문자열 등) 문자 단위로 순회돼 엉뚱한 축이 만들어진다 —
+    # 형태 오류는 빌더가 제 사유로 거부하도록 그대로 넘긴다.
+    if not isinstance(dims, list):
+        return list(dims) if isinstance(dims, (tuple, set)) else [], promoted
     for d in dims:
         if isinstance(d, str):
             field = by_name.get(d)
@@ -522,7 +528,12 @@ def estimate_groups(source: dict, dims: list) -> int | None:
             lo, hi = field.get("min"), field.get("max")
             if lo is None or hi is None or float(hi) <= float(lo):
                 continue
-            buckets = max(1, math.ceil((float(hi) - float(lo)) / width))
+            # 극소 폭(1e-300 등)은 나눗셈이 inf 가 되고 math.ceil(inf) 는 OverflowError 다 —
+            # 빌더가 통과시키는 값이므로 여기서 크래시하면 도구가 예외를 던지게 된다(I5).
+            ratio = (float(hi) - float(lo)) / width
+            if not math.isfinite(ratio):
+                return ceiling
+            buckets = max(1, math.ceil(ratio))
         else:
             field = fields.get(dim)
             distinct = field.get("distinct_count") if field else None
@@ -595,8 +606,14 @@ def run_metric(metric: str, dims: list | None = None, limit: int | None = None) 
     spec = NAMED_METRICS.get(metric)
     if spec is None:
         return {"error": "unknown_metric", "message": f"알 수 없는 지표: {metric!r}"}
-    dims = dims or []
-    dim_names = {d["field"] if isinstance(d, dict) else d for d in dims}
+    # 축 형태가 어긋나도 예외 대신 error dict 로 나가야 한다(I5) — 중첩 배열·field 없는 dict
+    # 같은 흔한 오형식에서 set 조립이 터지면 에이전트 루프가 죽는다.
+    dims = dims if isinstance(dims, list) else []
+    dim_names = set()
+    for dim in dims:
+        name = dim.get("field") if isinstance(dim, dict) else dim
+        if isinstance(name, str):
+            dim_names.add(name)
     missing = [d for d in spec.get("require_dims", []) if d not in dim_names]
     if missing:
         return {"error": "missing_required_dims", "message":
@@ -646,6 +663,11 @@ def search_ontology(query: str, k: int = 8, domain: str | None = None) -> dict:
     """자연어로 소스를 찾는다 — 이름·라벨·설명·필드명을 토큰/부분일치로 점수화."""
     if not isinstance(query, str) or not query.strip():
         return {"error": "bad_arguments", "message": "query 가 필요합니다"}
+    try:  # 모델이 문자열/실수로 k 를 줘도 예외 대신 기본값으로 흡수한다(I5)
+        top_k = int(k)
+    except (TypeError, ValueError):
+        top_k = 8
+    top_k = max(1, min(top_k, 50))
     needles = set(_tokens(query))
     raw = query.lower().strip()
     hits = []
@@ -662,7 +684,7 @@ def search_ontology(query: str, k: int = 8, domain: str | None = None) -> dict:
             hits.append({"source": doc["source"], "label": doc["label"],
                          "domain": doc["domain"], "score": score})
     hits.sort(key=lambda h: (-h["score"], h["source"]))
-    return {"count": len(hits), "results": hits[:max(1, int(k or 8))]}
+    return {"count": len(hits), "results": hits[:top_k]}
 
 
 def resolve_label(text: str, field: str | None = None, source: str | None = None) -> dict:
@@ -687,7 +709,9 @@ def resolve_label(text: str, field: str | None = None, source: str | None = None
             for code, label in mapping.items():
                 low = str(label).lower()
                 if needle == low or needle in low:
-                    key = (field_name, str(code), str(label))
+                    # 중복 판정은 (필드, 코드)로 한다 — 소스마다 표기 이형(신사동 / 신사동·강남구)이
+                    # 있어 라벨까지 키에 넣으면 같은 코드가 여러 후보로 부풀어 ambiguous 를 오염시킨다.
+                    key = (field_name, str(code))
                     if key in seen:
                         continue
                     seen.add(key)

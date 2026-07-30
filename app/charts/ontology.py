@@ -105,6 +105,10 @@ STOCK_MEASURE_PATTERN = re.compile(
 # 가산 가능한 축(dimension) 종류 — semi-additive 는 시간축만 빠진다.
 ADDITIVE_OVER_ALL = ["time", "sequence", "category", "geo"]
 ADDITIVE_OVER_STOCK = ["category", "geo"]
+# 이름 기반 추론의 탈출구 — 같은 개념인데 철자가 달라(available_count vs unavailable_count)
+# 한쪽만 잡히는 경우를 소스별로 바로잡는다. 패턴을 넓히면 진짜 flow 가 오분류되므로,
+# 예외는 정규식이 아니라 여기서 이름으로 못박는다(True=재고, False=흐름).
+STOCK_OVERRIDES: dict[str, dict[str, bool]] = {}
 CUMULATIVE_SAFE_FIELDS: dict[str, set[str]] = {
     "gold_license_churn_yearly": {"opened", "closed", "net_change"},
     "gold_license_flow_daily": {"cnt"},
@@ -506,12 +510,9 @@ def _measure_semantics(source_name: str, name: str, role: str) -> dict[str, Any]
     allowed = ["sum", "avg", "min", "max", "count", "count_distinct"]
     if not additive:
         allowed.remove("sum")
-    stock = additive and bool(STOCK_MEASURE_PATTERN.search(lowered))
-    if stock:
-        # 재고성은 sum 을 **허용**하되(구별 합계는 옳다) 기본 제안은 avg 로 둔다 —
-        # 자동 추천·자동 바인딩은 축을 가리지 않고 preferred_agg 를 집으므로, sum 을 기본으로
-        # 두면 시간축과 짝지어졌을 때 빌더가 거부하는 조합을 온톨로지 스스로 추천하게 된다.
-        preferred = "avg"
+    override = STOCK_OVERRIDES.get(source_name, {}).get(name)
+    stock = additive and (bool(STOCK_MEASURE_PATTERN.search(lowered))
+                          if override is None else override)
     return {
         "preferred_agg": preferred,
         "additive": additive,
@@ -692,9 +693,11 @@ class Registry:
         for t in snap["tables"]:
             # 승격 게이트는 '실측' 사전만 본다 — 정적 VALUE_LABELS(UNK 등 부분 사전)만으로
             # 승격을 켜면 라벨 없는 코드가 축에 생으로 노출된다(스냅샷 퇴화 시 안전장치).
-            # **이 소스의** 사전만 본다: 옆 소스에 라벨이 있다고 승격하면 이 소스의 축이
-            # 라벨 없는 생코드로 노출된다.
-            labeled = set(self._source_code_labels.get(t["name"], {}))
+            # 판정은 **이 소스 사전 ∪ 전역 병합본**으로 한다: 자기 사전이 비어 있어도
+            # (culture 계열 41개 소스가 그렇다) 코드로 승격해야 동명이동(신사동 강남·관악)이
+            # 합산되지 않는다(SHARE §7.2 · 설계의도 D-3-4). 라벨은 value_labels_for 가
+            # 전역 병합본을 폴백으로 채워 축이 생코드로 노출되지 않게 보장한다.
+            labeled = set(self._source_code_labels.get(t["name"], {})) | set(self._code_labels)
             curated = CURATED.get(t["name"], {})
             fields = []
             for c in t["columns"]:
@@ -724,6 +727,19 @@ class Registry:
                 })
             # 동반 필드 메타 — 표시 필드에 id_field(집계 식별을 코드로 승격), 식별 필드에
             # label_field. 승격은 코드 라벨 사전이 있을 때만 허용(축이 생코드로 노출 방지).
+            # 재고성 측정값의 기본 집계는 **소스에 접을 시간축이 있을 때만** avg 로 낮춘다.
+            # preferred_agg 는 문맥을 모르는 스칼라인데 sum 의 타당성은 '시간을 접는가'에
+            # 달려 있다 — 시간 그레인이 있는 소스에서 sum 을 기본으로 두면 자동 바인딩이
+            # 빌더가 거부할 조합을 만들어낸다(온톨로지가 스스로 모순된다). 시간축이 없는
+            # 소스(동×업종 매트릭스 등)는 sum 이 옳으므로 그대로 둔다 — 원형(sum/count 전용)
+            # 추천도 보존된다.
+            if any(f["role"] in ("time", "sequence") and f.get("chartable", True)
+                   for f in fields):
+                for field in fields:
+                    additive_over = field.get("additive_over")
+                    if (field.get("preferred_agg") == "sum" and additive_over is not None
+                            and "time" not in additive_over):
+                        field["preferred_agg"] = "avg"
             by_name = {f["name"]: f for f in fields}
             for ident, disp in companion_pairs(by_name):
                 ident_f, disp_f = by_name[ident], by_name[disp]
@@ -801,11 +817,17 @@ class Registry:
         self._fresh()
         source = self._sources.get(source_name)
         field_names = {f["name"] for f in source["fields"]} if source else set()
+        # 1) 전역 병합본을 폴백 기본층으로 깐다 — 자기 사전이 비어 있는 소스(culture 계열
+        #    41개)도 축 라벨을 잃지 않는다. 2) 그 위에 이 소스의 실측 사전을 덮어 충돌을
+        #    해소한다(같은 코드에 다른 라벨이 붙던 210건). 3) 표준 체계 큐레이션이 최우선.
         labels: dict[str, dict[str, str]] = {
             field: dict(mapping)
-            for field, mapping in self._source_code_labels.get(source_name, {}).items()
+            for field, mapping in self._code_labels.items()
             if not field_names or field in field_names
         }
+        for field, mapping in self._source_code_labels.get(source_name, {}).items():
+            if not field_names or field in field_names:
+                labels.setdefault(field, {}).update(mapping)
         for field, mapping in VALUE_LABELS.items():
             if field_names and field not in field_names:
                 continue

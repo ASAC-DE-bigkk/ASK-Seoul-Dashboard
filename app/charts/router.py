@@ -162,13 +162,6 @@ def _validate_charts(charts) -> None:
                 raise querybuilder.SpecError(
                     "이 측정값은 시간 누적 시 중복 합산될 수 있어 누적 경주를 사용할 수 없습니다"
                 )
-        # 그룹 축 role 집합 — measure 를 받지 않는 슬롯이 곧 GROUP BY 축이다
-        # (프론트 buildSpec 의 dims 구성과 정확히 같은 규칙). 구간(bin) 축은 measure 라 제외.
-        group_roles = frozenset(
-            fields[name]["role"]
-            for name, slot_name in used_bindings.items()
-            if "measure" not in slots[slot_name]["accepts"] and slot_name not in chart.bins
-        )
         for field_name, bound_slot in used_bindings.items():
             field = fields[field_name]
             if field["role"] != "measure":
@@ -182,13 +175,23 @@ def _validate_charts(charts) -> None:
                 raise querybuilder.SpecError(
                     f"{field_name} 필드에는 {chart.agg} 집계를 사용할 수 없습니다"
                 )
-            if chart.agg == "sum" and (
-                group_roles & querybuilder.TIME_GROUP_ROLES
-            ) and "time" not in (field.get("additive_over") or ["time"]):
-                raise querybuilder.SpecError(
-                    f"'{field_name}' 은(는) 특정 시점의 상태(재고)라 시간축과 함께 합산하면 "
-                    f"이중계산이 됩니다 — max/avg 집계를 쓰거나 시간축을 빼세요"
-                )
+        # 가산성(재고 × 시간 접기)도 **조회와 같은 함수**로 검증한다 — 규칙을 두 번 쓰면
+        # 한쪽만 고쳐져 '저장은 되는데 조회가 400' 이 된다(프론트 buildSpec 과 동일한 축 구성).
+        dims_for_check: list = []
+        measures_for_check: list = []
+        for name, slot_name in used_bindings.items():
+            if "measure" in slots[slot_name]["accepts"] and fields[name]["role"] == "measure":
+                measures_for_check.append({"field": name, "agg": chart.agg})
+            elif slot_name in chart.bins:
+                dims_for_check.append({"field": name, "bin_width": chart.bins[slot_name]})
+            else:
+                dims_for_check.append(name)
+        querybuilder.assert_additive_over_dims(
+            dims_for_check, measures_for_check, fields,
+            filters=[node.model_dump() for node in chart.filters],
+            date_range=source.get("date_range"),
+        )
+
         # 레이아웃 저장 시에도 query 단계와 **같은 워커**로 검증한다 — 저장/조회 경로가
         # 다른 walker 를 가지면 '저장은 되는데 조회가 400' 계약 분열이 생긴다.
         dialect = querybuilder.resolve_dialect(source.get("backend"))
